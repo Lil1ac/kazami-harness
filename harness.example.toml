@@ -1,0 +1,9 @@
+# 当前切片支持 DeepSeek 多轮调用和只读文件；配置会保存为运行快照。
+provider = "deepseek"
+requested_model = "deepseek-flash"
+tools = ["read_file"]
+
+[limits]
+max_model_turns = 20
+max_tool_calls = 40
+run_timeout_seconds = 300.0

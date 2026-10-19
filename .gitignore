@@ -1,0 +1,22 @@
+# Python 生成文件
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 本地环境与缓存
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 本地配置和运行输出
+.env
+.env.*
+!.env.example
+.runtime/
+.runs/

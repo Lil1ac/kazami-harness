@@ -110,6 +110,11 @@ def _prepare_verifier(path: Path, timeout_seconds: float) -> VerifierSpec:
         # TOML 不支持 Path，解析字符串是输入边界的显式转换，不放宽模型类型。
         raw["cwd"] = _resolve_directory(base / cwd, "验收工作目录")
         raw.setdefault("timeout_seconds", timeout_seconds)
+        # 宿主清单的 Python 源码目录相对验收 cwd 解释，不接受跨工作区导入。
+        imports = raw.get("python_paths", [])
+        if not isinstance(imports, list) or any(not isinstance(item, str) or not item.strip() for item in imports):
+            raise ConfigurationError("验收 Python 搜索目录必须是路径字符串数组。")
+        raw["python_paths"] = [(raw["cwd"] / item).resolve() for item in imports]
         spec = VerifierSpec.model_validate(raw)
     except ValidationError as error:
         raise ConfigurationError(_validation_message("验收配置", error)) from None

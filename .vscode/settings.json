@@ -1,0 +1,18 @@
+{
+  // 只隐藏文件树中的依赖、缓存和本地生成记录；文件仍保留在原路径。
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    ".venv": true,
+    ".uv-cache": true,
+    ".pytest_cache": true,
+    ".ruff_cache": true,
+    ".mypy_cache": true,
+    ".playwright-cli": true,
+    ".runtime": true,
+    ".runs": true,
+    "output": true
+  }
+}

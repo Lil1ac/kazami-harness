@@ -1,7 +1,7 @@
-# 当前切片支持 DeepSeek 多轮调用和只读文件；配置会保存为运行快照。
+# 当前切片支持四类工具；命令只用于可信本地任务，配置会保存为运行快照。
 provider = "deepseek"
 requested_model = "deepseek-flash"
-tools = ["read_file"]
+tools = ["read_file", "search_files", "write_file", "run_command"]
 
 [limits]
 max_model_turns = 20

@@ -200,3 +200,16 @@ def test_invalid_verifier_does_not_execute_or_leak(tmp_path: Path, body: str) ->
         prepare_task("task", tmp_path, path)
     assert "TOP_SECRET" not in str(captured.value)
     assert not (tmp_path / ".runs").exists()
+
+
+
+def test_verifier_python_paths_are_relative_to_explicit_cwd(tmp_path: Path) -> None:
+    """宿主配置的 src 相对验收 cwd 解析，使独立副本的导入目录随工作区绑定。"""
+    worktree = tmp_path / "worktree"
+    (worktree / "src").mkdir(parents=True)
+    verifier = write_toml(
+        tmp_path / "verifier.toml",
+        f"argv = {json.dumps([sys.executable, '-c', 'pass'])}\ncwd = \"worktree\"\npython_paths = [\"src\"]\n",
+    )
+    task = prepare_task("task", worktree, verifier)
+    assert task.verifier.python_paths == [(worktree / "src").resolve()]

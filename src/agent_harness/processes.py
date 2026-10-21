@@ -25,11 +25,20 @@ class _Capture:
     exceeded: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-def _child_environment() -> dict[str, str]:
-    """仅传递启动程序所需的路径、临时目录和区域变量，排除凭据及注入变量。"""
+def _child_environment(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    """构造不继承凭据的子进程环境，返回可直接传给进程启动器的字符串字典。
+
+    extra_env 默认 None；宿主仅可补充 HARNESS_WORKSPACE（绝对工作区）和
+    HARNESS_RUN_ID（运行标识）。其他名称、非字符串值或空字节触发 ValueError，
+    避免验收接入放开模型密钥及 Python 注入变量。不会修改父进程环境。
+    """
     allowed = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ"}
     result = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     result.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    if extra_env is not None:
+        if any(key not in {"HARNESS_WORKSPACE", "HARNESS_RUN_ID"} or not isinstance(value, str) or "\x00" in value for key, value in extra_env.items()):
+            raise ValueError("宿主只可设置固定的验收环境变量")
+        result.update(extra_env)
     return result
 
 
@@ -239,8 +248,20 @@ class ProcessRunner:
             raise StorageError("刷新命令原始输出失败") from failure
         return status
 
-    async def run(self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None) -> dict:
-        """执行 argv 并返回有界输出和清理状态；取消时附带结果后原样重新抛出取消异常。"""
+    async def run(
+        self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
+        extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
+    ) -> dict:
+        """执行程序并返回退出码、输出预览、原始引用和清理状态。
+
+        argv 是程序及参数数组，cwd 是已校验目录；timeout_seconds 单位秒，None 时
+        使用 command_timeout_seconds，必须为有限正数。extra_env 只允许宿主提供两项
+        固定验收变量，None 时不补充。python_paths 默认为 None；仅宿主验收可指定
+        cwd 内的绝对搜索目录，构成子进程 PYTHONPATH，不继承父环境的 Python 注入项。
+        函数会创建输出文件并启动/必要时清理进程。
+        存储故障抛 StorageError；取消附带 harness_process_result 后原样重新抛出，
+        返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
+        """
         timeout = self.limits.command_timeout_seconds if timeout_seconds is None else timeout_seconds
         if not argv or any(not isinstance(value, str) or "\x00" in value for value in argv) or not argv[0].strip():
             raise ValueError("命令参数必须是非空字符串数组")
@@ -248,6 +269,19 @@ class ProcessRunner:
             raise ValueError("命令超时必须为有限正数")
         if os.name == "nt" and Path(argv[0]).suffix.lower() in {".bat", ".cmd", ".ps1"}:
             raise ValueError("脚本必须通过显式解释器执行")
+        child_env = _child_environment(extra_env)
+        if python_paths:
+            # 显式路径与任意环境变量分开校验，防止测试误加载源仓库的可编辑安装代码。
+            base = cwd.resolve(strict=True)
+            imports: list[str] = []
+            for directory in python_paths:
+                if not isinstance(directory, Path) or not directory.is_absolute() or "\x00" in str(directory) or os.pathsep in str(directory):
+                    raise ValueError("Python 搜索目录必须是绝对路径")
+                resolved = directory.resolve()
+                if not resolved.is_relative_to(base) or (resolved.exists() and not resolved.is_dir()):
+                    raise ValueError("Python 搜索目录必须位于命令工作区内")
+                imports.append(str(resolved))
+            child_env["PYTHONPATH"] = os.pathsep.join(imports)
         capture = self._open_capture()
         process: asyncio.subprocess.Process | None = None
         tasks: list[asyncio.Task] = []
@@ -261,7 +295,7 @@ class ProcessRunner:
         try:
             options = {"creationflags": 0x00000200} if os.name == "nt" else {"start_new_session": True}
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-                *argv, cwd=cwd, env=_child_environment(), stdin=asyncio.subprocess.DEVNULL,
+                *argv, cwd=cwd, env=child_env, stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=65536, **options,
             ))
             try:

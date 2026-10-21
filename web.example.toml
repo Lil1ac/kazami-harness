@@ -1,0 +1,33 @@
+# 路径相对本文件目录。自定义普通工作区必须在启动服务前创建。
+runtime_root = ".runtime/web-workspaces"
+frontend_dist = "frontend/dist"
+
+[[workspaces]]
+id = "workspace"
+label = "本地任务工作区"
+path = ".runtime/workspace"
+copy_on_run = false
+
+[[workspaces]]
+id = "logs"
+label = "日志样例（每次独立复制）"
+path = "examples/logs"
+copy_on_run = true
+
+[[verifiers]]
+id = "logs"
+label = "固定日志样例验收"
+description = "仅适用于仓库自带日志样例，检查参考次数固定；其他任务请不选择此验收器。"
+path = "examples/verifiers/logs.toml"
+
+# 接入真实项目时取消以下注释，使用已有提交且已配置测试依赖的 Git 根目录。
+# 每次任务从 base_ref（默认 HEAD）建立独立 worktree，不包含源目录未提交改动。
+# Windows 示例使用绝对 Python 解释器入口；Node 测试可登记 node.exe 与本地测试脚本。
+# 不使用 npm.cmd 作为直接入口，不自动安装依赖，也不提交或合并回原分支。
+# [[projects]]
+# id = "backend"
+# label = "我的后端项目"
+# path = "../my-backend"
+# test_argv = ['D:/prog/vibe/my-backend/.venv/Scripts/python.exe', '-m', 'pytest', '-q']
+# test_timeout_seconds = 60.0
+# test_python_paths = [".", "src"]

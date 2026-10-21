@@ -1,5 +1,6 @@
 """配置与运行记录的数据结构及校验规则；供应商消息由适配器保存。"""
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
@@ -77,15 +78,23 @@ class RunConfig(DataModel):
 
 # 宿主预先指定的验收程序及其工作目录、超时；描述入口，不负责执行验收。
 class VerifierSpec(DataModel):
-    argv: list[str] = Field(min_length=1)
-    cwd: Path | None = None
-    timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+    argv: list[str] = Field(min_length=1)  # 宿主固定程序和参数，启动预检后 argv[0] 为绝对可执行入口。
+    cwd: Path | None = None  # 验收进程目录；清单默认取清单所在目录，程序调用 None 时取宿主当前目录。
+    timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)  # 验收自身上限（秒），仍受总运行截止时间约束。
+    python_paths: list[Path] = Field(default_factory=list)  # 宿主显式登记的绝对 Python 搜索目录，必须位于 cwd 内；空列表不注入搜索路径。
 
     @model_validator(mode="after")
     def validate_program(self) -> "VerifierSpec":
-        """要求 argv 的第一个元素包含实际程序名，不能只由空白组成。"""
+        """校验非空程序及显式 cwd 内的绝对 Python 搜索目录；合法时返回自身，否则抛 ValueError。"""
         if not self.argv[0].strip():
             raise ValueError("验收程序不能为空白")
+        if self.python_paths and self.cwd is None:
+            raise ValueError("Python 搜索目录需要显式验收工作目录")
+        for path in self.python_paths:
+            if not path.is_absolute() or "\x00" in str(path) or os.pathsep in str(path):
+                raise ValueError("Python 搜索目录必须是绝对路径")
+            if self.cwd is not None and not path.resolve().is_relative_to(self.cwd.resolve()):
+                raise ValueError("Python 搜索目录不能越出验收工作目录")
         return self
 
 
@@ -139,6 +148,22 @@ class ArtifactRef(DataModel):
         return self
 
 
+# 独立验收的真实执行结果；未运行验收时 RunResult.verification 为 None。
+class VerificationResult(DataModel):
+    status: Literal["passed", "failed", "error"]  # 内容通过、内容不符、验收运行异常。
+    reason: str  # 宿主生成的稳定原因码，不使用模型声明或异常正文。
+    exit_code: int | None = None  # 验收子进程退出码；未获得实际退出码时为 None。
+    stdout: str = ""  # 受字符预算限制的验收标准输出预览。
+    stderr: str = ""  # 受字符预算限制的错误输出预览，不代表内容断言一定失败。
+    timed_out: bool = False  # 验收自身或覆盖验收的总运行预算是否耗尽。
+    cancelled: bool = False  # 用户或上游明确取消验收；与超时原因分开记录。
+    output_limit_exceeded: bool = False  # 原始输出超过合计字节预算，不能判通过。
+    cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"] = "not_needed"  # 本次验收进程的清理结论。
+    elapsed_ms: int = Field(default=0, ge=0)  # 验收开始到进程收尾的单调时钟耗时，毫秒。
+    truncated: bool = False  # 预览或原始保存存在截断；原始超限另有独立标记。
+    artifacts: list[ArtifactRef] = Field(default_factory=list)  # 本次验收的 stdout/stderr 运行内引用。
+
+
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
     schema_version: Literal[1] = 1
@@ -148,6 +173,7 @@ class RunResult(DataModel):
         "created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"
     ] = "created"
     validation_status: Literal["unverified", "passed", "failed", "error"] = "unverified"
+    verification: VerificationResult | None = None  # None 表示未运行或旧记录没有详情；非空时 status 必须与 validation_status 相同。
     cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"] = "not_needed"
     stop_reason: str | None = None
     # 统计已发起的逻辑轮次、HTTP 尝试及接纳处理的工具调用，不把重试重复算轮次。
@@ -163,9 +189,15 @@ class RunResult(DataModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> "RunResult":
-        """仅允许执行已完成的任务记录验收结果，防止准备或失败状态宣称验收通过。"""
+        """检查本实例状态约束并返回自身；矛盾时抛 ValueError，不写文件。
+
+        非 unverified 状态要求执行 completed；非空 verification 必须与顶层状态一致。
+        旧记录缺省 verification 时仍可读取，未运行验收时该字段保持 None。
+        """
         if self.validation_status != "unverified" and self.execution_status != "completed":
             raise ValueError("执行完成后才能记录验收结果")
+        if self.verification is not None and self.verification.status != self.validation_status:
+            raise ValueError("验收详情与顶层验收状态不一致")
         return self
 
 

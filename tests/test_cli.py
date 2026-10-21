@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def invoke(*args: object, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """使用独立 Python 进程调用 CLI，捕获 UTF-8 输出和退出码，可传入隔离环境。"""
@@ -187,16 +189,127 @@ def test_unknown_tool_fails_before_creating_run(tmp_path: Path):
     assert not records.exists()
 
 
-def test_unimplemented_verifier_fails_before_creating_run(tmp_path: Path):
-    """验证执行模式拒绝尚未接入的独立验收入口，不产生假启动记录。"""
+def test_invalid_verifier_fails_before_creating_run(tmp_path: Path):
+    """验收入口不存在时在创建记录前失败；tmp_path 是隔离目录，返回 None。"""
     import json as json_module
 
     verifier = tmp_path / "verifier.toml"
-    verifier.write_text("argv = [" + json_module.dumps(sys.executable) + ', "-c", "pass"]\n', encoding="utf-8")
+    verifier.write_text("argv = [" + json_module.dumps(str(tmp_path / "missing-verifier.exe")) + "]\n", encoding="utf-8")
     env = os.environ.copy()
     env["DEEPSEEK_API_KEY"] = "dummy-unused"
     records = tmp_path / "records"
     result = invoke("run", "--task", "测试", "--workspace", tmp_path, "--verifier", verifier, "--runs-dir", records, env=env)
     assert result.returncode == 2
-    assert "独立验收" in result.stderr
+    assert "验收入口" in result.stderr
     assert not records.exists()
+
+
+
+def test_prepare_can_register_expected_output_without_creating_it(tmp_path: Path):
+    """CLI 可登记预期产物但不生成文件，也不在准备阶段调用真实模型。"""
+    env = os.environ.copy()
+    env.pop("DEEPSEEK_API_KEY", None)
+    records = tmp_path / "records"
+    prepared = invoke("run", "--prepare-only", "--task", "生成报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "report.json", "--json", env=env)
+    assert prepared.returncode == 0, prepared.stderr
+    run_id = json.loads(prepared.stdout)["run_id"]
+    shown = invoke("show", run_id, "--runs-dir", records, "--json", env=env)
+    assert json.loads(shown.stdout)["task"]["expected_outputs"] == ["report.json"]
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_bad_expected_output_is_rejected_before_preparation(tmp_path: Path):
+    """准备入口也检查预期输出边界，拒绝父路径且不创建运行目录。"""
+    records = tmp_path / "records"
+    result = invoke("run", "--prepare-only", "--task", "报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "../outside.json")
+    assert result.returncode == 2
+    assert "预期输出" in result.stderr
+    assert not records.exists()
+
+
+@pytest.mark.parametrize("correct,expected_code,expected_status", [(True, 0, "passed"), (False, 1, "failed")])
+def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monkeypatch, capsys, correct: bool, expected_code: int, expected_status: str):
+    """correct 选择报告内容，核对CLI的 expected_code/status、真实验收输出与历史；返回 None。"""
+    import httpx
+    from agent_harness import cli
+    from agent_harness.runner import run_task as actual_run
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "dummy-cli-verifier-key")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    report = {"counts": {"timeout": 3, "database": 2, "auth": 1}, "total_errors": 6 if correct else 7}
+    (workspace / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    checker = Path(__file__).resolve().parents[1] / "examples/verifiers/verify_logs.py"
+    verifier = tmp_path / "verifier.toml"
+    verifier.write_text("argv = " + json.dumps([sys.executable, str(checker)]) + "\ntimeout_seconds = 5.0\n", encoding="utf-8")
+    requests = []
+
+    def handler(request):
+        """request 是离线HTTP请求；返回最终回答并记次数，检查验收不重新请求模型。"""
+        requests.append(request)
+        return httpx.Response(200, json={"model": "offline-model", "choices": [{
+            "message": {"role": "assistant", "content": "报告已就绪。"}, "finish_reason": "stop",
+        }], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}})
+
+    async def offline_run(manifest, root, api_key, **kwargs):
+        """用 MockTransport 替换网络，保留 manifest/root/key 与信号参数，返回真实运行结果。"""
+        return await actual_run(manifest, root, api_key, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(cli, "run_task", offline_run)
+    records = tmp_path / "records"
+    code = cli.main([
+        "run", "--task", "检查已有报告", "--workspace", str(workspace), "--runs-dir", str(records),
+        "--verifier", str(verifier), "--expected-output", "report.json", "--json",
+    ])
+    output = capsys.readouterr()
+    result = json.loads(output.out)
+    assert code == expected_code
+    assert result["execution_status"] == "completed"
+    assert result["validation_status"] == result["verification"]["status"] == expected_status
+    assert len(result["verification"]["artifacts"]) == 2
+    assert len(result["artifacts"]) == 3
+    assert len(requests) == result["http_attempts"] == 1
+    assert "dummy-cli-verifier-key" not in output.out + output.err
+    shown = invoke("show", result["run_id"], "--runs-dir", records, "--json")
+    assert shown.returncode == 0
+    assert json.loads(shown.stdout)["verification"] == result["verification"]
+    readable = invoke("show", result["run_id"], "--runs-dir", records)
+    assert readable.returncode == 0
+    assert "验收原因：" in readable.stdout
+    assert result["verification"]["reason"] in readable.stdout
+
+
+def test_prepare_with_verifier_does_not_execute_it(tmp_path: Path):
+    """准备模式可登记宿主验收入口，但不创建marker或请求密钥；返回 None。"""
+    verifier = tmp_path / "verifier.toml"
+    source = "from pathlib import Path;Path('marker').write_text('bad')"
+    verifier.write_text("argv = " + json.dumps([sys.executable, "-c", source]) + "\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment.pop("DEEPSEEK_API_KEY", None)
+    result = invoke(
+        "run", "--prepare-only", "--task", "准备", "--workspace", tmp_path,
+        "--verifier", verifier, "--runs-dir", tmp_path / "records", "--json", env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["execution_status"] == "created"
+    assert data["verification"] is None
+    assert not (tmp_path / "marker").exists()
+
+
+def test_serve_help_describes_local_console_without_starting_service():
+    """无参数构造服务帮助信息，不监听端口也不要求密钥；返回None。"""
+    result = invoke("serve", "--help")
+    assert result.returncode == 0
+    assert "--web-config" in result.stdout
+    assert "--port" in result.stdout
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_serve_rejects_invalid_port_before_initialization(tmp_path: Path, port: int):
+    """port为越界服务端口，验证启动前返回2且不创建记录或工作区；返回None。"""
+    root = tmp_path / "records"
+    result = invoke("serve", "--port", port, "--runs-dir", root)
+    assert result.returncode == 2
+    assert "端口" in result.stderr
+    assert not root.exists()

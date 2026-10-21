@@ -1,0 +1,5 @@
+# argv[0] 在启动预检时解析；uv run 下使用项目独立 Python。
+# cwd 相对本清单目录，脚本位于宿主侧，不放进 Agent 样例工作区。
+argv = ["python", "verify_logs.py"]
+cwd = "."
+timeout_seconds = 10.0

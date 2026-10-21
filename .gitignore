@@ -20,3 +20,8 @@ htmlcov/
 !.env.example
 .runtime/
 .runs/
+
+# 前端依赖与浏览器验证输出
+node_modules/
+output/playwright/
+.playwright-cli/

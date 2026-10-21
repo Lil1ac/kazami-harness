@@ -18,7 +18,7 @@ from agent_harness.store import RunStore, StorageError
 
 
 def _parser() -> argparse.ArgumentParser:
-    """定义 run/show 子命令和参数约束，交给 argparse 处理帮助信息与格式错误。"""
+    """定义 run/show/serve 子命令和参数约束，交给 argparse 处理帮助信息与格式错误。"""
     parser = argparse.ArgumentParser(prog="harness", description="Agent Harness 任务运行入口")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -29,7 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     task.add_argument("--task-file", type=Path, help="UTF-8 任务描述文件")
     run.add_argument("--workspace", type=Path, required=True, help="已存在的任务工作目录")
     run.add_argument("--config", type=Path, help="运行配置 TOML")
-    run.add_argument("--verifier", type=Path, help="宿主侧验收清单（当前仅支持 prepare-only 预检）")
+    run.add_argument("--verifier", type=Path, help="宿主侧验收清单 TOML；执行完成后独立运行")
     run.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="运行记录目录")
     run.add_argument("--expected-output", action="append", default=[], help="登记工作区内预期产物的相对路径，可多次指定")
     run.add_argument("--model", help="覆盖 requested_model")
@@ -41,6 +41,12 @@ def _parser() -> argparse.ArgumentParser:
     show.add_argument("run_id", help="UUID 格式的运行标识")
     show.add_argument("--runs-dir", type=Path, default=Path(".runs"))
     show.add_argument("--json", action="store_true")
+
+    serve = commands.add_parser("serve", help="启动本地任务API与前端控制台")
+    serve.add_argument("--web-config", type=Path, help="宿主工作区、验收预设及前端构建目录TOML")
+    serve.add_argument("--config", type=Path, help="任务默认运行配置TOML；网页仅能覆盖支持字段")
+    serve.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="与CLI共用的运行记录根目录")
+    serve.add_argument("--port", type=int, default=8765, help="本机监听端口，范围1至65535，默认8765")
     return parser
 
 
@@ -55,7 +61,11 @@ def _prompt(args: argparse.Namespace) -> str:
 
 
 def _print_result(data: dict, *, as_json: bool, prepared: bool = False) -> None:
-    """按 JSON 或中文摘要展示结果，并说明未验收、未完整结束和记录损坏等状态。"""
+    """向标准输出展示 data 运行摘要，返回 None，不修改记录。
+
+    as_json=True 输出完整JSON；False 输出中文状态、产物和可选验收预览。
+    prepared 默认False；True 说明只完成准备，不把准备成功描述成执行成功。
+    """
     if as_json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -78,6 +88,13 @@ def _print_result(data: dict, *, as_json: bool, prepared: bool = False) -> None:
         print(f"产物：{artifact['location']} / {artifact['path']}")
     for missing in data.get("missing_artifacts", []):
         print(f"产物提示：预期文件尚未生成：{missing}")
+    verification = data.get("verification")
+    if verification is not None:
+        print(f"验收原因：{verification['reason']}；退出码：{verification['exit_code']}；耗时：{verification['elapsed_ms']} ms")
+        if verification.get("stdout"):
+            print("验收输出：\n" + verification["stdout"])
+        if verification.get("stderr"):
+            print("验收错误输出：\n" + verification["stderr"])
     if data.get("final_answer"):
         print("\n模型回答：")
         print(data["final_answer"])
@@ -168,6 +185,34 @@ def _show(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _serve(args: argparse.Namespace) -> int:
+    """按 args 启动本机单进程控制台，服务正常关闭时返回0。
+
+    args 包含可选web_config/config、runs_dir和1至65535的port；配置路径默认None
+    时由对应加载器使用默认值。只绑定127.0.0.1，不读取或打印密钥值；密钥在提交
+    任务时由后端环境读取。会创建受控工作目录、监听端口并托管后台任务，关闭时
+    等待任务取消收尾。配置错误抛ConfigurationError，服务内部错误沿用Uvicorn行为。
+    """
+    if not 1 <= args.port <= 65535:
+        raise ConfigurationError("服务端口必须为1至65535之间的整数。")
+    # 延迟导入：CLI运行/历史查看不初始化Web服务或静态资源。
+    import uvicorn
+    from .web.api import create_app
+    from .web.config import load_web_config
+
+    web_config = load_web_config(args.web_config)
+    app = create_app(web_config, load_config(args.config), args.runs_dir)
+    # 单worker且不启用reload，Windows默认Proactor循环支持命令子进程。
+    # 先给HTTP/SSE请求2秒结束宽限，随后lifespan才能取消后台运行并等待进程清理。
+    # 否则长连接会阻止进入lifespan关闭流程，Ctrl+C可能一直等待任务自然结束。
+    uvicorn.run(
+        app, host="127.0.0.1", port=args.port, loop="asyncio", workers=1,
+        timeout_graceful_shutdown=2,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """解析命令并分派操作，将配置、存储错误和用户中断转换为 CLI 退出码。"""
     # Windows 管道和不同终端编码下也保持中文 JSON 可读取。
@@ -176,7 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             output.reconfigure(encoding="utf-8")
     args = _parser().parse_args(argv)
     try:
-        return _run(args) if args.command == "run" else _show(args)
+        handlers = {"run": _run, "show": _show, "serve": _serve}
+        return handlers[args.command](args)
     except ConfigurationError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2

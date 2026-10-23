@@ -2,11 +2,21 @@ import { Alert, Button, Empty, Tag } from 'antd';
 import { CheckOutlined, ToolOutlined, MessageOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { ConnectionState } from '../hooks/useRunEvents';
 import { duration, pretty } from '../format';
+import { formatContextBytes, instructionStatusLabels } from '../context';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
   run_created: '任务已登记',
   run_started: '开始执行',
+  history_loaded: '继承前轮历史',
+  checkpoint_created: '保存安全检查点',
+  checkpoint_failed: '检查点保存失败',
+  resume_loaded: '从检查点继续',
+  context_prepared: '准备项目指令',
+  context_checked: '检查输入预算',
+  context_action: '上下文输入变换',
+  context_compaction_started: '生成历史工作摘要',
+  context_summary_response: '历史摘要模型返回',
   model_request_started: '请求模型',
   model_http_attempt: 'HTTP 请求尝试',
   http_attempt_started: 'HTTP 请求',
@@ -35,6 +45,28 @@ const connectionLabels: Record<ConnectionState, string> = {
 /** 根据已知事件生成简短摘要；不尝试将工具内容当 HTML 或 Markdown 执行。 */
 function eventSummary(event: RunEvent): string {
   const payload = event.payload;
+  if (event.type === 'context_prepared') {
+    const instruction = payload.instruction as { status?: unknown } | undefined;
+    const status = String(instruction?.status ?? '');
+    return `AGENTS.md · ${instructionStatusLabels[status] ?? status}`;
+  }
+  if (event.type === 'context_checked') {
+    const size =
+      typeof payload.input_bytes === 'number' ? formatContextBytes(payload.input_bytes) : '未记录';
+    const decision =
+      payload.allowed === true ? '允许请求' : payload.allowed === false ? '达到上限' : '未记录';
+    return `第 ${String(payload.model_turn ?? '—')} 轮 · ${size} · ${decision}`;
+  }
+  if (event.type === 'context_action')
+    return (
+      String(payload.kind ?? '') +
+      ' · ' +
+      formatContextBytes(Number(payload.before_bytes ?? 0)) +
+      ' → ' +
+      formatContextBytes(Number(payload.after_bytes ?? 0))
+    );
+  if (event.type === 'model_request_started' && payload.purpose === 'summary')
+    return '生成历史工作摘要';
   if (event.type === 'tool_started' || event.type === 'tool_result')
     return String(payload.name ?? '');
   if (event.type === 'model_request_started')

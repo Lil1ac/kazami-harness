@@ -12,10 +12,13 @@ from pydantic import ValidationError
 from ..config import ConfigurationError, load_config, prepare_task
 from ..providers.base import ModelClient
 from ..runner import CancellationState, RunContext, run_task, validate_execution, validate_output_paths
-from ..schemas import RunConfig, RunEvent, RunManifest, RunResult, VerifierSpec
+from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec, ResumeBudget
 from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview
 from ..store import RunHistory, RunStore, StorageError
+from ..sessions import SessionError
 from .config import WebConfig, WebWorkspace
+from .conversations import ConversationService
+from .recovery import RecoveryService
 from .schemas import CreateRunRequest, EventPage, RunView
 from ..workspace import Workspace, WorkspaceError
 
@@ -51,6 +54,7 @@ def _phase(events: list[RunEvent]) -> str:
         "run_created": "created",
         "run_started": "starting",
         "model_request_started": "model_request",
+        "context_compaction_started": "context_compaction",
         "model_response": "model_response",
         "tool_started": "tool_execution",
         "tool_result": "tool_result",
@@ -61,8 +65,84 @@ def _phase(events: list[RunEvent]) -> str:
     }
     current = "created"
     for event in events:
-        current = phases.get(event.type, current)
+        current = "context_compaction" if event.type == "model_request_started" and event.payload.get("purpose") == "summary" else phases.get(event.type, current)
     return current
+
+
+def _context_view(events: list[RunEvent]) -> ContextView | None:
+    """从有序 events 还原指令快照与最新检查；旧记录返回 None，不从当前文件补造数据。
+
+    本函数只读取事件，不读取工作区；受损上下文载荷抛 ValidationError，由视图层
+    转为警告。只采用 context_prepared 之后的检查，避免无来源的统计被当作有效记录。
+    """
+    view = None
+    for event in events:
+        if event.type == "context_prepared":
+            view = ContextView.model_validate(event.payload)
+        elif event.type == "context_checked" and view is not None:
+            view.last_check = ContextCheck.model_validate(event.payload)
+        elif event.type == "context_action" and view is not None:
+            view.actions.append(ContextAction.model_validate(event.payload))
+            view.actions = view.actions[-50:]
+            view.action_count += 1
+        elif event.type == "model_request_started" and view is not None and event.payload.get("purpose") == "summary":
+            view.summary_calls += 1
+    return view
+
+
+def _unfinished_result(history: RunHistory) -> RunResult:
+    """按history有效事件还原本次已开始计数和已知token；缺终态一律标用量不完整。
+
+    本函数不补造终态、回答或测试结论；主动耗时仅采用最后落盘elapsed的下界。
+    恢复前预算只从已核验格式的resume_loaded读取，损坏载荷留空交后续核验拒绝。
+    """
+    result = RunResult(
+        run_id=history.manifest.run_id, execution_status="running" if history.interrupted else "created",
+        model_turns=sum(event.type == "model_request_started" for event in history.events),
+        http_attempts=sum(event.type == "model_http_attempt" for event in history.events),
+        tool_calls=sum(event.type == "tool_started" for event in history.events),
+        usage_complete=False, active_duration_seconds=history.events[-1].elapsed_ms / 1000 if history.events else 0,
+    )
+    # 未封存终态不等于每个旧进程都失联；采用已配对结果的清理事实，只有在途动作未知。
+    pending_commands: set[str] = set()  # 已开始但尚无结果的命令编号。
+    verifier_pending = False  # 宿主验收已启动而未得到清理结论。
+    cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
+    for event in history.events:
+        if event.type == "tool_started" and event.payload.get("name") == "run_command":
+            pending_commands.add(str(event.payload.get("call_id")))
+        elif event.type == "tool_result" and event.payload.get("name") == "run_command":
+            pending_commands.discard(str(event.payload.get("call_id")))
+            observation = event.payload.get("result")
+            data = observation.get("data") if isinstance(observation, dict) else None
+            status = data.get("cleanup_status", "unknown") if isinstance(data, dict) else "unknown"
+            if status not in cleanup_rank:
+                status = "unknown"
+            if cleanup_rank[status] > cleanup_rank[result.cleanup_status]:
+                result.cleanup_status = status
+        elif event.type == "verification_started":
+            verifier_pending = True
+        elif event.type == "verification_result":
+            verifier_pending = False
+            verification = event.payload.get("verification")
+            status = verification.get("cleanup_status", "unknown") if isinstance(verification, dict) else "unknown"
+            if status not in cleanup_rank:
+                status = "unknown"
+            if cleanup_rank[status] > cleanup_rank[result.cleanup_status]:
+                result.cleanup_status = status
+        if event.type == "model_response":
+            usage = event.payload.get("usage")
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                value = usage.get(field) if isinstance(usage, dict) else None
+                if type(value) is int and value >= 0:
+                    setattr(result.usage, field, getattr(result.usage, field) + value)
+        elif event.type == "resume_loaded" and result.resume_budget is None:
+            try:
+                result.resume_budget = ResumeBudget.model_validate(event.payload.get("budget"))
+            except ValidationError:
+                pass
+    if (pending_commands or verifier_pending) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
+        result.cleanup_status = "unknown"
+    return result
 
 
 def _copy_workspace(source: WebWorkspace, destination: Path) -> None:
@@ -151,6 +231,9 @@ class WebRunManager:
         self._recovery_tasks: dict[UUID, asyncio.Task[ProjectReview]] = {}  # 并发页面共享一次恢复，全部等待同一完成结果。
         self._recovered: set[UUID] = set()  # 每个中断任务最多恢复捕获一次，避免 GET 重跑 Git。
         self._closing = False  # 关停后永久拒绝新提交。
+        self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
+        self.recovery = RecoveryService(self)  # 检查点恢复复用同一会话、项目归属和执行槽。
+        self._legacy_checkpoint_mode = False  # 仅兼容协议回归显式启用；正式网页始终采用普通消息接续。
 
     @property
     def busy_run_id(self) -> UUID | None:
@@ -201,6 +284,7 @@ class WebRunManager:
             raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
         if self.busy_run_id is not None or (self._submission is not None and not self._submission.done()):
             raise WebServiceError(409, "run_busy", "已有任务正在准备或运行，请等待完成或取消。")
+        self.conversations.submission_key = None
         preparation = asyncio.create_task(self._start_request(request), name="harness-project-prepare")
         self._submission = preparation
 
@@ -239,8 +323,9 @@ class WebRunManager:
             try:
                 merged = self.run_config.model_dump(mode="python")
                 patch = request.config.model_dump(exclude_none=True)
-                if "limits" in patch:
-                    merged["limits"] = {**merged["limits"], **patch.pop("limits")}
+                for section in ("limits", "context"):
+                    if section in patch:
+                        merged[section] = {**merged[section], **patch.pop(section)}
                 merged.update(patch)
                 config = load_config(overrides=merged)
                 source = preset.path if preset is not None else workspace.path
@@ -248,7 +333,8 @@ class WebRunManager:
                     request.prompt, source, verifier_path, config.limits.verifier_timeout_seconds,
                     request.expected_outputs,
                 )
-                manifest = RunManifest(run_id=identifier, task=task, config=config)
+                origin = RunOrigin(kind="project" if preset is not None else "workspace", preset_id=preset.id if preset is not None else workspace.id, registered_path=source.resolve(), verifier_id=request.verifier_id)
+                manifest = RunManifest(run_id=identifier, task=task, config=config, session_id=identifier, origin=origin)
                 api_key = os.environ.get(config.api_key_env, "")
                 validate_execution(manifest, api_key)
                 validate_output_paths(task, self.runs_root)
@@ -296,13 +382,21 @@ class WebRunManager:
                     raise WebServiceError(400, error.code, error.message) from None
                 message = str(error) if isinstance(error, ConfigurationError) else "项目测试工作目录或导入路径无效。"
                 raise WebServiceError(400, "invalid_run", message) from None
-            item = ActiveRun(manifest, CancellationState(), asyncio.get_running_loop().create_future())
-            self._active = item
-            item.task = asyncio.create_task(self._execute(item, api_key), name=f"harness-web-{identifier}")
-            await asyncio.wait({item.started, item.task}, return_when=asyncio.FIRST_COMPLETED)
-            if item.context is None:
-                raise WebServiceError(503, "run_start_failed", "任务未能建立运行记录，请检查本地配置与目录权限。")
-            return self.get_run(identifier)
+            return await self._launch(manifest, api_key)
+
+    async def _launch(self, manifest: RunManifest, api_key: str) -> RunView:
+        """在已持有单槽锁时启动 manifest 并等待记录建立，返回初始视图；不另建执行循环。
+
+        api_key 只传 Runner；本方法由首次提交和追加共同使用。启动记录失败时返回受控错误，
+        会话中已提交的请求不会因重试再次执行。
+        """
+        item = ActiveRun(manifest, CancellationState(), asyncio.get_running_loop().create_future())
+        self._active = item
+        item.task = asyncio.create_task(self._execute(item, api_key), name=f"harness-web-{manifest.run_id}")
+        await asyncio.wait({item.started, item.task}, return_when=asyncio.FIRST_COMPLETED)
+        if item.context is None:
+            raise WebServiceError(503, "run_start_failed", "任务未能建立运行记录，请检查本地配置与目录权限。")
+        return self.get_run(manifest.run_id)
 
     async def _execute(self, item: ActiveRun, api_key: str) -> None:
         """让真实 Runner 执行 item；api_key 仅传模型，不进入结果、异常提示或日志。
@@ -319,6 +413,15 @@ class WebRunManager:
                 item.cancellation.shutdown_requested = True
                 item.cancelling = True
                 raise asyncio.CancelledError
+        async def on_checkpoint(context, messages, compressor, builder):
+            """完整批次后在线程封存context和messages并返回检查点；Runner负责提交对应事件。"""
+            capturing = asyncio.create_task(asyncio.to_thread(self.recovery.checkpoints.capture, context, messages, compressor, builder))
+            try:
+                return await asyncio.shield(capturing)
+            except asyncio.CancelledError:
+                # 封存线程结束后才收尾，避免悬空Git操作与最终代码捕获发生竞争。
+                await asyncio.shield(capturing)
+                raise
         try:
             await run_task(
                 item.manifest,
@@ -328,6 +431,8 @@ class WebRunManager:
                 transport=self._transport,
                 cancellation_state=item.cancellation,
                 on_context=on_context,
+                # 网页接续复用既有历史，不再自动生成逐批检查点；旧回调仅留兼容。
+                on_checkpoint=on_checkpoint if self._legacy_checkpoint_mode else None,
             )
         except asyncio.CancelledError:
             self._warnings.setdefault(item.manifest.run_id, []).append("后台任务在运行器收尾之外被中断，请以已保存事件为准。")
@@ -351,6 +456,14 @@ class WebRunManager:
                         self._warnings.setdefault(item.manifest.run_id, []).append("代码快照保存失败，请检查审阅状态。")
                 except Exception:
                     self._warnings.setdefault(item.manifest.run_id, []).append("代码快照保存失败，请检查审阅状态。")
+            if item.manifest.origin is not None and item.manifest.origin.kind == "workspace" and item.context is not None:
+                capturing_files = asyncio.create_task(asyncio.to_thread(self.conversations.files.capture, item.manifest.run_id, item.manifest.task.workspace))
+                try:
+                    await asyncio.shield(capturing_files)
+                except asyncio.CancelledError:
+                    await asyncio.shield(capturing_files)
+                except Exception:
+                    self._warnings.setdefault(item.manifest.run_id, []).append("普通工作区的可继续快照未能保存；本轮执行结果仍按原记录显示。")
             if self._active is item:
                 self._active = None
             # 超预算快照只为活动订阅保留；任务结束后立即释放这个特例。
@@ -422,15 +535,20 @@ class WebRunManager:
         elif active and item.context is not None:
             result = item.context.result.model_copy(deep=True)
         else:
-            result = RunResult(run_id=identifier, execution_status="running" if history.interrupted else "created")
+            result = _unfinished_result(history)
         warnings = [*history.warnings, *self._warnings.get(identifier, [])]
+        try:
+            context_view = _context_view(history.events)
+        except ValidationError:
+            context_view = None
+            warnings.append("上下文记录格式无效，请检查原始事件；此处显示为未记录。")
         return RunView(
             run_id=identifier,
             prompt=history.manifest.task.prompt,
             workspace=str(history.manifest.task.workspace),
             created_at=history.manifest.created_at,
             result=result,
-            phase=("project_snapshot" if active and item.finalizing else item.context.phase) if active and item.context is not None else _phase(history.events),
+            phase=(("workspace_snapshot" if item.manifest.origin is not None and item.manifest.origin.kind == "workspace" else "project_snapshot") if item.finalizing else item.context.phase) if active and item.context is not None else _phase(history.events),
             event_count=len(history.events),
             last_seq=history.events[-1].seq if history.events else 0,
             active=active,
@@ -443,6 +561,12 @@ class WebRunManager:
             warnings=warnings,
             config=history.manifest.config,
             project=self._project_review(identifier),
+            context=context_view,
+            session_id=history.manifest.session_id or identifier,
+            parent_run_id=history.manifest.parent_run_id,
+            turn_index=history.manifest.turn_index,
+            attempt_index=history.manifest.attempt_index,
+            resume_source=history.manifest.resume_source,
         )
 
     def list_runs(self, offset: int, limit: int, status: str | None) -> dict:
@@ -500,7 +624,7 @@ class WebRunManager:
         if preparation is not None and not preparation.done():
             try:
                 await asyncio.shield(preparation)
-            except WebServiceError:
+            except (WebServiceError, SessionError):
                 pass
         async with self._lock:
             item = self._active

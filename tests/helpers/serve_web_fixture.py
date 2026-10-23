@@ -42,7 +42,8 @@ class BrowserFixtureModel:
         搜索/读取日志、写脚本、执行并读取报告。函数只返回调用，副作用由真实工具执行。
         """
         await asyncio.sleep(0.7)
-        prompt = next(item['content'] for item in messages if item['role'] == 'user')
+        # 项目指令使用独立 user 消息，真实任务取最后一条 user 消息。
+        prompt = next(item['content'] for item in reversed(messages) if item['role'] == 'user')
         count = sum(item['role'] == 'tool' for item in messages)
         calls: list[ToolCall] = []
         content = None

@@ -16,7 +16,9 @@
     "antd": "^6.0.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router": "^7.13.0"
+    "react-markdown": "^10.1.0",
+    "react-router": "^7.13.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
@@ -26,9 +28,9 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
     "jsdom": "^27.4.0",
+    "prettier": "^3.6.2",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
-    "vitest": "^4.0.0",
-    "prettier": "^3.6.2"
+    "vitest": "^4.0.0"
   }
 }

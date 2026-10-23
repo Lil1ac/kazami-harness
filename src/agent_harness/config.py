@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from agent_harness.schemas import RunConfig, RunLimits, TaskSpec, VerifierSpec
+from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, TaskSpec, VerifierSpec
 
 
 class ConfigurationError(Exception):
@@ -18,6 +18,7 @@ class ConfigurationError(Exception):
 _FIELD_NAMES = (
     set(RunConfig.model_fields)
     | set(RunLimits.model_fields)
+    | set(ContextPolicy.model_fields)
     | set(TaskSpec.model_fields)
     | set(VerifierSpec.model_fields)
 )
@@ -60,7 +61,7 @@ def _read_toml(path: Path, label: str) -> dict[str, Any]:
 def load_config(path: Path | None = None, overrides: dict | None = None) -> RunConfig:
     """按默认值、显式 TOML、CLI 覆盖的顺序合并并严格校验运行配置。
 
-    limits 按字段合并，列表等其他值整体替换；不会修改调用方的覆盖字典。
+    limits 与 context 按字段合并，列表等其他值整体替换；不修改调用方覆盖字典。
     不读取环境变量值或 .env，返回的配置只保存密钥来源的固定变量名。
     """
     if overrides is not None and not isinstance(overrides, dict):
@@ -71,8 +72,8 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
         sources.append(overrides)
     for source in sources:
         for key, value in source.items():
-            # 只对 limits 深合并；工具数组等值应由高优先级来源整体替换。
-            if key == "limits" and isinstance(value, dict) and isinstance(merged[key], dict):
+            # 预算与上下文策略逐字段覆盖；工具数组等值由高优先级来源整体替换。
+            if key in {"limits", "context"} and isinstance(value, dict) and isinstance(merged[key], dict):
                 merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value

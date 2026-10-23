@@ -14,6 +14,11 @@ export const config: RunConfig = {
   api_key_env: 'DEEPSEEK_API_KEY',
   tools: ['read_file', 'search_files', 'write_file', 'run_command'],
   system_prompt: '如实执行任务。',
+  context: {
+    load_project_instructions: true, // 默认加载根目录项目规则。
+    max_input_bytes: 262144, // 整体输入 256 KiB。
+    max_project_instruction_bytes: 32768, // 指令文件 32 KiB。
+  },
   limits: {
     max_model_turns: 20,
     max_tool_calls: 40,
@@ -54,6 +59,7 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     interrupted: false,
     warnings: [],
     config,
+    context: null, // 默认模拟尚未记录上下文的历史任务。
     result: {
       schema_version: 1,
       run_id: 'run-a',

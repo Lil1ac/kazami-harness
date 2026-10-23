@@ -14,10 +14,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import httpx
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..checkpoints import CheckpointError
 from ..providers.base import ModelClient
 from ..schemas import RunConfig
+from ..sessions import SessionError
+from ..store import StorageError
 from .config import WebConfig
-from .schemas import CreateRunRequest, RunView, ReviewDecision
+from .schemas import ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision, RecoveryView, ResumeRequest
 from .service import WebRunManager, WebServiceError
 
 
@@ -89,6 +92,17 @@ def create_app(
         """将 error 的受控业务字段返回给 request 调用方；不输出堆栈或原始输入。"""
         return _error(error.status, error.code, error.message)
 
+    @app.exception_handler(CheckpointError)
+    async def checkpoint_error(request: Request, error: CheckpointError) -> JSONResponse:
+        """把检查点核验error转为受控409；不回显原始Git错误、文件内容或输入。"""
+        return _error(409, error.code, error.message)
+
+    @app.exception_handler(SessionError)
+    async def session_error(request: Request, error: SessionError) -> JSONResponse:
+        """将会话 error 映射为受控响应；读取/写入故障503，其余继续条件冲突409，不回显输入。"""
+        status = 503 if error.code in {"session_unreadable", "session_write_failed"} else 409
+        return _error(status, error.code, error.message)
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
         """将 request 参数校验失败统一转成固定 422；error 中的输入内容不回显。"""
@@ -131,6 +145,46 @@ def create_app(
     async def run_detail(run_id: UUID) -> RunView:
         """返回 run_id 的实时或历史运行视图；不存在返回 404，不恢复执行动作。"""
         return manager.get_run(run_id)
+
+    @app.get("/api/runs/{run_id}/conversation", response_model=ConversationView)
+    async def conversation(run_id: UUID) -> ConversationView:
+        """读取 run_id 所属会话和可继续原因；不启动模型或重新拍摄快照。"""
+        return manager.conversations.view(run_id)
+
+    @app.post("/api/runs/{run_id}/followups", status_code=202, response_model=RunView)
+    async def followup(run_id: UUID, body: FollowupRequest) -> RunView:
+        """以 run_id 为父幂等追加 body；新运行继承必要历史和代码，但保留原轮证据。"""
+        manager.get_run(run_id)  # 先按现有规则处理不存在或不可读的运行编号。
+        try:
+            return await manager.conversations.submit(run_id, body)
+        except StorageError:
+            return _error(503, "run_unreadable", "前轮记录无法读取，尚未发起新的执行。")
+
+    @app.get("/api/runs/{run_id}/recovery", response_model=RecoveryView)
+    async def recovery(run_id: UUID) -> RecoveryView:
+        """旧客户端兼容入口；默认提示使用普通消息，不启动检查点能力。"""
+        manager.get_run(run_id)
+        if not manager._legacy_checkpoint_mode:
+            return RecoveryView(
+                supported=False, can_resume=False, blocked_code="use_followup",
+                blocked_reason="请在会话输入框发送“继续”，系统会核对已有记录和当前代码。",
+                busy_run_id=manager.busy_run_id,
+            )
+        try:
+            return manager.recovery.view(run_id)
+        except StorageError:
+            return _error(503, "run_unreadable", "原运行记录无法读取，尚未发起恢复。")
+
+    @app.post("/api/runs/{run_id}/resumes", status_code=202, response_model=RunView)
+    async def resume(run_id: UUID, body: ResumeRequest) -> RunView:
+        """旧body协议默认返回410引导普通接续；仅内部兼容回归启用原检查点逻辑。"""
+        manager.get_run(run_id)
+        if not manager._legacy_checkpoint_mode:
+            raise WebServiceError(410, "use_followup", "独立恢复入口已停用，请在会话输入框发送“继续”。")
+        try:
+            return await manager.recovery.submit(run_id, body)
+        except StorageError:
+            return _error(503, "run_unreadable", "原运行记录无法读取，尚未发起恢复。")
 
     @app.post("/api/runs/{run_id}/cancel", response_model=RunView)
     async def cancel(run_id: UUID) -> RunView:

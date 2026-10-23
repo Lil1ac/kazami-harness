@@ -24,3 +24,27 @@ describe('模型 token 用量', /* 只展示已知事实，在途请求和缺失
     expect(screen.getByText('暂无已知用量')).toBeInTheDocument();
   });
 });
+
+it('服务中断时零用量显示未封存，已知用量只显示已知部分', () => {
+  // 缺失结束记录不能把合成默认零计数当作完整供应商账单。
+  const run = makeRun({ interrupted: true });
+  run.result = {
+    ...run.result,
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
+  const view = render(<UsageDisplay run={run} />);
+  expect(screen.getByText('本次用量未封存')).toBeInTheDocument();
+  view.rerender(
+    <UsageDisplay
+      run={{
+        ...run,
+        result: {
+          ...run.result,
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        },
+      }}
+    />,
+  );
+  expect(screen.getByText('5')).toBeInTheDocument();
+  expect(screen.getByText('· 已知部分')).toBeInTheDocument();
+});

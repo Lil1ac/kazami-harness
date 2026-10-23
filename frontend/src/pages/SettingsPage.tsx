@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Skeleton } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, InputNumber, Skeleton, Switch, Select } from 'antd';
 import { CheckOutlined, UndoOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { errorMessage, getOptions } from '../api';
 import { effectiveConfig, useConfigDraft } from '../config';
-import type { OptionsResponse, RunConfig, RunLimits, ToolName } from '../types';
+import type { ContextPolicy, OptionsResponse, RunConfig, RunLimits, ToolName } from '../types';
 
 /** 可编辑预算的语义元数据，单位直接展示给使用者。 */
 interface LimitField {
@@ -82,6 +82,23 @@ const limitFields: LimitField[] = [
     help: '写入工具每次可提交的数据上限。',
   },
 ];
+/** 压缩参数按后端单位编辑；None窗口单独作为可选项。 */
+const compressionFields: {
+  key: keyof ContextPolicy;
+  label: string;
+  min: number;
+  max?: number;
+  step?: number;
+}[] = [
+  { key: 'trigger_ratio', label: '触发比例（0～1）', min: 0.01, max: 0.99, step: 0.05 },
+  { key: 'target_ratio', label: '目标比例（0～1）', min: 0.01, max: 0.99, step: 0.05 },
+  { key: 'inline_tool_bytes', label: '工具结果外置阈值（字节）', min: 512 },
+  { key: 'keep_recent_groups', label: '保留近期完整批次（组）', min: 1, max: 100 },
+  { key: 'max_summary_calls', label: '摘要调用上限（次）', min: 0, max: 20 },
+  { key: 'max_summary_bytes', label: '摘要正文上限（字节）', min: 512 },
+  { key: 'token_safety_margin', label: '额外窗口预留（token）', min: 0 },
+];
+
 const toolOptions: { value: ToolName; label: string }[] = [
   { value: 'read_file', label: 'read_file · 读取文件' },
   { value: 'search_files', label: 'search_files · 搜索内容' },
@@ -113,6 +130,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
       requested_model: values.requested_model.trim(),
       tools: values.tools,
       limits: values.limits,
+      context: values.context,
     });
     setApplied(true);
   }
@@ -120,7 +138,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
   /** 清除浏览器覆盖并恢复宿主默认；不改变正在运行任务的快照。 */
   function reset(): void {
     setDraft({});
-    form.setFieldsValue(options.config);
+    form.setFieldsValue(effectiveConfig(options.config, {}));
     setApplied(false);
   }
 
@@ -165,6 +183,152 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
               >
                 <Checkbox.Group options={toolOptions} className="tools-options" />
               </Form.Item>
+            </section>
+            <section className="settings-section">
+              <h2>上下文输入</h2>
+              <p className="muted">
+                整体输入按消息和工具定义的 UTF-8 JSON 字节数计量，不等于模型 token
+                数。启用压缩后先处理输入，仍超限时停止并保留已有记录。
+              </p>
+              <Form.Item
+                name={['context', 'load_project_instructions']}
+                label="自动加载项目指令"
+                valuePropName="checked"
+                extra="读取本次实际工作区根目录的 AGENTS.md，固定为本次运行快照。"
+              >
+                <Switch
+                  aria-label="自动加载项目指令"
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                />
+              </Form.Item>
+              <div className="limits-grid">
+                <Form.Item
+                  name={['context', 'max_input_bytes']}
+                  label="整体输入上限（KiB）"
+                  getValueProps={
+                    /* 表单保存字节，输入框统一按 KiB 展示。 */ (
+                      bytes: number | null | undefined,
+                    ) => ({
+                      value: bytes == null ? null : bytes / 1024,
+                    })
+                  }
+                  normalize={
+                    /* 将用户输入的 KiB 还原为整数字节，避免误交 256 字节。 */ (
+                      kib: number | null,
+                    ) => (kib === null ? null : Math.round(kib * 1024))
+                  }
+                  rules={[
+                    { required: true, message: '请填写整体输入上限' },
+                    { type: 'number', min: 1, message: '至少允许 1 字节' },
+                  ]}
+                >
+                  <InputNumber min={1 / 1024} step={1} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['context', 'max_project_instruction_bytes']}
+                  label="项目指令文件上限（KiB）"
+                  getValueProps={
+                    /* 原始 UTF-8 文件字节大小转换为 KiB 显示。 */ (
+                      bytes: number | null | undefined,
+                    ) => ({
+                      value: bytes == null ? null : bytes / 1024,
+                    })
+                  }
+                  normalize={
+                    /* 以字节保存，读取失败或超限时后端不会截断加载。 */ (kib: number | null) =>
+                      kib === null ? null : Math.round(kib * 1024)
+                  }
+                  rules={[
+                    { required: true, message: '请填写指令文件上限' },
+                    { type: 'number', min: 1, message: '至少允许 1 字节' },
+                  ]}
+                >
+                  <InputNumber min={1 / 1024} step={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
+            </section>
+            <section className="settings-section">
+              <h2>历史压缩</h2>
+              <p className="muted">
+                启用后自动提供只读 read_context 工具回读证据；它也占用工具次数和输入预算。
+              </p>
+              <Form.Item name={['context', 'compression']} label="压缩策略">
+                <Select
+                  aria-label="压缩策略"
+                  options={[
+                    { value: 'off', label: '关闭：完整历史，超限停止' },
+                    { value: 'masking', label: '规则处理：外置与遮蔽旧结果' },
+                    { value: 'hybrid', label: '混合：规则处理后按需生成摘要' },
+                  ]}
+                />
+              </Form.Item>
+              <p className="muted">
+                摘要也计入总模型轮次、HTTP尝试、用量和超时。原始轨迹持续保存，固定保留用户原文和失败批次。
+              </p>
+              <details>
+                <summary>压缩预算与模型窗口</summary>
+                <div className="limits-grid">
+                  {compressionFields.map(
+                    /* 所有阈值随下一次任务冻结，运行中修改不会改变当前输入。 */ (field) => (
+                      <Form.Item
+                        key={field.key}
+                        name={['context', field.key]}
+                        label={field.label}
+                        dependencies={
+                          field.key === 'target_ratio' ? [['context', 'trigger_ratio']] : undefined
+                        }
+                        rules={[
+                          {
+                            required: true,
+                            type: 'number',
+                            min: field.min,
+                            max: field.max,
+                            message: '请填写允许范围内的值',
+                          },
+                          ...(field.key === 'target_ratio'
+                            ? [
+                                {
+                                  validator: /* 目标低于触发阈值，避免每次请求反复触发。 */ async (
+                                    _: unknown,
+                                    value: number,
+                                  ) => {
+                                    if (value >= form.getFieldValue(['context', 'trigger_ratio']))
+                                      throw new Error('目标比例必须小于触发比例');
+                                  },
+                                },
+                              ]
+                            : []),
+                        ]}
+                      >
+                        <InputNumber
+                          min={field.min}
+                          max={field.max}
+                          step={field.step ?? 1}
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    ),
+                  )}
+                  <Form.Item
+                    name={['context', 'model_context_tokens']}
+                    label="声明模型窗口（token，可留空）"
+                    extra="不根据模型名称猜测。估算输入加最大输出和安全余量应小于窗口；估算无法保证避免厂商拒绝。"
+                    normalize={
+                      /* 清空显式保存null，后端据此关闭窗口限制。 */ (value: number | null) =>
+                        value ?? null
+                    }
+                    rules={[{ type: 'number', min: 1, message: '窗口必须为正整数' }]}
+                  >
+                    <InputNumber
+                      aria-label="声明模型窗口（token，可留空）"
+                      min={1}
+                      precision={0}
+                      style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                </div>
+              </details>
             </section>
             <section className="settings-section">
               <h2>执行预算</h2>

@@ -5,6 +5,7 @@ export function UsageDisplay({ run }: { run: RunView }) {
   const usage = run.result.usage;
   const hasKnownUsage =
     usage.total_tokens > 0 || usage.prompt_tokens > 0 || usage.completion_tokens > 0;
+  if (run.interrupted && !hasKnownUsage) return <span>本次用量未封存</span>;
   if (run.active && run.result.model_turns > 0 && !hasKnownUsage)
     return (
       <span>
@@ -15,7 +16,7 @@ export function UsageDisplay({ run }: { run: RunView }) {
   return (
     <span>
       {usage.total_tokens.toLocaleString()}
-      {(run.active || !run.result.usage_complete) && <small> · 已知部分</small>}
+      {(run.active || run.interrupted || !run.result.usage_complete) && <small> · 已知部分</small>}
     </span>
   );
 }

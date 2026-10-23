@@ -7,3 +7,22 @@ tools = ["read_file", "search_files", "write_file", "run_command"]
 max_model_turns = 20
 max_tool_calls = 40
 run_timeout_seconds = 300.0
+
+# 根AGENTS.md固定快照；分层处理模型输入，完整原始轨迹仍保留。
+[context]
+load_project_instructions = true
+# 单位均为字节；模型输入计量为 messages/tools 的紧凑 UTF-8 JSON，不等于 token。
+max_input_bytes = 262144
+max_project_instruction_bytes = 32768
+
+# hybrid：输出外置、旧结果遮蔽，仍有压力再做结构化摘要；off关闭，masking不调用摘要模型。
+compression = "hybrid"
+trigger_ratio = 0.8
+target_ratio = 0.6
+inline_tool_bytes = 8192
+keep_recent_groups = 3
+max_summary_calls = 2
+max_summary_bytes = 8192
+# 可选声明供应商窗口，再扣除最大输出和安全余量；估算不等于精确tokenizer。
+# model_context_tokens = 65536
+token_safety_margin = 2048

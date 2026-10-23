@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
+import { formatContextBytes } from '../context';
 import type { OptionsResponse } from '../types';
 
 /** 提交表单的本地值；outputs 为每行一个相对路径，提交时再拆分。 */
@@ -295,7 +296,13 @@ export function TaskForm({ options, busyId }: { options: OptionsResponse; busyId
         </Form.Item>
         <div className="composer-config">
           <span>{config.requested_model}</span>
-          <span>{config.tools.length} 类工具</span>
+          <span>
+            {config.tools.length} 类工具
+            {config.context.compression && config.context.compression !== 'off'
+              ? ' + 历史回读'
+              : ''}
+          </span>
+          <span>输入上限 {formatContextBytes(config.context.max_input_bytes)}</span>
           <Button
             type="link"
             size="small"

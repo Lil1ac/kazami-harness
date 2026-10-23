@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Route, Routes } from 'react-router';
+import { NavLink, Navigate, Route, Routes, useMatch } from 'react-router';
 import {
   DeploymentUnitOutlined,
   HistoryOutlined,
@@ -11,8 +11,9 @@ import { SettingsPage } from './pages/SettingsPage';
 
 /** 工作台壳层；导航与主体使用真实路由，未知地址引导回运行列表。 */
 export function App() {
+  const sessionRoute = useMatch('/runs/:runId'); // 会话页使用独立视口布局，列表与配置沿用原布局。
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sessionRoute ? 'app-session' : ''}`}>
       <aside className="app-sidebar">
         <NavLink to="/runs" className="brand" aria-label="Agent Harness 首页">
           <span className="brand-mark">

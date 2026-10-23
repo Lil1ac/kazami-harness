@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Link } from 'react-router';
 import { Alert, Button, Empty, Popconfirm, Spin, Tag } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,9 +19,13 @@ const fileLabels: Record<ProjectReview['files'][number]['status'], string> = {
 export function ProjectReviewPanel({
   project,
   active,
+  parentRunId,
+  resumeSourceId,
 }: {
   project: ProjectReview; // 宿主保存的项目、提交、文件清单与人工决定。
   active: boolean; // 后台任务仍执行或正在整理补丁时为 true。
+  parentRunId?: string | null; // 追加轮来源，用于说明累计差异并链接前轮证据。
+  resumeSourceId?: string | null; // 恢复来源，优先说明同轮检查点继承。
 }) {
   const cache = useQueryClient();
   const recovery = useQuery({
@@ -41,6 +46,9 @@ export function ProjectReviewPanel({
           current ? { ...current, project: recovery.data } : current,
       );
       void cache.invalidateQueries({ queryKey: ['runs'] });
+      // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
+      void cache.invalidateQueries({ queryKey: ['conversation'] });
+      void cache.invalidateQueries({ queryKey: ['recovery', project.run_id] });
     },
     [cache, project.run_id, recovery.data],
   );
@@ -63,6 +71,9 @@ export function ProjectReviewPanel({
       );
       void cache.invalidateQueries({ queryKey: ['run', project.run_id] });
       void cache.invalidateQueries({ queryKey: ['runs'] });
+      // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
+      void cache.invalidateQueries({ queryKey: ['conversation'] });
+      void cache.invalidateQueries({ queryKey: ['recovery', project.run_id] });
     },
   });
   const locked = active || project.snapshot_status !== 'ready' || decision.isPending;
@@ -100,7 +111,19 @@ export function ProjectReviewPanel({
         </div>
       </dl>
       <p className="muted">
-        任务从该提交开始，原目录中的未提交改动不带入任务。测试结果见“项目测试”，审阅决定由你完成。
+        {resumeSourceId ? (
+          <>
+            本次从<Link to={'/runs/' + resumeSourceId + '?tab=code'}>原执行检查点</Link>
+            恢复，以下为相对会话原始基线的累计差异。测试与审阅结果属于本次执行。
+          </>
+        ) : parentRunId ? (
+          <>
+            本轮继承<Link to={`/runs/${parentRunId}?tab=code`}>前轮修改</Link>
+            ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
+          </>
+        ) : (
+          '任务从该提交开始，原目录中的未提交改动不带入任务。测试结果见“项目测试”，审阅决定由你完成。'
+        )}
       </p>
       {project.source_dirty && (
         <Alert showIcon type="info" title="建立任务时原目录有未提交改动，未带入本次工作树。" />
@@ -208,7 +231,7 @@ export function ProjectReviewPanel({
           )}
         </ul>
       )}
-      {diff.isFetching && <Spin tip="读取代码补丁" />}
+      {diff.isFetching && <Spin description="读取代码补丁" />}
       {diff.error && (
         <Alert
           type="error"

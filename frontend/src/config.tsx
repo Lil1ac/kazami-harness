@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ConfigOverrides, RunConfig } from './types';
+import { DEFAULT_CONTEXT_POLICY } from './context';
 
 /** 本浏览器的临时配置上下文；刷新后恢复宿主默认值，不持久化任何凭据。 */
 interface DraftContextValue {
@@ -24,5 +25,11 @@ export function useConfigDraft(): DraftContextValue {
 
 /** 将局部覆盖合并到宿主配置，返回只用于展示的新对象，不修改输入。 */
 export function effectiveConfig(base: RunConfig, draft: ConfigOverrides): RunConfig {
-  return { ...base, ...draft, limits: { ...base.limits, ...draft.limits } };
+  return {
+    ...base,
+    ...draft,
+    limits: { ...base.limits, ...draft.limits },
+    // 旧配置没有 context 时只为后续提交补默认，不据此伪造旧任务的加载记录。
+    context: { ...DEFAULT_CONTEXT_POLICY, ...base.context, ...draft.context },
+  };
 }

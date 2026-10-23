@@ -27,7 +27,8 @@ class ProjectBrowserModel:
     async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
         """根据 messages 的任务和工具历史返回一次调用或最终回答；tools 保持原样，不访问网络。"""
         await asyncio.sleep(0.4)
-        prompt = next(item['content'] for item in messages if item['role'] == 'user')
+        # 项目指令使用独立 user 消息，真实任务取最后一条 user 消息。
+        prompt = next(item['content'] for item in reversed(messages) if item['role'] == 'user')
         used = sum(item['role'] == 'tool' for item in messages)
         calls: list[ToolCall] = []
         content = None

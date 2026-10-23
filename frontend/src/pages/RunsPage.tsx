@@ -124,7 +124,7 @@ export function RunsPage() {
                             {run.result.model_turns}
                             <span> / {run.result.tool_calls}</span>
                           </strong>
-                          <span>模型 / 工具</span>
+                          <span>{run.interrupted ? '已记录模型 / 工具' : '模型 / 工具'}</span>
                           <ArrowUpOutlined className="row-arrow" />
                         </div>
                       </Link>

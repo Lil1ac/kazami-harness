@@ -1,5 +1,6 @@
 """配置与运行记录的数据结构及校验规则；供应商消息由适配器保存。"""
 
+import hashlib
 import os
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -45,6 +46,147 @@ class RunLimits(DataModel):
     max_file_write_bytes: int = Field(default=1024 * 1024, gt=0)
 
 
+# 上下文输入与项目约定的宿主策略；按 UTF-8 JSON 字节计量，不代表供应商 token 窗口。
+class ContextPolicy(DataModel):
+    # 默认读取实际工作区根 AGENTS.md；关闭时不访问该文件。
+    load_project_instructions: bool = True
+    # messages 与 tools 的固定 JSON 编码总字节上限；等于上限允许请求。
+    max_input_bytes: int = Field(default=256 * 1024, gt=0)
+    # 指令原始文件的字节上限；超过时拒绝加载，不截取部分项目约定。
+    max_project_instruction_bytes: int = Field(default=32 * 1024, gt=0)
+    # 旧记录默认关闭；masking 只做规则处理，hybrid 额外允许摘要。
+    compression: Literal["off", "masking", "hybrid"] = "off"
+    # 达到触发比例后处理到目标比例，目标小于触发，减少频繁改写缓存前缀。
+    trigger_ratio: float = Field(default=0.8, gt=0, lt=1, allow_inf_nan=False)
+    target_ratio: float = Field(default=0.6, gt=0, lt=1, allow_inf_nan=False)
+    # 成功工具结果超过此 UTF-8 字节数时外置；失败结果保留原文。
+    inline_tool_bytes: int = Field(default=8192, ge=512)
+    # 最近完整 assistant/工具批次数；用户原文和项目规则始终固定保留。
+    keep_recent_groups: int = Field(default=3, ge=1, le=100)
+    # 每次运行摘要调用上限；同时占总模型轮次和总超时，零表示禁止摘要。
+    max_summary_calls: int = Field(default=2, ge=0, le=20)
+    # 结构化摘要 UTF-8 字节上限；超限拒绝，不静默截断。
+    max_summary_bytes: int = Field(default=8192, ge=512)
+    # None 表示只执行字节限制；非空是宿主声明窗口，不能当作厂商保证。
+    model_context_tokens: int | None = Field(default=None, gt=0)
+    # 额外预留 token；另行预留最大模型输出。
+    token_safety_margin: int = Field(default=2048, ge=0)
+
+    @model_validator(mode="after")
+    def validate_compression(self) -> "ContextPolicy":
+        """检查目标比例小于触发比例；返回自身，矛盾时抛 ValueError，不访问文件。"""
+        if self.target_ratio >= self.trigger_ratio:
+            raise ValueError("压缩目标比例必须小于触发比例")
+        return self
+
+
+# 一次运行冻结的根项目约定；只保存相对来源，不记录失败路径或异常原文。
+class ProjectInstructionSnapshot(DataModel):
+    status: Literal["loaded", "missing", "disabled", "error"]  # 成功、缺失、关闭或明确读取错误。
+    path: Literal["AGENTS.md"] = "AGENTS.md"  # 当前仅支持实际工作区根目录的固定文件。
+    content: str | None = None  # 仅 loaded 保存完整原文；其余状态不伪造或截断内容。
+    sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")  # 成功时记录原始文件字节摘要。
+    size_bytes: int | None = Field(default=None, ge=0)  # 成功时为原始字节数；未读取完整文件时为 None。
+    error_code: str | None = Field(default=None, pattern=r"^project_instructions_[a-z0-9_]+$")  # 失败时只接受项目指令受控前缀原因码。
+
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> "ProjectInstructionSnapshot":
+        """校验本实例状态与原始 UTF-8 正文、字节数和摘要一致，返回自身；矛盾时抛 ValueError。
+
+        loaded 必须保存完整且匹配的正文/摘要/大小，不带错误码；error 必须有受控错误码且
+        不保存部分正文；missing/disabled 不包含任何正文、摘要、大小或错误码。
+        """
+        if self.status == "loaded":
+            if self.content is None or self.sha256 is None or self.size_bytes is None or self.error_code is not None:
+                raise ValueError("已加载项目约定必须包含完整正文、摘要和字节数，且没有错误码")
+            try:
+                raw = self.content.encode("utf-8")
+            except UnicodeError:
+                raise ValueError("项目约定正文必须是有效 UTF-8") from None
+            if len(raw) != self.size_bytes or hashlib.sha256(raw).hexdigest() != self.sha256:
+                raise ValueError("项目约定正文、字节数与摘要不一致")
+        else:
+            if self.content is not None or self.sha256 is not None or self.size_bytes is not None:
+                raise ValueError("未加载项目约定不能携带部分正文、摘要或字节数")
+            if (self.status == "error") != (self.error_code is not None):
+                raise ValueError("只有项目约定错误状态必须携带受控错误码")
+        return self
+
+
+# 每次拟发送模型请求前的确定性大小检查；被拒绝的下一轮也有记录。
+class ContextCheck(DataModel):
+    model_turn: int = Field(gt=0)  # 拟请求轮次；被拒绝时不计入实际 model_turns。
+    input_bytes: int = Field(ge=0)  # 固定 JSON 编码后的 UTF-8 字节数，包含消息和工具定义。
+    max_input_bytes: int = Field(gt=0)  # 本次运行的整体输入预算快照，单位字节。
+    message_count: int = Field(ge=0)  # 拟发送消息数量，包含项目约定消息与完整工具结果。
+    allowed: bool  # 同时满足字节限制和已声明的估算 token 输入限制。
+    raw_input_bytes: int | None = Field(default=None, ge=0)  # 压缩前大小；旧记录未知。
+    estimated_input_tokens: int | None = Field(default=None, ge=0)  # 本地估算，不冒充精确 tokenizer。
+    max_input_tokens: int | None = Field(default=None, gt=0)  # 窗口减输出和安全余量后的上限。
+    purpose: Literal["execution", "summary"] = "execution"  # 正常执行或额外摘要请求。
+
+
+
+    @model_validator(mode="after")
+    def validate_budget_decision(self) -> "ContextCheck":
+        """校验本实例allowed与字节和可选token输入预算一致，返回自身；矛盾时抛ValueError。
+
+        字节恰好等于上限可发送；声明token上限时还须有估算值且不超限。
+        不信任受损事件中独立保存的布尔值，旧记录缺省token上限时沿用字节判断。
+        """
+        tokens_allowed = self.max_input_tokens is None or (
+            self.estimated_input_tokens is not None and self.estimated_input_tokens <= self.max_input_tokens
+        )
+        if self.allowed != (self.input_bytes <= self.max_input_bytes and tokens_allowed):
+            raise ValueError("上下文预算结论与输入字节数不一致")
+        return self
+
+
+# 结构化摘要描述已有工作；用户原文和验收事实另行保留。
+class WorkSummary(DataModel):
+    goal: str = Field(min_length=1)  # 历史片段处理的目标。
+    decisions: list[str]  # 已有决策及理由。
+    changes: list[str]  # 已修改文件或行为。
+    evidence: list[str]  # 已观察证据，历史测试不能当作本轮通过。
+    open_issues: list[str]  # 未解决问题和失败。
+    next_steps: list[str]  # 待办，不代表额外授权。
+
+
+# 输入投影变换的持久证据；范围为本运行完整消息的零基半开区间。
+class ContextAction(DataModel):
+    kind: Literal["offload", "mask", "summary", "summary_failed"]  # 外置、遮蔽、摘要或失败。
+    model_turn: int = Field(gt=0)  # 此变换服务的拟请求轮次。
+    before_bytes: int = Field(ge=0)  # 整体输入变换前大小。
+    after_bytes: int = Field(ge=0)  # 变换后大小；失败不提交替换。
+    source_start: int = Field(ge=0)  # 起始消息索引，包含。
+    source_end: int = Field(gt=0)  # 结束消息索引，不包含。
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 原始归档内容摘要。
+    reference: str  # 当前运行或已核验祖先的受控回读引用。
+    summary: WorkSummary | None = None  # 仅成功摘要携带内容。
+    reason: str | None = None  # 稳定失败原因。
+
+    @model_validator(mode="after")
+    def validate_action(self) -> "ContextAction":
+        """核对范围、摘要状态及真实缩小；返回自身，矛盾时抛 ValueError，不写记录。"""
+        if self.source_end <= self.source_start or (self.kind == "summary") != (self.summary is not None):
+            raise ValueError("上下文变换范围或摘要状态无效")
+        if self.kind != "summary_failed" and self.after_bytes >= self.before_bytes:
+            raise ValueError("成功压缩必须实际缩小输入")
+        return self
+
+
+# API 从事件派生的上下文视图；旧运行没有对应事件时整体视图可为 None。
+class ContextView(DataModel):
+    instruction: ProjectInstructionSnapshot  # 本次运行固定的项目约定快照。
+    last_check: ContextCheck | None = None  # 最后一次检查；指令失败或尚未检查时为 None。
+    serialization: Literal["json_utf8_v1"] = "json_utf8_v1"  # 明确计量版本，不等同 HTTP 封装或 token 数。
+    actions: list[ContextAction] = Field(default_factory=list)  # 最近50条，完整记录保留在事件中。
+    action_count: int = Field(default=0, ge=0)  # 全部变换数量，包含失败。
+    summary_calls: int = Field(default=0, ge=0)  # 已开始摘要调用数，包含失败和取消。
+
+
+
 # 这里只声明允许识别的名称；当前真正实现和可分发的工具由工具注册层决定。
 ToolName = Literal["read_file", "search_files", "write_file", "run_command"]
 
@@ -65,12 +207,17 @@ class RunConfig(DataModel):
     )
     # 每个配置创建独立的限制对象，避免不同运行共享可变设置。
     limits: RunLimits = Field(default_factory=RunLimits)
+    # 每次运行独立的指令加载与整体模型输入预算策略。
+    context: ContextPolicy = Field(default_factory=ContextPolicy)
 
     @model_validator(mode="after")
     def validate_config(self) -> "RunConfig":
         """在字段类型校验后拒绝空白模型名、空白提示词和重复工具名。"""
         if not self.requested_model.strip() or not self.system_prompt.strip():
             raise ValueError("模型名和系统提示词不能为空白")
+        window = self.context.model_context_tokens
+        if window is not None and window <= self.limits.model_max_output_tokens + self.context.token_safety_margin:
+            raise ValueError("模型窗口必须大于输出预留与安全余量之和")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("工具名称不能重复")
         return self
@@ -115,6 +262,41 @@ class TaskSpec(DataModel):
         return self
 
 
+# 网页启动时固定的宿主登记来源；后续轮次不能由浏览器改成任意目录或验收程序。
+class RunOrigin(DataModel):
+    kind: Literal["workspace", "project"]  # 普通文件任务或 Git 项目。
+    preset_id: str = Field(min_length=1, max_length=64)  # 启动时的宿主登记编号。
+    registered_path: Path  # 宿主登记根目录；与每轮独立实际工作目录分别保存。
+    verifier_id: str | None = None  # 普通任务选择的宿主验收编号；项目任务使用项目测试。
+
+
+# 后续运行固定的父历史来源；实际消息由父事件重建，并在调用模型前重新核验。
+class HistorySource(DataModel):
+    last_seq: int = Field(gt=0)  # 接纳追加时父事件的最后序号。
+    messages_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 去掉旧宿主前缀后的完整消息摘要。
+    interrupted: bool = False  # 宿主明确接纳中断后继续；旧记录默认False，网页不能设置来源。
+
+
+# 恢复执行固定的来源，仅指向核验过的不可变检查点，不授权整个中断运行。
+class ResumeSource(DataModel):
+    source_run_id: UUID  # 被中断的上一次执行尝试编号。
+    checkpoint_id: UUID  # 该尝试已完整封存的检查点编号。
+    checkpoint_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 检查点正文摘要，防止准备后被替换。
+
+
+# 当前尝试开始前，同一用户要求的恢复链累计消耗；不包含停机时长。
+class ResumeBudget(DataModel):
+    model_turns: int = Field(default=0, ge=0)  # 已发起的执行和摘要模型请求数。
+    http_attempts: int = Field(default=0, ge=0)  # 已知HTTP尝试次数，缺失用量不推算为零费用。
+    tool_calls: int = Field(default=0, ge=0)  # 已接纳的工具调用次数。
+    summary_calls: int = Field(default=0, ge=0)  # 已开始摘要次数，失败与取消也计入。
+    prompt_tokens: int = Field(default=0, ge=0)  # 已知输入token累计值。
+    completion_tokens: int = Field(default=0, ge=0)  # 已知输出token累计值。
+    total_tokens: int = Field(default=0, ge=0)  # 供应商提供的已知总token累计值。
+    usage_complete: bool = True  # 有未响应请求、重试或缺失用量时为False。
+    active_duration_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 已运行的主动时长，单位秒。
+
+
 # 运行创建时保存的登记快照，使历史记录保留当时的任务、配置和运行时版本。
 class RunManifest(DataModel):
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
@@ -124,6 +306,37 @@ class RunManifest(DataModel):
     runtime_version: str = "0.1.0"
     task: TaskSpec
     config: RunConfig
+    session_id: UUID | None = None  # 会话根编号；旧记录/CLI 缺省时以 run_id 作为单轮会话。
+    parent_run_id: UUID | None = None  # 首轮为空，追加轮指向前一可信运行。
+    turn_index: int = Field(default=1, ge=1)  # 用户请求轮次，从1开始，不等于模型轮次。
+    origin: RunOrigin | None = None  # 新网页运行的宿主来源；旧记录可能未记录。
+    history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
+    resume_source: ResumeSource | None = None  # 恢复尝试使用封存来源；普通首轮和追加要求为空。
+    attempt_index: int = Field(default=1, ge=1)  # 同一用户轮次内的尝试序号，恢复时递增。
+
+    @model_validator(mode="after")
+    def validate_resume_relation(self) -> "RunManifest":
+        """核对恢复字段属于同一次Git任务尝试；返回自身，关系矛盾时抛ValueError。
+
+        无来源表示首次执行或新增用户要求，尝试序号为1；有来源必须指向不同的直接父运行，
+        且具有会话、项目来源和递增尝试号，不同时携带普通追加历史来源。本方法不读取磁盘。
+        """
+        source = self.resume_source
+        if source is None:
+            if self.attempt_index != 1:
+                raise ValueError("没有恢复来源时尝试序号必须为1")
+            return self
+        if (
+            self.attempt_index < 2
+            or self.session_id is None
+            or self.parent_run_id != source.source_run_id
+            or source.source_run_id == self.run_id
+            or self.history_source is not None
+            or self.origin is None
+            or self.origin.kind != "project"
+        ):
+            raise ValueError("恢复尝试的来源、会话或项目关系不一致")
+        return self
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。
@@ -186,6 +399,8 @@ class RunResult(DataModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     # 缺少用量或发生重试时，只展示已知部分，不能据此推算精确账单。
     usage_complete: bool = False
+    resume_budget: ResumeBudget | None = None  # 恢复前已耗预算；原计数始终只表示本次尝试。
+    active_duration_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 本次主动执行时长，单位秒；旧记录缺省为零。
 
     @model_validator(mode="after")
     def validate_result(self) -> "RunResult":

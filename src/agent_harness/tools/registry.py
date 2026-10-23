@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from ..context_archive import ContextArchive, ReadContextArguments
 from ..processes import ProcessRunner
 from ..schemas import RunConfig
 from ..store import StorageError
@@ -14,6 +15,7 @@ from .files import ReadFileArguments, SearchFilesArguments, WriteFileArguments, 
 
 
 _TOOL_SPECS = {
+    "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
     "read_file": (ReadFileArguments, "只读工作区 UTF-8 文件；offset/max_bytes 按字节计数。如 eof=false，使用 next_offset 继续读取直到完成。"),
     "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
     "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件必须显式 overwrite=true。写入有大小上限。"),
@@ -40,6 +42,7 @@ class ToolExecutor:
         self.cleanup_status = "not_needed"
         self.artifact_refs: list[dict] = []
         self.cancelled_result: dict | None = None
+        self.context_archive: ContextArchive | None = None  # 压缩启用时绑定本轮证据归档，只开放只读引用。
 
     def bind_run(self, run_dir: Path) -> None:
         """绑定已创建的运行记录目录，让命令输出仅保存在本次 artifacts 下。"""
@@ -49,11 +52,22 @@ class ToolExecutor:
         self.run_dir = resolved
         self.process_runner = ProcessRunner(self.config.limits, resolved / "artifacts")
 
+    def bind_context(self, archive: ContextArchive) -> None:
+        """绑定当前运行archive；返回None，不开放任意路径，不改变原有文件或命令权限。"""
+        self.context_archive = archive
+
+    def _enabled_names(self) -> list[str]:
+        """返回实际工具名；启用压缩时自动提供只读read_context，额外定义参与输入计量。"""
+        names = list(self.config.tools)
+        if self.config.context.compression != "off":
+            names.append("read_context")
+        return names
+
     @property
     def definitions(self) -> list[dict]:
         """只生成本次配置启用的工具声明，参数 Schema 来自同一校验类。"""
         return [{"type": "function", "function": {"name": name, "description": _TOOL_SPECS[name][1], "parameters": _TOOL_SPECS[name][0].model_json_schema()}}
-                for name in self.config.tools if name in _TOOL_SPECS]
+                for name in self._enabled_names() if name in _TOOL_SPECS]
 
     def _observe(self, result: dict) -> dict:
         """聚合已返回的产物与最坏清理状态，后续正常结果不能覆盖清理问题。"""
@@ -94,13 +108,18 @@ class ToolExecutor:
     async def execute(self, name: str, arguments_json: str) -> dict:
         """严格校验并执行一个工具；业务错误回传模型，存储错误立即上抛。"""
         self.cancelled_result = None
-        if name not in _TOOL_SPECS or name not in self.config.tools:
+        if name not in _TOOL_SPECS or name not in self._enabled_names():
             return _error("unknown_tool", "该工具未启用，请使用当前工具声明中的名称。")
         try:
             arguments = _TOOL_SPECS[name][0].model_validate_json(arguments_json)
         except (ValidationError, TypeError, ValueError):
             return _error("invalid_arguments", "工具参数无效，请按工具 Schema 提供 JSON 对象。")
         try:
+            if name == "read_context":
+                if self.context_archive is None:
+                    return _error("context_not_ready", "历史证据尚未绑定。")
+                data = self.context_archive.read(arguments)
+                return {"ok": True, "data": data, "error": None, "truncated": not data["eof"]}
             if name == "run_command":
                 if self.process_runner is None:
                     return _error("command_not_ready", "命令工具尚未绑定运行目录。")

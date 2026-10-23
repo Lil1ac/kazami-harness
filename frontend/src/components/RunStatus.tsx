@@ -88,7 +88,7 @@ export function StateBreakdown({ run }: { run: RunView }) {
     <dl className={`state-breakdown${run.project ? ' project-state' : ''}`}>
       <div>
         <dt>执行</dt>
-        <dd>{executionLabels[run.result.execution_status]}</dd>
+        <dd>{run.interrupted ? '运行已中断' : executionLabels[run.result.execution_status]}</dd>
       </div>
       <div>
         <dt>{run.project ? '测试' : '验收'}</dt>

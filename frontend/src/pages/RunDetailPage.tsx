@@ -1,298 +1,290 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Popconfirm, Skeleton, Tabs } from 'antd';
-import { ArrowLeftOutlined, StopOutlined } from '@ant-design/icons';
-import { Link, useParams, useSearchParams } from 'react-router';
-import { cancelRun, errorMessage, getRun } from '../api';
-import { duration, phaseLabel } from '../format';
+import { Alert, Button, Drawer, Popconfirm, Skeleton } from 'antd';
+import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined, StopOutlined } from '@ant-design/icons';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { cancelRun, errorMessage, getConversation, getRun } from '../api';
 import { useRunEvents } from '../hooks/useRunEvents';
-import { RunStatus, StateBreakdown } from '../components/RunStatus';
-import { EventTrail } from '../components/EventTrail';
-import { ArtifactPanel } from '../components/ArtifactPanel';
-import { VerificationPanel } from '../components/VerificationPanel';
-import { UsageDisplay } from '../components/UsageDisplay';
-import { ProjectReviewPanel } from '../components/ProjectReviewPanel';
-import type { RunView } from '../types';
+import { mergeConfirmedRun, turnAttempts } from '../conversation';
+import { RunStatus } from '../components/RunStatus';
+import { ConversationPanel } from '../components/ConversationPanel';
+import { RunInspector } from '../components/RunInspector';
+import type { ConversationView, RunView } from '../types';
 
-/** 任务详情路由入口；不存在或不可读的记录明确报错，不创建虚构结果。 */
+/** 根据1100px断点选择侧栏或抽屉；订阅仅影响布局，卸载释放监听。 */
+function useNarrowWorkspace(): boolean {
+  const [narrow, setNarrow] = useState(
+    /* 首帧按实际视口选择，避免手机先闪现桌面栏。 */ () =>
+      window.matchMedia('(max-width: 1100px)').matches,
+  );
+  useEffect(
+    /* 视口变化时同步折叠布局。 */ () => {
+      const media = window.matchMedia('(max-width: 1100px)');
+      /** 把媒体查询结果应用于布局，不更改任务与会话。 */
+      function update(): void {
+        setNarrow(media.matches);
+      }
+      media.addEventListener('change', update);
+      return /* 页面卸载时解除当前查询监听。 */ () => media.removeEventListener('change', update);
+    },
+    [],
+  );
+  return narrow;
+}
+
+/** 兼容旧详情标签；对话始终保留，分类只用于右侧检查器。 */
+function inspectorTab(value: string | null): string {
+  return value && ['code', 'trace', 'context', 'artifacts'].includes(value) ? value : 'overview';
+}
+
+/** 读取路由运行后，以稳定session_id挂载工作区；新轮导航不会重建对话与输入。 */
 export function RunDetailPage() {
   const { runId = '' } = useParams();
-  const query = useQuery({
+  const run = useQuery({
     queryKey: ['run', runId],
-    queryFn: /* 使用单次快照读取，刷新网页不会启动任务。 */ ({ signal }) => getRun(runId, signal),
+    queryFn: /* 路由读取不会启动任务。 */ ({ signal }) => getRun(runId, signal),
     retry: false,
-    refetchInterval: /* 有活动任务时更新阶段和计数，终态停止轮询。 */ (state) =>
-      state.state.data?.active ? 1500 : false,
   });
-  if (query.isPending) return <Skeleton active paragraph={{ rows: 12 }} />;
-  if (!query.data)
+  const sessionId = run.data?.session_id || runId;
+  const conversation = useQuery({
+    queryKey: ['conversation', sessionId],
+    queryFn: /* 使用会话根读取所有轮次，路由变化不换查询身份。 */ ({ signal }) =>
+      getConversation(sessionId, signal),
+    enabled: !!run.data,
+    retry: false,
+    refetchInterval: /* 准备、执行与快照占槽时更新继续条件，终态停止轮询。 */ (state) =>
+      state.state.data?.busy_run_id || state.state.data?.blocked_code === 'run_busy' ? 1500 : false,
+  });
+  if (run.isPending || (run.data && conversation.isPending))
     return (
-      <>
+      <div className="session-loading">
+        <Skeleton active paragraph={{ rows: 10 }} />
+      </div>
+    );
+  if (!run.data || !conversation.data)
+    return (
+      <div className="session-loading">
         <Link to="/runs">返回任务列表</Link>
-        <Alert type="error" showIcon title="无法打开任务" description={errorMessage(query.error)} />
-      </>
+        <Alert
+          type="error"
+          title="无法打开会话"
+          description={errorMessage(run.error || conversation.error)}
+        />
+      </div>
     );
   return (
-    <>
-      {query.error && (
-        <Alert
-          type="warning"
-          showIcon
-          title="暂时无法刷新任务，保留上次快照"
-          description={errorMessage(query.error)}
-        />
-      )}
-      <RunDetailContent key={runId} run={query.data} />
-    </>
+    <SessionWorkspace
+      key={sessionId}
+      routeRun={run.data}
+      conversation={conversation.data}
+      refreshError={run.error || conversation.error}
+    />
   );
 }
 
-/** 根据任务快照显示轨迹和检查器；切换任务通过 key 完全隔离预览与订阅状态。 */
-function RunDetailContent({ run }: { run: RunView }) {
+/** 以会话组织消息，所选运行只影响检查器；所有追加仍发送给最新轮。 */
+function SessionWorkspace({
+  routeRun,
+  conversation,
+  refreshError,
+}: {
+  routeRun: RunView;
+  conversation: ConversationView;
+  refreshError: unknown;
+}) {
   const cache = useQueryClient();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const tab = ['trace', 'answer', 'artifacts', ...(run.project ? ['code'] : [])].includes(
-    params.get('tab') || '',
+  const narrow = useNarrowWorkspace();
+  const requestedSelection = params.get('inspect') || routeRun.run_id;
+  const selectedId = conversation.turns.some(
+    /* 拒绝URL指定不属于当前会话的检查对象。 */ (turn) =>
+      turnAttempts(turn).some(
+        /* 原执行深链接在同轮恢复后仍可回看。 */ (attempt) => attempt.run_id === requestedSelection,
+      ),
   )
-    ? params.get('tab')!
-    : 'trace';
-  const [now, setNow] = useState(Date.now()); // 仅用于活动任务耗时展示，不推断终态。
+    ? requestedSelection
+    : conversation.latest_run_id;
+  const tab = inspectorTab(params.get('tab'));
+  const [panelOpen, setPanelOpen] = useState(
+    !narrow || ['code', 'trace', 'context', 'artifacts'].includes(params.get('tab') || ''),
+  ); // 手机普通入口收起，详情深链接直接打开抽屉。
+  const previousNarrow = useRef(narrow); // 只在真正跨断点时收起抽屉，不覆盖首屏深链接。
+  const query = useQuery({
+    queryKey: ['run', conversation.latest_run_id],
+    queryFn: /* 最新轮快照决定运行状态，查看旧轮时继续跟踪最新执行。 */ ({ signal }) =>
+      getRun(conversation.latest_run_id, signal),
+    initialData: routeRun.run_id === conversation.latest_run_id ? routeRun : undefined,
+    retry: false,
+    refetchInterval: /* 活动阶段刷新状态与计数；SSE继续负责工具事件。 */ (state) =>
+      state.state.data?.active ? 1500 : false,
+  });
+  const latest = query.data;
   const events = useRunEvents(
-    run.run_id,
-    run.active,
-    /* 终态通知后重新查询持久化结果并刷新列表。 */ () => {
-      void cache.invalidateQueries({ queryKey: ['run', run.run_id] });
+    conversation.latest_run_id,
+    latest?.active ?? false,
+    /* 终态后核对执行、验收与快照事实。 */ () => {
+      void cache.invalidateQueries({ queryKey: ['run', conversation.latest_run_id] });
+      void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
       void cache.invalidateQueries({ queryKey: ['runs'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
+      void cache.invalidateQueries({ queryKey: ['recovery'] });
     },
   );
   const cancellation = useMutation({
-    mutationFn: /* 明确的用户操作才发送取消请求。 */ () => cancelRun(run.run_id),
-    onSuccess: /* 返回值可能仍在清理，继续等待真实终态。 */ (view) =>
-      cache.setQueryData(['run', run.run_id], view),
+    mutationFn: /* 只由明确取消操作触发。 */ (id: string) => cancelRun(id),
+    onSuccess: /* 取消可能仍在清理，保持后台真实快照。 */ (view) =>
+      cache.setQueryData(['run', view.run_id], view),
   });
   useEffect(
-    /* 活动阶段每秒更新展示，页面离开后停止定时器。 */ () => {
-      if (!run.active) return;
-      const timer = setInterval(
-        /* 只更新浏览器时钟，不改变运行状态。 */ () => setNow(Date.now()),
-        1000,
-      );
-      return /* effect 清理不取消后端任务。 */ () => clearInterval(timer);
+    /* 跨屏幕断点才调整面板，初次挂载保留URL的详情意图。 */ () => {
+      if (previousNarrow.current === narrow) return;
+      previousNarrow.current = narrow;
+      setPanelOpen(!narrow);
     },
-    [run.active],
+    [narrow],
   );
-  const eventElapsed = events.events.at(-1)?.elapsed_ms ?? 0;
-  const elapsed = run.active
-    ? Math.max(eventElapsed, now - Date.parse(run.created_at))
-    : eventElapsed;
-  const limits = run.config.limits;
-  const cancelling = run.cancelling || cancellation.isPending;
 
-  /** 将当前详情标签写入 URL，事件订阅始终只有上面的一个实例。 */
-  function changeTab(value: string): void {
+  /** 查看目标轮和分类，只更新URL检查状态，不切换或重建对话。 */
+  function inspect(runId: string, value = 'overview'): void {
     const next = new URLSearchParams(params);
+    next.set('inspect', runId);
     next.set('tab', value);
     setParams(next, { replace: true });
+    setPanelOpen(true);
   }
 
+  /** 用POST已确认的真实视图补入会话后再刷新；保留同一DOM与输入状态。 */
+  function confirmed(view: RunView): void {
+    cache.setQueryData(['run', view.run_id], view);
+    cache.setQueryData<ConversationView>(
+      ['conversation', conversation.session_id],
+      /* 同轮恢复只合并 attempts，不再制造一条重复用户消息。 */ (current) =>
+        current ? mergeConfirmedRun(current, view) : current,
+    );
+    void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
+    void cache.invalidateQueries({ queryKey: ['runs'] });
+    void cache.invalidateQueries({ queryKey: ['options'] });
+    void navigate(`/runs/${view.run_id}`, { replace: true });
+  }
+  const selectedTurn = conversation.turns.find(
+    /* 标题使用所选轮次，避免把旧测试显示为最新结果。 */ (turn) =>
+      turnAttempts(turn).some(
+        /* 所选旧运行可能已被同轮恢复尝试取代为最新运行。 */ (attempt) =>
+          attempt.run_id === selectedId,
+      ),
+  );
+  const selectedAttempt =
+    selectedTurn &&
+    turnAttempts(selectedTurn).find(
+      /* 标题明确当前检查的是哪一次执行，不能混用旧测试与恢复结果。 */ (attempt) =>
+        attempt.run_id === selectedId,
+    );
+  const detailTitle =
+    '第 ' +
+    (selectedTurn?.turn_index || '—') +
+    ' 轮详情' +
+    (selectedAttempt && (selectedAttempt.resume_source || (selectedTurn?.attempts?.length || 0) > 1)
+      ? ' · 尝试 ' + selectedAttempt.attempt_index
+      : '');
+  const title = conversation.turns[0]?.prompt.replace(/\s+/g, ' ').trim() || '任务会话';
+  const inspector = latest ? (
+    <RunInspector
+      selectedId={selectedId}
+      latest={latest}
+      liveEvents={events}
+      tab={tab}
+      onConfirmed={confirmed}
+      onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
+    />
+  ) : null;
   return (
-    <>
-      <Link to="/runs" className="back-link">
-        <ArrowLeftOutlined /> 任务列表
-      </Link>
-      <header className="page-heading detail-heading">
-        <div>
-          <span className="eyebrow">RUN / {run.run_id.slice(0, 8)}</span>
-          <h1>
-            运行详情 <RunStatus run={run} />
-          </h1>
-          <p className="run-full-id">{run.run_id}</p>
+    <div className="session-workspace">
+      <header className="session-header">
+        <Link to="/runs" className="session-back" aria-label="返回任务列表">
+          <ArrowLeftOutlined />
+        </Link>
+        <div className="session-heading">
+          <h1 title={title}>{title}</h1>
+          <p>
+            {latest?.project?.project_label || '文件任务'}
+            <span>·</span>
+            {conversation.turns.length} 轮对话
+          </p>
         </div>
-        <Popconfirm
-          title="取消当前任务？"
-          description="后端会停止执行并完成进程清理，已有记录仍会保留。"
-          okText="取消任务"
-          cancelText="继续运行"
-          onConfirm={/* 用户确认后触发幂等取消接口。 */ () => cancellation.mutate()}
-          disabled={!run.active || cancelling}
-        >
+        <div className="session-header-actions">
+          {latest && <RunStatus run={latest} />}
+          {latest?.active && (
+            <Popconfirm
+              title="停止当前执行？"
+              description="已有修改与记录保留，后端会完成进程清理。"
+              okText="停止执行"
+              cancelText="继续运行"
+              onConfirm={/* 明确确认才中断最新轮。 */ () => cancellation.mutate(latest.run_id)}
+            >
+              <Button
+                danger
+                aria-label="停止当前执行"
+                icon={<StopOutlined />}
+                loading={latest.cancelling || cancellation.isPending}
+                disabled={latest.cancelling || cancellation.isPending}
+              >
+                停止
+              </Button>
+            </Popconfirm>
+          )}
           <Button
-            danger
-            disabled={!run.active || cancelling}
-            loading={cancelling}
-            icon={<StopOutlined />}
-          >
-            {cancelling ? '正在取消' : '取消任务'}
-          </Button>
-        </Popconfirm>
+            type="text"
+            aria-label={panelOpen ? '收起详情' : '查看详情'}
+            onClick={/* 查看区域独立于会话输入与执行。 */ () => setPanelOpen(!panelOpen)}
+            icon={<LayoutOutlined />}
+          />
+        </div>
       </header>
-      {cancellation.error && (
+      {(refreshError || query.error || cancellation.error) && (
         <Alert
-          type="error"
-          showIcon
-          title="取消请求未完成"
-          description={errorMessage(cancellation.error)}
-        />
-      )}
-      {run.interrupted && (
-        <Alert
+          className="session-refresh-warning"
           type="warning"
           showIcon
-          title="任务运行已中断"
-          description="后台没有对应的活动任务，当前记录不代表执行成功。请检查已有产物和事件，再决定是否重新提交。"
+          title={cancellation.error ? '取消请求未完成' : '暂时无法刷新，保留已读取内容'}
+          description={errorMessage(cancellation.error || refreshError || query.error)}
         />
       )}
-      {run.warnings.map(
-        /* 宿主提示按安全文本显示。 */ (warning, index) => (
-          <Alert key={index} type="warning" showIcon title={warning} />
-        ),
+      <div className={`session-body ${!narrow && panelOpen ? 'with-inspector' : ''}`}>
+        <ConversationPanel
+          run={latest}
+          conversation={conversation}
+          events={events.events}
+          onInspect={inspect}
+          onConfirmed={confirmed}
+        />
+        {!narrow && panelOpen && (
+          <aside className="session-inspector" aria-label="运行详情">
+            <div className="inspector-heading">
+              <strong>{detailTitle}</strong>
+              <button
+                type="button"
+                aria-label="关闭详情"
+                onClick={/* 收起检查器不影响消息阅读。 */ () => setPanelOpen(false)}
+              >
+                <CloseOutlined />
+              </button>
+            </div>
+            {inspector}
+          </aside>
+        )}
+      </div>
+      {narrow && (
+        <Drawer
+          title={detailTitle}
+          className="session-drawer"
+          open={panelOpen}
+          onClose={/* 关闭抽屉回到原消息位置。 */ () => setPanelOpen(false)}
+          styles={{ wrapper: { width: 'min(100vw, 420px)' }, body: { padding: 0 } }}
+        >
+          {inspector}
+        </Drawer>
       )}
-      <div className="task-prompt">
-        <span className="eyebrow">TASK</span>
-        <p>{run.prompt}</p>
-        <span className="workspace-path">{run.workspace}</span>
-      </div>
-      <div className="run-metrics">
-        <div>
-          <span>当前阶段</span>
-          <strong>
-            {run.interrupted ? '运行中断' : cancelling ? '正在取消与清理' : phaseLabel(run.phase)}
-          </strong>
-        </div>
-        <div>
-          <span>耗时 / 总预算</span>
-          <strong>
-            {duration(elapsed)} <small>/ {limits.run_timeout_seconds} 秒</small>
-          </strong>
-        </div>
-        <div>
-          <span>模型轮次 / 上限</span>
-          <strong>
-            {run.result.model_turns} <small>/ {limits.max_model_turns}</small>
-          </strong>
-        </div>
-        <div>
-          <span>HTTP 尝试</span>
-          <strong>{run.result.http_attempts}</strong>
-        </div>
-        <div>
-          <span>工具调用 / 上限</span>
-          <strong>
-            {run.result.tool_calls} <small>/ {limits.max_tool_calls}</small>
-          </strong>
-        </div>
-      </div>
-      <div className="detail-layout">
-        <div className="detail-main">
-          <Tabs
-            activeKey={tab}
-            onChange={changeTab}
-            items={[
-              ...(run.project
-                ? [
-                    {
-                      key: 'code',
-                      label: `代码改动 · ${run.project.files.length}`,
-                      children: <ProjectReviewPanel project={run.project} active={run.active} />,
-                    },
-                  ]
-                : []),
-              {
-                key: 'trace',
-                label: `执行轨迹 · ${run.event_count}`,
-                children: <EventTrail {...events} />,
-              },
-              {
-                key: 'answer',
-                label: '最终回答',
-                children: (
-                  <section>
-                    <h2>最终回答</h2>
-                    {run.result.final_answer ? (
-                      <pre className="answer-text">{run.result.final_answer}</pre>
-                    ) : (
-                      <p className="muted">尚无最终回答。执行中的模型消息可在轨迹查看。</p>
-                    )}
-                  </section>
-                ),
-              },
-              {
-                key: 'artifacts',
-                label: `产物 · ${run.result.artifacts.length}`,
-                children: (
-                  <ArtifactPanel
-                    runId={run.run_id}
-                    artifacts={run.result.artifacts}
-                    missing={run.result.missing_artifacts}
-                    workspaceUnavailable={run.project?.status === 'discarded'}
-                  />
-                ),
-              },
-            ]}
-          />
-        </div>
-        <aside className="run-inspector">
-          <section>
-            <span className="eyebrow">RUN STATE</span>
-            <h2>运行状态</h2>
-            <StateBreakdown run={run} />
-            {run.result.stop_reason && (
-              <p className="stop-reason">
-                结束原因 <code>{run.result.stop_reason}</code>
-              </p>
-            )}
-          </section>
-          <section>
-            <span className="eyebrow">REMAINING BUDGET</span>
-            <h2>剩余预算</h2>
-            <dl className="compact-dl">
-              <div>
-                <dt>模型轮次</dt>
-                <dd>{Math.max(0, limits.max_model_turns - run.result.model_turns)}</dd>
-              </div>
-              <div>
-                <dt>工具调用</dt>
-                <dd>{Math.max(0, limits.max_tool_calls - run.result.tool_calls)}</dd>
-              </div>
-              <div>
-                <dt>总时长</dt>
-                <dd>
-                  {run.active
-                    ? `约 ${Math.max(0, Math.ceil(limits.run_timeout_seconds - elapsed / 1000))} 秒`
-                    : '运行已结束'}
-                </dd>
-              </div>
-            </dl>
-          </section>
-          <VerificationPanel
-            detail={run.result.verification}
-            active={run.active}
-            project={Boolean(run.project)}
-          />
-          <section>
-            <span className="eyebrow">CONFIGURATION</span>
-            <h2>本次配置</h2>
-            <dl className="compact-dl">
-              <div>
-                <dt>模型</dt>
-                <dd>{run.config.requested_model}</dd>
-              </div>
-              <div>
-                <dt>工具</dt>
-                <dd>{run.config.tools.join(' · ')}</dd>
-              </div>
-              <div>
-                <dt>已知 token</dt>
-                <dd>
-                  <UsageDisplay run={run} />
-                </dd>
-              </div>
-            </dl>
-            <p className="muted">运行配置已固定。离开页面或关闭浏览器不会取消后台任务。</p>
-          </section>
-        </aside>
-      </div>
-    </>
+    </div>
   );
 }

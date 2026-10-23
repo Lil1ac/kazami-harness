@@ -92,23 +92,17 @@ class ModelInput:
 class ContextBuilder:
     """统一组装初始消息与计量输入；不修改原始消息或执行工具。"""
 
-    def __init__(
-        self, workspace: Workspace, task: TaskSpec, config: RunConfig, *,
-        instruction: ProjectInstructionSnapshot | None = None,
-    ) -> None:
+    def __init__(self, workspace: Workspace, task: TaskSpec, config: RunConfig) -> None:
         """冻结任务、配置及项目约定；workspace 限制读取位置，构造时最多读取一次文件。
 
         task 提供实际工作目录、任务和预期产物；config 提供宿主提示与字节预算。
-        instruction默认None时读取一次根指令；恢复传入核验快照时只复制，不重新访问AGENTS.md。
+        每次运行从实际工作区读取一次根指令；读取后保持本次快照不变。
         指令错误保存在instruction，由Agent先提交事件再停止；本方法不记录运行事件。
         """
         self._task = task.model_copy(deep=True)  # 固定本次初始任务，外部可变对象不改变模型输入。
         self._config = config.model_copy(deep=True)  # 固定宿主规则及预算，后续网页草稿不影响本次运行。
         self.token_ratio = 1 / 3  # UTF-8字节到token的初始启发式；后续只用真实usage保守上调。
-        self.instruction = (
-            instruction.model_copy(deep=True) if instruction is not None
-            else load_project_instructions(workspace, self._config.context)
-        )  # 新任务读取一次；恢复沿用已核验的原指令快照。
+        self.instruction = load_project_instructions(workspace, self._config.context)  # 本次运行固定的项目指令快照。
 
     def initial_messages(self, history: list[dict] | None = None) -> list[dict]:
         """返回新的初始消息列表，依次包含宿主规则、可选项目约定和实际用户任务。

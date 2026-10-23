@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ..schemas import ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName, ResumeSource
+from ..schemas import ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from ..projects import ProjectReview
 
 
@@ -49,50 +49,6 @@ class FollowupRequest(DataModel):
     expected_outputs: list[str] | None = Field(default=None, max_length=100)  # None沿用前轮预期产物。
 
 
-# 恢复不接受新提示词或配置，来源和预算必须固定继承检查点。
-class ResumeRequest(DataModel):
-    """显式恢复请求；同一编号及检查点只接纳一次，返回独立执行尝试。"""
-
-    request_id: UUID = Field(strict=False)  # 浏览器生成的幂等编号，重复请求返回原运行。
-    checkpoint_id: UUID = Field(strict=False)  # 必须为源运行最新且通过核验的检查点。
-
-
-class CheckpointView(DataModel):
-    """页面可展示的最新检查点；仅暴露来源时间和累计预算，不泄露内部文件路径。"""
-
-    checkpoint_id: UUID  # 同一源运行内不可变的检查点编号。
-    created_at: datetime  # 检查点提交的UTC时间。
-    event_seq: int = Field(ge=1)  # 检查点对应的源事件前缀末序号。
-    model_turns: int = Field(ge=0)  # 恢复链累计模型请求次数，包含摘要调用。
-    tool_calls: int = Field(ge=0)  # 恢复链累计已开始的工具调用次数。
-    active_duration_seconds: float = Field(ge=0, allow_inf_nan=False)  # 累计主动执行秒数，不包括停机。
-    summary_calls: int = Field(ge=0)  # 恢复链累计摘要请求次数。
-
-
-class RecoveryView(DataModel):
-    """只读恢复能力初检；can_resume不承诺代码未变，提交时仍强核验完整内容。"""
-
-    supported: bool  # 当前记录是否属于本轮支持的Git项目任务。
-    can_resume: bool  # 静态记录与单槽条件允许用户尝试恢复。
-    blocked_code: str | None = None  # 不允许恢复的稳定原因，允许时为空。
-    blocked_reason: str | None = None  # 面向用户的受控说明，允许时为空。
-    checkpoint: CheckpointView | None = None  # 尚未保存完整安全检查点时为空。
-    busy_run_id: UUID | None = None  # 全局执行槽当前运行编号。
-
-
-class ConversationAttempt(DataModel):
-    """同一用户要求下的一次执行；首次及恢复尝试分别保留结果和详情入口。"""
-
-    run_id: UUID  # 独立运行编号，详情与事件均使用此编号。
-    attempt_index: int = Field(default=1, ge=1)  # 同一用户轮内从1递增的执行序号。
-    resume_source: ResumeSource | None = None  # 首次为空，恢复时固定源检查点。
-    final_answer: str | None = None  # 本次尚未完成或未产生回答时为空。
-    execution_status: str | None = None  # 尚未建立可信记录时为空。
-    validation_status: str | None = None  # 尚无宿主验收结果时为空。
-    created_at: datetime | None = None  # 已建立运行记录的UTC时间。
-    interrupted: bool = False  # 当前服务未执行且缺少可信终态；保留原execution_status并明确中断。
-
-
 # 连续对话使用精简逐轮视图；完整事件、测试和差异仍通过每轮详情查看。
 class ConversationTurn(DataModel):
     run_id: UUID  # 本轮独立运行编号。
@@ -103,8 +59,7 @@ class ConversationTurn(DataModel):
     execution_status: str | None = None  # 没有建立Runner记录时为None。
     validation_status: str | None = None  # 未读取到本轮结果时不猜测通过。
     created_at: datetime | None = None  # 可信清单创建时间；准备遗留时未知。
-    attempts: list[ConversationAttempt] = Field(default_factory=list)  # 同一要求的执行尝试，按attempt_index升序。
-    interrupted: bool = False  # 本轮最新尝试中断；旧会话响应缺省为False。
+    interrupted: bool = False  # 本轮因服务中断缺少可信终态；缺省为False。
 
 
 # 会话读取不启动任何任务，can_continue仅为初步条件，提交时重新核验代码。
@@ -144,8 +99,6 @@ class RunView(DataModel):
     session_id: UUID | None = None  # 旧前端可缺省；服务对旧记录返回单轮会话编号。
     parent_run_id: UUID | None = None  # 本轮继承的直接前轮；首轮为空。
     turn_index: int = 1  # 用户要求轮次，与模型请求次数分别展示。
-    attempt_index: int = Field(default=1, ge=1)  # 同一用户轮的执行尝试，恢复递增而追加新要求归1。
-    resume_source: ResumeSource | None = None  # 恢复尝试的不可变来源，普通新轮为空。
 
 
 # 分页事件返回有效前缀，客户端按 seq 合并并去重。

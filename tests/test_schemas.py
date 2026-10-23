@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from agent_harness.schemas import HistorySource, ResumeSource, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, TaskSpec
+from agent_harness.schemas import RunEvent, RunResult
 
 
 def test_event_timestamp_requires_timezone_and_normalizes_to_utc():
@@ -25,25 +25,3 @@ def test_incomplete_execution_cannot_claim_validation_passed():
         RunResult(run_id=uuid4(), execution_status="created", validation_status="passed")
     result = RunResult(run_id=uuid4(), execution_status="completed", validation_status="error")
     assert result.execution_status == "completed"
-
-
-def test_resume_manifest_rejects_conflicting_history_and_identity(tmp_path):
-    """恢复不能同时声称普通追加来源、其他父运行或不存在的尝试号。"""
-    parent, child, checkpoint = uuid4(), uuid4(), uuid4()
-    fields = dict(
-        run_id=child, task=TaskSpec(prompt="恢复原任务", workspace=tmp_path), config=RunConfig(),
-        session_id=parent, parent_run_id=parent, turn_index=1, attempt_index=2,
-        origin=RunOrigin(kind="project", preset_id="project", registered_path=tmp_path),
-        resume_source=ResumeSource(source_run_id=parent, checkpoint_id=checkpoint, checkpoint_sha256="a" * 64),
-    )
-    assert RunManifest(**fields).attempt_index == 2
-    for changes in (
-        {"attempt_index": 1},
-        {"parent_run_id": uuid4()},
-        {"session_id": None},
-        {"run_id": parent},
-        {"history_source": HistorySource(last_seq=1, messages_sha256="b" * 64)},
-        {"resume_source": None},
-    ):
-        with pytest.raises(ValidationError):
-            RunManifest(**(fields | changes))

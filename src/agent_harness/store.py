@@ -49,6 +49,21 @@ def _write_json(path: Path, value: dict) -> None:
         os.fsync(handle.fileno())
 
 
+def _read_run_record(record_type: type[RunManifest] | type[RunResult], raw: str | bytes) -> RunManifest | RunResult:
+    """读取普通运行记录并返回严格校验模型；raw为已读取的JSON，不改写磁盘。
+
+    仅移除此前普通运行也会保存的空元数据；非空来源、非首次执行及未知字段仍拒绝，
+    因而不能把旧恢复记录解释为普通运行。仅供磁盘读取，提交模型仍拒绝所有废弃字段。
+    """
+    payload = json.loads(raw)
+    defaults = {"resume_source": None, "attempt_index": 1} if record_type is RunManifest else {"resume_budget": None}
+    if isinstance(payload, dict):
+        for key, default in defaults.items():
+            if key in payload and type(payload[key]) is type(default) and payload[key] == default:
+                del payload[key]
+    return record_type.model_validate_json(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+
+
 class RunStore:
     """管理单次运行的追加日志和派生摘要；设计为单写入者，不负责重新执行动作。"""
 
@@ -152,7 +167,7 @@ class RunStore:
             run_dir = _contained(root / str(identifier), root)
             location = "run.json"
             manifest_path = _contained(run_dir / "run.json", run_dir.resolve())
-            manifest = RunManifest.model_validate_json(manifest_path.read_bytes())
+            manifest = _read_run_record(RunManifest, manifest_path.read_bytes())
             if manifest.run_id != identifier:
                 raise StorageError("运行目录与清单中的 run_id 不一致")
             location = "events.jsonl"
@@ -164,8 +179,8 @@ class RunStore:
                     event = RunEvent.model_validate_json(line.decode("utf-8"))
                     cls._check_event(history, event)
                     if event.type == "run_finished":
-                        result = RunResult.model_validate_json(
-                            json.dumps(event.payload["result"], ensure_ascii=False)
+                        result = _read_run_record(
+                            RunResult, json.dumps(event.payload["result"], ensure_ascii=False)
                         )
                         if result.run_id != identifier or result.execution_status not in _TERMINAL_STATUSES:
                             raise ValueError("结束事件的结果无效")
@@ -209,7 +224,7 @@ class RunStore:
         if not path.exists():
             return
         try:
-            summary = RunResult.model_validate_json(path.read_bytes())
+            summary = _read_run_record(RunResult, path.read_bytes())
             if summary != history.result:
                 history.warnings.append("summary.json 与事件日志不一致，已忽略摘要")
         except (OSError, ValueError, TypeError) as exc:

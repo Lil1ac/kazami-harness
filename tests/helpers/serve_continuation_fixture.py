@@ -19,12 +19,12 @@ from agent_harness.web.config import WebConfig
 
 
 # 用例只操作带专属归属标记的临时项目；原始仓库保持未提交说明。
-MARKER = "harness-continuation-browser-20261023"
+MARKER = "harness-continuation-clean-browser-20261023"
 FIXED_SOURCE = 'def add(left, right):\n    """返回两个参数之和。"""\n    return left + right\n'
 
 
 class ContinuationBrowserModel:
-    """在首次改码后等待显式释放文件，供浏览器验证服务中断与恢复。"""
+    """在首次改码后等待显式释放文件，供浏览器验证服务中断与普通消息接续。"""
 
     def __init__(self, root: Path) -> None:
         """绑定专属root；其中release文件仅由验收操作创建，不由模型工具修改。"""
@@ -60,7 +60,7 @@ class ContinuationBrowserModel:
             else:
                 calls = [ToolCall("finish-note", "write_file", json.dumps({"path": "CHANGELOG.md", "content": "从已核验接续继续；原命令只执行一次。\n"}, ensure_ascii=False))]
         else:
-            content = "修复与说明已完成。请核对本次宿主测试、累计预算及代码差异。"
+            content = "修复与说明已完成。请核对本次宿主测试、本轮预算及代码差异。"
         message = {"role": "assistant", "content": content}
         if calls:
             message["tool_calls"] = [{"id": call.call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments_json}} for call in calls]
@@ -84,7 +84,7 @@ def initialize_repository(path: Path) -> None:
     (path / "evidence.txt").write_text("HEAD\n" + "x" * 2000 + "\nCONTINUATION_MIDDLE_EVIDENCE\n" + "y" * 2200 + "\nTAIL\n", encoding="utf-8")
     (path / "README.md").write_text("独立接续验收项目。\n", encoding="utf-8")
     (path / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n.fixture-owned\n", encoding="utf-8")
-    for argv in [["git", "init"], ["git", "config", "user.name", "Harness Fixture"], ["git", "config", "user.email", "fixture@example.invalid"], ["git", "add", "."], ["git", "commit", "-m", "Create checkpoint fixture"]]:
+    for argv in [["git", "init"], ["git", "config", "user.name", "Harness Fixture"], ["git", "config", "user.email", "fixture@example.invalid"], ["git", "add", "."], ["git", "commit", "-m", "Create continuation fixture"]]:
         subprocess.run(argv, cwd=path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
     with (path / "README.md").open("a", encoding="utf-8") as target:
         target.write("用户保留的未提交说明，不应被任务修改。\n")
@@ -96,7 +96,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=18777)
     args = parser.parse_args()
     project = Path(__file__).resolve().parents[2]
-    root = project / ".runtime/continuation-browser"
+    root = project / ".runtime/continuation-browser-clean"
     marker = root / ".fixture-owned"
     if root.exists() and (not marker.is_file() or marker.read_text(encoding="utf-8") != MARKER):
         raise RuntimeError("同名目录没有正确归属标记")

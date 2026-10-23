@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { cancelRun, createFollowup, getConversation, getRun, getRecovery, resumeRun } from '../api';
+import { cancelRun, createFollowup, getConversation, getRun } from '../api';
 import { ConfigDraftProvider } from '../config';
 import { makeRun } from '../test/fixtures';
 import type { ConversationTurn, ConversationView, RunView } from '../types';
@@ -17,8 +17,6 @@ vi.mock(
     createFollowup: vi.fn(),
     cancelRun: vi.fn(),
     getEvents: vi.fn(),
-    getRecovery: vi.fn(),
-    resumeRun: vi.fn(),
     errorMessage: /* 错误只显示安全message。 */ (error: unknown) =>
       error instanceof Error ? error.message : '读取失败',
   }),
@@ -95,14 +93,6 @@ beforeEach(
     sessionStorage.clear();
     runs.clear();
     readsFail = false;
-    vi.mocked(getRecovery).mockResolvedValue({
-      supported: false,
-      can_resume: false,
-      blocked_code: 'project_required',
-      blocked_reason: '首版仅支持 Git 代码任务恢复。',
-      checkpoint: null,
-      busy_run_id: null,
-    });
     const root = sessionRun('run-a');
     runs.set(root.run_id, root);
     record = {
@@ -317,15 +307,24 @@ it('中断后直接发送继续，沿用输入节点并保留旧记录，不出�
   const user = userEvent.setup();
   const root = runs.get('run-a')!;
   root.interrupted = true;
-  root.result = { ...root.result, final_answer: null, execution_status: 'running', validation_status: 'unverified' };
+  root.result = {
+    ...root.result,
+    final_answer: null,
+    execution_status: 'running',
+    validation_status: 'unverified',
+  };
   record = {
-    ...record, can_continue: true, blocked_code: null,
+    ...record,
+    can_continue: true,
+    blocked_code: null,
     continuation_notice: '前轮中断，可直接发送“继续”；系统会核对当前代码。',
     turns: [turn(root)],
   };
   const client = show();
   const input = await screen.findByLabelText('输入消息');
-  expect(await screen.findByText('前轮中断，可直接发送“继续”；系统会核对当前代码。')).toBeInTheDocument();
+  expect(
+    await screen.findByText('前轮中断，可直接发送“继续”；系统会核对当前代码。'),
+  ).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '恢复任务' })).not.toBeInTheDocument();
   await user.type(input, '继续');
   await user.click(screen.getByRole('button', { name: '发送消息' }));
@@ -343,6 +342,4 @@ it('中断后直接发送继续，沿用输入节点并保留旧记录，不出�
   });
   expect(createFollowup).toHaveBeenCalledTimes(1);
   expect(vi.mocked(createFollowup).mock.calls[0][1].prompt).toBe('继续');
-  expect(resumeRun).not.toHaveBeenCalled();
-  expect(getRecovery).not.toHaveBeenCalled();
 });

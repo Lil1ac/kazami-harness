@@ -14,13 +14,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import httpx
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from ..checkpoints import CheckpointError
 from ..providers.base import ModelClient
 from ..schemas import RunConfig
 from ..sessions import SessionError
 from ..store import StorageError
 from .config import WebConfig
-from .schemas import ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision, RecoveryView, ResumeRequest
+from .schemas import ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
 
 
@@ -92,10 +91,6 @@ def create_app(
         """将 error 的受控业务字段返回给 request 调用方；不输出堆栈或原始输入。"""
         return _error(error.status, error.code, error.message)
 
-    @app.exception_handler(CheckpointError)
-    async def checkpoint_error(request: Request, error: CheckpointError) -> JSONResponse:
-        """把检查点核验error转为受控409；不回显原始Git错误、文件内容或输入。"""
-        return _error(409, error.code, error.message)
 
     @app.exception_handler(SessionError)
     async def session_error(request: Request, error: SessionError) -> JSONResponse:
@@ -160,31 +155,6 @@ def create_app(
         except StorageError:
             return _error(503, "run_unreadable", "前轮记录无法读取，尚未发起新的执行。")
 
-    @app.get("/api/runs/{run_id}/recovery", response_model=RecoveryView)
-    async def recovery(run_id: UUID) -> RecoveryView:
-        """旧客户端兼容入口；默认提示使用普通消息，不启动检查点能力。"""
-        manager.get_run(run_id)
-        if not manager._legacy_checkpoint_mode:
-            return RecoveryView(
-                supported=False, can_resume=False, blocked_code="use_followup",
-                blocked_reason="请在会话输入框发送“继续”，系统会核对已有记录和当前代码。",
-                busy_run_id=manager.busy_run_id,
-            )
-        try:
-            return manager.recovery.view(run_id)
-        except StorageError:
-            return _error(503, "run_unreadable", "原运行记录无法读取，尚未发起恢复。")
-
-    @app.post("/api/runs/{run_id}/resumes", status_code=202, response_model=RunView)
-    async def resume(run_id: UUID, body: ResumeRequest) -> RunView:
-        """旧body协议默认返回410引导普通接续；仅内部兼容回归启用原检查点逻辑。"""
-        manager.get_run(run_id)
-        if not manager._legacy_checkpoint_mode:
-            raise WebServiceError(410, "use_followup", "独立恢复入口已停用，请在会话输入框发送“继续”。")
-        try:
-            return await manager.recovery.submit(run_id, body)
-        except StorageError:
-            return _error(503, "run_unreadable", "原运行记录无法读取，尚未发起恢复。")
 
     @app.post("/api/runs/{run_id}/cancel", response_model=RunView)
     async def cancel(run_id: UUID) -> RunView:

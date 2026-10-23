@@ -14,7 +14,7 @@ from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
 from ..sessions import SessionError, SessionStore, history_messages, payload_digest
 from ..snapshots import FileSnapshotStore, SnapshotError
 from ..store import StorageError
-from .schemas import ConversationAttempt, ConversationTurn, ConversationView, FollowupRequest
+from .schemas import ConversationTurn, ConversationView, FollowupRequest
 
 if TYPE_CHECKING:
     from .service import WebRunManager
@@ -85,55 +85,38 @@ class ConversationService:
         turns: list[ConversationTurn] = []
         latest_history = None
         blocked = None
-        previous_turn, previous_attempt, previous_prompt = 0, 0, None
         for index, identifier in enumerate(record.run_ids):
             expected_parent = record.run_ids[index - 1] if index else None
+            ordinal = index + 1
             intent = next((item for item in record.requests.values() if item.run_id == identifier), None)
             try:
                 history = self.manager._read_history(identifier)
                 manifest = history.manifest
-                resumed = manifest.resume_source is not None
-                expected_turn = previous_turn if resumed else previous_turn + 1
-                expected_attempt = previous_attempt + 1 if resumed else 1
                 if (
                     manifest.parent_run_id != expected_parent
                     or (manifest.session_id or identifier) != session_id
-                    or manifest.turn_index != expected_turn
-                    or manifest.attempt_index != expected_attempt
-                    or (resumed and (manifest.resume_source.source_run_id != expected_parent or manifest.task.prompt != previous_prompt))
+                    or manifest.turn_index != ordinal
                 ):
-                    raise SessionError('session_unreadable', '会话运行顺序、用户要求或恢复来源不一致。')
+                    raise SessionError('session_unreadable', '会话运行顺序与用户轮次不一致。')
                 view = self.manager.get_run(identifier)
-                attempt = ConversationAttempt(run_id=identifier, attempt_index=manifest.attempt_index, resume_source=manifest.resume_source, final_answer=view.result.final_answer, execution_status=view.result.execution_status, validation_status=view.result.validation_status, created_at=view.created_at, interrupted=view.interrupted)
+                turn = ConversationTurn(
+                    run_id=identifier, parent_run_id=expected_parent, turn_index=ordinal,
+                    prompt=view.prompt, final_answer=view.result.final_answer,
+                    execution_status=view.result.execution_status,
+                    validation_status=view.result.validation_status,
+                    created_at=view.created_at, interrupted=view.interrupted,
+                )
                 if identifier == record.run_ids[-1]:
                     latest_history = history
-                turn_index, prompt = manifest.turn_index, view.prompt
             except StorageError:
-                resumed = intent is not None and intent.kind == 'resume'
-                turn_index = previous_turn if resumed else previous_turn + 1
-                attempt_index = previous_attempt + 1 if resumed else 1
-                if intent is not None and (
-                    (intent.turn_index is not None and intent.turn_index != turn_index)
-                    or (intent.attempt_index is not None and intent.attempt_index != attempt_index)
-                    or intent.parent_run_id != expected_parent
-                ):
+                if intent is not None and intent.parent_run_id != expected_parent:
                     raise SessionError('session_unreadable', '准备遗留请求与会话执行顺序不一致。') from None
-                prompt = intent.prompt if intent else '运行记录不可用'
-                attempt = ConversationAttempt(run_id=identifier, attempt_index=attempt_index, interrupted=True)
+                turn = ConversationTurn(
+                    run_id=identifier, parent_run_id=expected_parent, turn_index=ordinal,
+                    prompt=intent.prompt if intent else '运行记录不可用', interrupted=True,
+                )
                 blocked = SessionError('continuation_unverified', '已登记的后续运行尚无可信记录，请核对准备状态；不会自动重放。')
-            if resumed:
-                if not turns or turns[-1].prompt != prompt or turns[-1].turn_index != turn_index:
-                    raise SessionError('session_unreadable', '恢复尝试缺少同一用户要求。')
-                turn = turns[-1]
-                turn.run_id = identifier
-                turn.final_answer = attempt.final_answer
-                turn.execution_status = attempt.execution_status
-                turn.validation_status = attempt.validation_status
-                turn.interrupted = attempt.interrupted
-                turn.attempts.append(attempt)
-            else:
-                turns.append(ConversationTurn(run_id=identifier, parent_run_id=expected_parent, turn_index=turn_index, prompt=prompt, final_answer=attempt.final_answer, execution_status=attempt.execution_status, validation_status=attempt.validation_status, created_at=attempt.created_at, attempts=[attempt], interrupted=attempt.interrupted))
-            previous_turn, previous_attempt, previous_prompt = turn_index, attempt.attempt_index, prompt
+            turns.append(turn)
         busy = self.manager.busy_run_id
         preparing = self.manager._submission is not None and not self.manager._submission.done()
         if busy is not None or preparing:
@@ -220,7 +203,7 @@ class ConversationService:
                 validate_output_paths(task, self.manager.runs_root)
             except (ConfigurationError, ValidationError) as error:
                 raise SessionError('invalid_run', str(error) if isinstance(error, ConfigurationError) else '追加任务配置无效。') from None
-            self.store.begin(session_id, request.request_id, parent_id, identifier, digest, prompt, turn_index=manifest.turn_index, attempt_index=manifest.attempt_index)
+            self.store.begin(session_id, request.request_id, parent_id, identifier, digest, prompt)
             try:
                 if origin.kind == 'project':
                     preset = next(item for item in self.manager.web_config.projects if item.id == origin.preset_id)

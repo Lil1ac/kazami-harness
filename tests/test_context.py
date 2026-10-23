@@ -41,7 +41,6 @@ def test_instruction_is_full_utf8_snapshot_and_not_reloaded(tmp_path: Path) -> N
     assert "已变化的规则" not in json.dumps(messages, ensure_ascii=False)
 
 
-
 def test_instruction_rewritten_before_loading_is_accepted(tmp_path: Path) -> None:
     """读取前已修改的普通文件仍可加载；不混用 Windows stat/fstat 的 ctime 语义。"""
     target = tmp_path / "AGENTS.md"
@@ -257,21 +256,3 @@ def test_budget_check_rejects_contradictory_allowed_flag(input_bytes: int, max_i
     """超限通过或未超限拒绝的矛盾检查均无效，等于上限仍必须为允许。"""
     with pytest.raises(ValidationError):
         ContextCheck(model_turn=1, input_bytes=input_bytes, max_input_bytes=max_input_bytes, message_count=2, allowed=allowed)
-
-
-def test_restored_instruction_uses_frozen_snapshot_without_reading_file(tmp_path: Path, monkeypatch) -> None:
-    """恢复沿用核验快照；即使磁盘规则已变也不读取，传入对象后续变动不影响构建器。"""
-    content = "检查点固定规则。\\n"
-    raw = content.encode("utf-8")
-    snapshot = ProjectInstructionSnapshot(status="loaded", content=content, sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
-    (tmp_path / "AGENTS.md").write_text("恢复时不能采用的新规则", encoding="utf-8")
-
-    def reject_loading(*args, **kwargs):
-        """禁止访问磁盘指令，若恢复路径错误重新加载则立即暴露失败。"""
-        raise AssertionError("恢复不应重新读取项目指令")
-
-    monkeypatch.setattr("agent_harness.context.load_project_instructions", reject_loading)
-    builder = ContextBuilder(Workspace(tmp_path, tmp_path / ".runs"), TaskSpec(prompt="继续原任务", workspace=tmp_path), RunConfig(), instruction=snapshot)
-    snapshot.content = "外部对象已被改变"
-    assert builder.instruction.content == content
-    assert content in builder.initial_messages()[1]["content"]

@@ -128,53 +128,6 @@ export interface VerificationResult {
   artifacts: ArtifactRef[]; // 验收原始输出引用。
 }
 
-/** 一个恢复尝试所继承的检查点；旧运行无此来源。 */
-export interface ResumeSource {
-  source_run_id: string; // 保存检查点的原运行编号。
-  checkpoint_id: string; // 不可变检查点 UUID。
-  checkpoint_sha256: string; // 已核验检查点内容摘要。
-}
-
-/** 本次尝试之前已消耗的预算；累计值需加本次结果，停机时间不计入主动耗时。 */
-export interface ResumeBudget {
-  model_turns: number; // 前序尝试模型轮数，含摘要。
-  http_attempts: number; // 前序 HTTP 尝试次数。
-  tool_calls: number; // 前序接纳工具数。
-  summary_calls: number; // 前序已发起摘要调用。
-  prompt_tokens: number; // 前序已知输入 token。
-  completion_tokens: number; // 前序已知输出 token。
-  total_tokens: number; // 前序已知 token 总数。
-  usage_complete: boolean; // false 表示前序请求有未知供应商用量。
-  active_duration_seconds: number; // 前序主动执行秒数，不含中断后的停机时间。
-}
-
-/** 可供用户明确恢复的最近安全检查点；读取不触发执行。 */
-export interface RecoveryCheckpoint {
-  checkpoint_id: string; // 恢复请求必须固定的检查点 UUID。
-  created_at: string; // 检查点保存的带时区时间。
-  event_seq: number; // 对应原运行的持久化事件位置。
-  model_turns: number; // 恢复前累计模型调用数，包含封存后已开始的请求。
-  tool_calls: number; // 恢复前累计工具调用数。
-  active_duration_seconds: number; // 恢复前累计主动时长；缺失响应按单次时限保守预留上界。
-  summary_calls: number; // 恢复前累计摘要次数。
-}
-
-/** 服务端重新核验的恢复条件；按钮状态不能替代 POST 时的最终核验。 */
-export interface RecoveryView {
-  supported: boolean; // 本版仅 Git 项目任务支持恢复。
-  can_resume: boolean; // 当前记录、工作树及运行槽均允许恢复。
-  blocked_code: string | null; // 不能恢复时的稳定原因码。
-  blocked_reason: string | null; // 面向用户的受控中文说明。
-  checkpoint: RecoveryCheckpoint | null; // 无安全检查点的旧记录为空。
-  busy_run_id: string | null; // 唯一运行槽占用者，空表示无活动运行。
-}
-
-/** 明确恢复的幂等请求；网络未知时必须重用同一完整载荷。 */
-export interface ResumeRequest {
-  request_id: string; // 浏览器生成 UUID，刷新后仍沿用待确认编号。
-  checkpoint_id: string; // 首次点击时固定的检查点，不因补读而悄悄换点。
-}
-
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
   schema_version: 1; // 当前记录格式版本。
@@ -192,7 +145,6 @@ export interface RunResult {
   missing_artifacts: string[]; // 声明了但未找到的预期产物。
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; // 已知 token 数。
   usage_complete: boolean; // false 时 token 数仅为已知部分。
-  resume_budget?: ResumeBudget | null; // 本次执行前的累计消耗；旧记录无值。
   active_duration_seconds?: number; // 本次主动执行秒数；旧记录缺省不推断。
 }
 
@@ -216,8 +168,6 @@ export interface RunView {
   session_id?: string | null; // 线性会话根编号；旧接口可缺省。
   parent_run_id?: string | null; // 首轮为空，后续指向前轮。
   turn_index?: number; // 用户要求序号，不等于模型轮数。
-  resume_source?: ResumeSource | null; // 恢复来源；普通执行与旧记录为空。
-  attempt_index?: number; // 同一用户要求的执行尝试，从 1 起，恢复时递增。
 }
 
 /** 一条可按运行 ID 和连续序号去重的持久化事件。 */
@@ -337,18 +287,6 @@ export interface FollowupRequest {
   expected_outputs?: string[] | null; // 缺省沿用前轮预期产物。
 }
 
-/** 同一用户要求的一次执行；每次恢复都有独立轨迹、验收与审阅。 */
-export interface ConversationAttempt {
-  run_id: string; // 本次执行编号，可回看原记录。
-  attempt_index: number; // 同轮执行尝试序号，首次为 1。
-  interrupted?: boolean; // 服务中断导致缺少可信终态，不能继续显示为活动执行。
-  resume_source: ResumeSource | null; // 首次执行为空，恢复时指向原检查点。
-  final_answer: string | null; // 本次执行的最终回答。
-  execution_status: ExecutionStatus | null; // 本次执行状态，未知时为空。
-  validation_status: ValidationStatus | null; // 本次独立验收状态。
-  created_at: string | null; // 本次运行创建时间。
-}
-
 /** 连续对话的一轮；详细测试、事件与差异仍在独立运行详情。 */
 export interface ConversationTurn {
   run_id: string; // 本轮运行编号。
@@ -359,8 +297,7 @@ export interface ConversationTurn {
   execution_status: ExecutionStatus | null; // 未建立可信运行记录时未知。
   validation_status: ValidationStatus | null; // 各轮独立验收结果。
   created_at: string | null; // 可信创建时间。
-  interrupted?: boolean; // 最新尝试因服务中断缺少终态；旧接口可缺省。
-  attempts?: ConversationAttempt[]; // 同一要求的有序执行尝试；旧接口缺省只有 turn 本身。
+  interrupted?: boolean; // 本轮因服务中断缺少终态；旧接口可缺省。
 }
 
 /** 会话读取结果；可继续为初步条件，提交时后端会重新核验实际代码。 */

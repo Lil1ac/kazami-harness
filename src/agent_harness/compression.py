@@ -102,70 +102,9 @@ class ContextCompressor:
         self.replacements: dict[int, dict] = {}  # 单条工具消息的投影替换，不改原文。
         self.summaries: dict[int, InputUnit] = {}  # 原始区间到持久摘要投影。
         self.masked: set[int] = set()  # 已遮蔽批次，避免每轮重复改写。
-        self.summary_calls = context.result.resume_budget.summary_calls if context.result.resume_budget else 0  # 整条恢复链摘要次数，失败也占额度。
+        self.summary_calls = 0  # 本次运行已开始的摘要次数，失败和取消同样占额度。
         self.seen: set[int] = set()  # 已评估外置的原始消息索引。
 
-    def export_state(self) -> dict:
-        """返回已生效投影的独立JSON副本，供检查点封存；不改原始消息或发布事件。"""
-        return deepcopy({
-            "replacements": {str(key): value for key, value in self.replacements.items()},
-            "summaries": {str(key): {"start": unit.start, "end": unit.end, "messages": unit.messages}
-                          for key, unit in self.summaries.items()},
-            "masked": sorted(self.masked), "seen": sorted(self.seen),
-            "token_ratio": self.builder.token_ratio,
-        })
-
-    def restore_state(self, state: dict, messages: list[dict]) -> None:
-        """恢复已通过检查点摘要核验的投影；校验索引和配对，损坏抛ValueError，不请求模型。
-
-        messages是迁移宿主前缀后的原始消息；前缀长度保持不变，旧项目指令继续冻结。
-        外置引用须先由archive绑定封存白名单，禁止借恢复开放整个中断祖先目录。
-        """
-        groups = message_groups(messages)
-        boundaries = {unit.start for unit in groups} | {len(messages)}
-        replacements = {int(key): value for key, value in state["replacements"].items()}
-        for index, value in replacements.items():
-            if index < 0 or index >= len(messages) or messages[index].get("role") != "tool" or value.get("tool_call_id") != messages[index].get("tool_call_id"):
-                raise ValueError("checkpoint replacement")
-        summaries = {}
-        for key, value in state["summaries"].items():
-            start, end = value["start"], value["end"]
-            if int(key) != start or start not in boundaries or end not in boundaries or not 0 < start < end <= len(messages):
-                raise ValueError("checkpoint summary")
-            summaries[start] = InputUnit(start, end, deepcopy(value["messages"]), False)
-        ratio = state["token_ratio"]
-        if not isinstance(ratio, (int, float)) or not 1 / 3 <= ratio < float("inf"):
-            raise ValueError("checkpoint token ratio")
-        self.replacements = deepcopy(replacements)
-        self.summaries = summaries
-        self.masked = set(state["masked"])
-        self.seen = set(state["seen"])
-        self.builder.token_ratio = ratio
-        message_groups(self._project(messages))
-
-    def publish_restored(self, messages: list[dict], tools: list[dict]) -> None:
-        """逐个重新登记恢复后仍生效的摘要，供下一用户轮复用，避免只恢复内存丢失来源。
-
-        messages保留原始索引；tools参与整份输入计量。覆盖区间的旧单条替换移除，
-        再从原文到摘要逐步发布严格缩小的context_action，不重新调用摘要模型。
-        """
-        restored = self.summaries
-        self.summaries = {}
-        for start, unit in sorted(restored.items()):
-            self.replacements = {key: value for key, value in self.replacements.items()
-                                 if not start <= key < unit.end}
-            content = unit.messages[0]["content"]
-            summary = WorkSummary.model_validate_json(content.rsplit("\n", 1)[-1])
-            reference = content.split("完整原文可通过read_context读取：", 1)[1].split("\n", 1)[0]
-            raw = encode(messages[start:unit.end]).encode("utf-8")
-            if self.archive.load(reference) != raw:
-                raise ValueError("restored summary source")
-            before = self._size(self._project(messages), tools)
-            self.summaries[start] = unit
-            after = self._size(self._project(messages), tools)
-            if after >= before:
-                raise ValueError("restored summary reduction")
-            self._record("summary", start, unit.end, reference, before, after, summary=summary, reason="resumed")
 
     def inherit(self, parent: RunHistory, messages: list[dict], tools: list[dict]) -> None:
         """复用parent已提交摘要；核验原始范围/内容归档后转换到本轮索引，不重复调用摘要模型。
@@ -407,7 +346,7 @@ class ContextCompressor:
         """对一段旧历史请求结构化摘要；成功提交返回True，无可用区间返回False，失败明确停止。"""
         from .runner import AgentStopped
 
-        if self.context.result.model_turns + (self.context.result.resume_budget.model_turns if self.context.result.resume_budget else 0) + 1 >= self.context.manifest.config.limits.max_model_turns:
+        if self.context.result.model_turns + 1 >= self.context.manifest.config.limits.max_model_turns:
             return False
         region = self._region(messages)
         # 摘要请求本身也必须适配输入预算；不能把超限历史直接发给摘要模型。

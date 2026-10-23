@@ -8,8 +8,6 @@ import type {
   ProjectReview,
   OptionsResponse,
   RunView,
-  RecoveryView,
-  ResumeRequest,
 } from './types';
 
 /** HTTP 请求失败；message 使用后端受控文案，code 用于稳定分类。 */
@@ -147,20 +145,6 @@ export function getConversation(runId: string, signal?: AbortSignal): Promise<Co
 /** 幂等追加新要求，成功返回新轮或原请求对应运行；禁止自动换请求编号重试。 */
 export function createFollowup(runId: string, body: FollowupRequest): Promise<RunView> {
   return request(`/api/runs/${encodeURIComponent(runId)}/followups`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-/** 读取最近检查点与恢复阻断原因；signal 只取消读取，刷新不会恢复任务。 */
-export function getRecovery(runId: string, signal?: AbortSignal): Promise<RecoveryView> {
-  return request('/api/runs/' + encodeURIComponent(runId) + '/recovery', { signal });
-}
-
-/** 明确请求从固定检查点恢复；网络重试须传回原始 request_id 与 checkpoint_id。 */
-export function resumeRun(runId: string, body: ResumeRequest): Promise<RunView> {
-  return request('/api/runs/' + encodeURIComponent(runId) + '/resumes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

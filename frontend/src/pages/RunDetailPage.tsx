@@ -5,7 +5,7 @@ import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined, StopOutlined } from '
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { cancelRun, errorMessage, getConversation, getRun } from '../api';
 import { useRunEvents } from '../hooks/useRunEvents';
-import { mergeConfirmedRun, turnAttempts } from '../conversation';
+import { mergeConfirmedRun } from '../conversation';
 import { RunStatus } from '../components/RunStatus';
 import { ConversationPanel } from '../components/ConversationPanel';
 import { RunInspector } from '../components/RunInspector';
@@ -98,10 +98,7 @@ function SessionWorkspace({
   const narrow = useNarrowWorkspace();
   const requestedSelection = params.get('inspect') || routeRun.run_id;
   const selectedId = conversation.turns.some(
-    /* 拒绝URL指定不属于当前会话的检查对象。 */ (turn) =>
-      turnAttempts(turn).some(
-        /* 原执行深链接在同轮恢复后仍可回看。 */ (attempt) => attempt.run_id === requestedSelection,
-      ),
+    /* URL只允许选择当前会话中已经接纳的轮次。 */ (turn) => turn.run_id === requestedSelection,
   )
     ? requestedSelection
     : conversation.latest_run_id;
@@ -128,7 +125,6 @@ function SessionWorkspace({
       void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
       void cache.invalidateQueries({ queryKey: ['runs'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
-      void cache.invalidateQueries({ queryKey: ['recovery'] });
     },
   );
   const cancellation = useMutation({
@@ -159,7 +155,7 @@ function SessionWorkspace({
     cache.setQueryData(['run', view.run_id], view);
     cache.setQueryData<ConversationView>(
       ['conversation', conversation.session_id],
-      /* 同轮恢复只合并 attempts，不再制造一条重复用户消息。 */ (current) =>
+      /* 已确认的新运行并入对应用户轮，重复确认不重复插入。 */ (current) =>
         current ? mergeConfirmedRun(current, view) : current,
     );
     void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
@@ -168,25 +164,9 @@ function SessionWorkspace({
     void navigate(`/runs/${view.run_id}`, { replace: true });
   }
   const selectedTurn = conversation.turns.find(
-    /* 标题使用所选轮次，避免把旧测试显示为最新结果。 */ (turn) =>
-      turnAttempts(turn).some(
-        /* 所选旧运行可能已被同轮恢复尝试取代为最新运行。 */ (attempt) =>
-          attempt.run_id === selectedId,
-      ),
+    /* 标题使用所选轮次，旧测试和新运行分别展示。 */ (turn) => turn.run_id === selectedId,
   );
-  const selectedAttempt =
-    selectedTurn &&
-    turnAttempts(selectedTurn).find(
-      /* 标题明确当前检查的是哪一次执行，不能混用旧测试与恢复结果。 */ (attempt) =>
-        attempt.run_id === selectedId,
-    );
-  const detailTitle =
-    '第 ' +
-    (selectedTurn?.turn_index || '—') +
-    ' 轮详情' +
-    (selectedAttempt && (selectedAttempt.resume_source || (selectedTurn?.attempts?.length || 0) > 1)
-      ? ' · 尝试 ' + selectedAttempt.attempt_index
-      : '');
+  const detailTitle = '第 ' + (selectedTurn?.turn_index || '—') + ' 轮详情';
   const title = conversation.turns[0]?.prompt.replace(/\s+/g, ' ').trim() || '任务会话';
   const inspector = latest ? (
     <RunInspector
@@ -194,7 +174,6 @@ function SessionWorkspace({
       latest={latest}
       liveEvents={events}
       tab={tab}
-      onConfirmed={confirmed}
       onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
     />
   ) : null;

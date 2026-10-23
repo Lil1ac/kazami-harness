@@ -127,7 +127,6 @@ class ContextCheck(DataModel):
     purpose: Literal["execution", "summary"] = "execution"  # 正常执行或额外摘要请求。
 
 
-
     @model_validator(mode="after")
     def validate_budget_decision(self) -> "ContextCheck":
         """校验本实例allowed与字节和可选token输入预算一致，返回自身；矛盾时抛ValueError。
@@ -184,7 +183,6 @@ class ContextView(DataModel):
     actions: list[ContextAction] = Field(default_factory=list)  # 最近50条，完整记录保留在事件中。
     action_count: int = Field(default=0, ge=0)  # 全部变换数量，包含失败。
     summary_calls: int = Field(default=0, ge=0)  # 已开始摘要调用数，包含失败和取消。
-
 
 
 # 这里只声明允许识别的名称；当前真正实现和可分发的工具由工具注册层决定。
@@ -277,26 +275,6 @@ class HistorySource(DataModel):
     interrupted: bool = False  # 宿主明确接纳中断后继续；旧记录默认False，网页不能设置来源。
 
 
-# 恢复执行固定的来源，仅指向核验过的不可变检查点，不授权整个中断运行。
-class ResumeSource(DataModel):
-    source_run_id: UUID  # 被中断的上一次执行尝试编号。
-    checkpoint_id: UUID  # 该尝试已完整封存的检查点编号。
-    checkpoint_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 检查点正文摘要，防止准备后被替换。
-
-
-# 当前尝试开始前，同一用户要求的恢复链累计消耗；不包含停机时长。
-class ResumeBudget(DataModel):
-    model_turns: int = Field(default=0, ge=0)  # 已发起的执行和摘要模型请求数。
-    http_attempts: int = Field(default=0, ge=0)  # 已知HTTP尝试次数，缺失用量不推算为零费用。
-    tool_calls: int = Field(default=0, ge=0)  # 已接纳的工具调用次数。
-    summary_calls: int = Field(default=0, ge=0)  # 已开始摘要次数，失败与取消也计入。
-    prompt_tokens: int = Field(default=0, ge=0)  # 已知输入token累计值。
-    completion_tokens: int = Field(default=0, ge=0)  # 已知输出token累计值。
-    total_tokens: int = Field(default=0, ge=0)  # 供应商提供的已知总token累计值。
-    usage_complete: bool = True  # 有未响应请求、重试或缺失用量时为False。
-    active_duration_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 已运行的主动时长，单位秒。
-
-
 # 运行创建时保存的登记快照，使历史记录保留当时的任务、配置和运行时版本。
 class RunManifest(DataModel):
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
@@ -311,32 +289,6 @@ class RunManifest(DataModel):
     turn_index: int = Field(default=1, ge=1)  # 用户请求轮次，从1开始，不等于模型轮次。
     origin: RunOrigin | None = None  # 新网页运行的宿主来源；旧记录可能未记录。
     history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
-    resume_source: ResumeSource | None = None  # 恢复尝试使用封存来源；普通首轮和追加要求为空。
-    attempt_index: int = Field(default=1, ge=1)  # 同一用户轮次内的尝试序号，恢复时递增。
-
-    @model_validator(mode="after")
-    def validate_resume_relation(self) -> "RunManifest":
-        """核对恢复字段属于同一次Git任务尝试；返回自身，关系矛盾时抛ValueError。
-
-        无来源表示首次执行或新增用户要求，尝试序号为1；有来源必须指向不同的直接父运行，
-        且具有会话、项目来源和递增尝试号，不同时携带普通追加历史来源。本方法不读取磁盘。
-        """
-        source = self.resume_source
-        if source is None:
-            if self.attempt_index != 1:
-                raise ValueError("没有恢复来源时尝试序号必须为1")
-            return self
-        if (
-            self.attempt_index < 2
-            or self.session_id is None
-            or self.parent_run_id != source.source_run_id
-            or source.source_run_id == self.run_id
-            or self.history_source is not None
-            or self.origin is None
-            or self.origin.kind != "project"
-        ):
-            raise ValueError("恢复尝试的来源、会话或项目关系不一致")
-        return self
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。
@@ -399,8 +351,7 @@ class RunResult(DataModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     # 缺少用量或发生重试时，只展示已知部分，不能据此推算精确账单。
     usage_complete: bool = False
-    resume_budget: ResumeBudget | None = None  # 恢复前已耗预算；原计数始终只表示本次尝试。
-    active_duration_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 本次主动执行时长，单位秒；旧记录缺省为零。
+    active_duration_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 本次运行执行时长，单位秒；旧记录缺省为零。
 
     @model_validator(mode="after")
     def validate_result(self) -> "RunResult":

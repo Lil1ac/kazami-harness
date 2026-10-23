@@ -38,62 +38,8 @@ class ContextArchive:
         self.runs_root = self.run_dir.parent  # 固定的记录根目录。
         self.manifest = manifest.model_copy(deep=True)  # 固定会话身份及直接父关系。
         self.total_bytes = 0  # 本运行新写对象的累计字节数。
-        self._checkpoint_references: set[str] = set()  # 仅封存白名单可从中断来源回读，不缓存为整owner授权。
         self._authorized = {str(manifest.run_id)}  # 已核验归属的运行编号缓存。
 
-    def bind_checkpoint_references(self, references: list[str]) -> None:
-        """绑定已核验检查点的精确引用白名单；逐个检查SHA，失败不发布部分授权。
-
-        references仅允许宿主从检查点读取，最多512项；不接受模型自选运行或文件路径。
-        返回None，不执行工具、不修改任何祖先记录。
-        """
-        verified = set()
-        if len(references) > 512:
-            raise WorkspaceError("context_reference_forbidden", "检查点历史引用超过上限。")
-        for reference in references:
-            match = _REFERENCE.fullmatch(reference)
-            if match is None:
-                raise WorkspaceError("context_reference_invalid", "检查点历史引用无效。")
-            owner, digest = match.groups()
-            self._read_raw(str(UUID(owner)), digest)
-            verified.add(reference)
-        self._checkpoint_references = verified
-
-    def _authorize_reference(self, reference: str, owner: str) -> None:
-        """允许精确封存reference或正常可信父链owner；禁止将中断来源整目录加入缓存。"""
-        if reference in self._checkpoint_references:
-            return
-        try:
-            self._authorize(owner)
-            return
-        except WorkspaceError:
-            pass
-        # 已完成的恢复父轮可传递当时固定白名单，不能将中断祖先整体视为可信。
-        parent = self.manifest.parent_run_id
-        session = self.manifest.session_id or self.manifest.run_id
-        visited = {str(self.manifest.run_id)}
-        try:
-            from .checkpoints import CheckpointError, CheckpointStore
-            for _ in range(self.MAX_ANCESTORS):
-                if parent is None or str(parent) in visited:
-                    break
-                identifier = str(parent)
-                visited.add(identifier)
-                history = RunStore.read(self.runs_root, identifier)
-                if (history.manifest.session_id or history.manifest.run_id) != session or history.result is None or history.warnings or history.interrupted:
-                    break
-                source = history.manifest.resume_source
-                if source is not None:
-                    source_history = RunStore.read(self.runs_root, str(source.source_run_id))
-                    checkpoint = CheckpointStore(self.runs_root).load(source_history, source.checkpoint_id)
-                    if checkpoint.sha256 != source.checkpoint_sha256:
-                        break
-                    if reference in checkpoint.references:
-                        return
-                parent = history.manifest.parent_run_id
-        except (StorageError, CheckpointError):
-            pass
-        raise WorkspaceError("context_reference_forbidden", "只能读取本运行、可信前轮或已封存的精确历史证据。")
 
     def _path(self, owner: str, digest: str) -> Path:
         """生成固定对象路径；owner/digest 必须来自合法引用，链接和越界抛 WorkspaceError。"""
@@ -165,7 +111,7 @@ class ContextArchive:
         if owner in self._authorized:
             return
         parent = self.manifest.parent_run_id
-        child_manifest = self.manifest  # 恢复边界不能把来源整个owner提升为可信祖先。
+        child_manifest = self.manifest  # 中断祖先须由直接子轮固定的历史来源核验。
         session = self.manifest.session_id or self.manifest.run_id
         visited = {str(self.manifest.run_id)}
         try:
@@ -173,8 +119,6 @@ class ContextArchive:
                 if parent is None or str(parent) in visited:
                     break
                 identifier = str(parent)
-                if child_manifest.resume_source is not None and identifier == str(child_manifest.resume_source.source_run_id):
-                    break
                 visited.add(identifier)
                 history = RunStore.read(self.runs_root, identifier)
                 parent_session = history.manifest.session_id or history.manifest.run_id
@@ -228,7 +172,7 @@ class ContextArchive:
             raise WorkspaceError("context_reference_invalid", "历史证据引用无效。")
         owner, digest = match.groups()
         owner = str(UUID(owner))
-        self._authorize_reference(reference, owner)
+        self._authorize(owner)
         return self._read_raw(owner, digest)
 
     def read(self, arguments: ReadContextArguments) -> dict:
@@ -241,7 +185,7 @@ class ContextArchive:
             owner = str(UUID(owner))
         except ValueError:
             raise WorkspaceError("context_reference_invalid", "历史证据引用无效。") from None
-        self._authorize_reference(arguments.reference, owner)
+        self._authorize(owner)
         raw = self._read_raw(owner, digest)
         if arguments.offset > len(raw):
             raise WorkspaceError("context_offset_invalid", "历史证据偏移超过内容大小。")

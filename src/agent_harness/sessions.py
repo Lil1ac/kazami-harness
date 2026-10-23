@@ -33,16 +33,12 @@ class SubmissionIntent(DataModel):
     state: Literal["preparing", "committed", "failed"] = "preparing"  # committed 后不自动再次执行。
     error_code: str | None = None  # 准备失败时的稳定原因。
     error_message: str | None = None  # 准备失败时可读提示。
-    kind: Literal["followup", "resume"] = "followup"  # 兼容旧意图；恢复不会新增用户轮。
-    checkpoint_id: UUID | None = None  # 仅恢复请求固定源检查点，追加要求为空。
-    turn_index: int | None = Field(default=None, ge=1)  # 遗留准备展示所需的用户轮；旧记录为空。
-    attempt_index: int | None = Field(default=None, ge=1)  # 遗留准备的执行尝试序号；旧记录为空。
 
 
 # 一个文件原子保存会话顺序和幂等请求，不用第二个写入者修改 RunStore。
 class SessionRecord(DataModel):
     session_id: UUID  # 等于会话首轮 run_id。
-    run_ids: list[UUID] = Field(min_length=1)  # 已提交的线性执行顺序，包含同轮恢复，末项为最新尝试。
+    run_ids: list[UUID] = Field(min_length=1)  # 已提交的用户轮次顺序，末项为最新一轮运行。
     requests: dict[str, SubmissionIntent] = Field(default_factory=dict)  # UUID 请求编号到固定意图。
 
 
@@ -73,7 +69,28 @@ class SessionStore:
                 raw = source.read(self.MAX_BYTES + 1)
             if len(raw) > self.MAX_BYTES:
                 raise ValueError('metadata limit')
-            record = SessionRecord.model_validate_json(raw)
+            payload = json.loads(raw)
+            # 普通请求旧元数据只读核对后移除；真实旧恢复意图和不一致轮次仍拒绝。
+            requests = payload.get("requests") if isinstance(payload, dict) else None
+            run_ids = payload.get("run_ids", []) if isinstance(payload, dict) else []
+            if isinstance(requests, dict) and isinstance(run_ids, list):
+                for item in requests.values():
+                    if not isinstance(item, dict) or item.get("kind", "followup") != "followup":
+                        continue
+                    parent = item.get("parent_run_id")
+                    ordinal = run_ids.index(parent) + 2 if parent in run_ids else None
+                    defaults = {"kind": "followup", "checkpoint_id": None}
+                    for key, default in defaults.items():
+                        if key in item and type(item[key]) is type(default) and item[key] == default:
+                            del item[key]
+                    # 曾保存的冗余轮次必须与线性父关系一致；不能把同轮其他执行洗成新要求。
+                    for key, expected in (("turn_index", ordinal), ("attempt_index", 1)):
+                        if key in item and (
+                            item[key] is None
+                            or (expected is not None and type(item[key]) is int and item[key] == expected)
+                        ):
+                            del item[key]
+            record = SessionRecord.model_validate_json(json.dumps(payload, ensure_ascii=False, allow_nan=False))
             if record.session_id != session_id or record.run_ids[0] != session_id or len(set(record.run_ids)) != len(record.run_ids):
                 raise ValueError('invalid relation')
             for key in record.requests:
@@ -117,16 +134,12 @@ class SessionStore:
 
     def begin(
         self, session_id: UUID, request_id: UUID, parent_id: UUID, run_id: UUID, digest: str, prompt: str,
-        *, kind: Literal["followup", "resume"] = "followup", checkpoint_id: UUID | None = None,
-        turn_index: int | None = None, attempt_index: int | None = None,
     ) -> None:
-        """准备工作区前登记请求意图；kind默认追加，恢复须携带checkpoint_id。
+        """派生工作区前登记session/request的唯一意图；成功原子写入并返回None。
 
-        turn_index/attempt_index仅用于准备遗留展示，None兼容旧调用；父运行须为最新尝试，
-        已有未确认准备时拒绝，成功原子写会话并返回None，不执行工作区操作。
+        parent_id须为最新轮；run_id是分配的新轮编号，digest固定完整载荷，
+        prompt仅供准备状态展示。已有未确认请求或编号冲突时拒绝，不执行工作区操作。
         """
-        if (kind == "resume") != (checkpoint_id is not None):
-            raise SessionError("request_conflict", "恢复请求缺少固定检查点来源。")
         record = self.read(session_id)
         if record.run_ids[-1] != parent_id:
             raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
@@ -134,7 +147,7 @@ class SessionStore:
             raise SessionError('request_pending', '该追加请求已登记，请查看原请求状态。')
         if any(item.state == 'preparing' for item in record.requests.values()):
             raise SessionError('request_uncertain', '会话存在尚未确认的追加准备，请核对后再继续。')
-        record.requests[str(request_id)] = SubmissionIntent(parent_run_id=parent_id, run_id=run_id, digest=digest, prompt=prompt, kind=kind, checkpoint_id=checkpoint_id, turn_index=turn_index, attempt_index=attempt_index)
+        record.requests[str(request_id)] = SubmissionIntent(parent_run_id=parent_id, run_id=run_id, digest=digest, prompt=prompt)
         self._write(record)
 
     def commit(self, session_id: UUID, request_id: UUID) -> None:

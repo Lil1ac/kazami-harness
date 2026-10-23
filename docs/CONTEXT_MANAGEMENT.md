@@ -1,6 +1,6 @@
 # 上下文管理：项目指令、分层压缩与输入预算
 
-本阶段对应 [PRD](PRD.md) 的 V0.2 上下文管理第一片。CLI 与网页共用同一实现：启动任务时固定项目约定，每次请求模型前检查完整输入。原始事件继续保留。已接入输出外置、规则遮蔽、结构化摘要与只读证据回读；检查点续跑、递归指令发现和容器仍待实现。
+本阶段对应 [PRD](PRD.md) 的 V0.2 上下文管理第一片。CLI 与网页共用同一实现：启动任务时固定项目约定，每次请求模型前检查完整输入。原始事件继续保留。已接入输出外置、规则遮蔽、结构化摘要与只读证据回读；中断后通过普通消息接续；递归指令发现和容器仍待实现。
 
 ## 1. 使用方式
 
@@ -78,7 +78,7 @@ len(json.dumps(
 
 离线浏览器辅助服务可显式运行 `uv --cache-dir .uv-cache run python tests/helpers/serve_context_fixture.py`，默认端口 18769，专属记录在 `.runtime/context-browser/runs`。辅助模型检查实际收到的项目规则；“持续增长”任务执行真实文件工具后增大输入。它只证明运行链路，真实模型接入证据与本轮测试结果集中记录在 [控制台验证记录](WEB_CONSOLE.md#7-已保留的验证证据)。
 
-[多轮任务交互](MULTITURN_TASKS.md) 已接入：从直接前轮记录重建用户、回答及配对工具消息，移除旧宿主/项目指令前缀，为新工作区重新固定当前指令；完整继承历史与新要求共同计入已有输入预算，超限明确停止。历史来源的事件序号及消息摘要在模型调用前再次核对。历史压缩通过统一构建入口接入，采用下述可追溯投影；检查点恢复仍需另行核对工作区和副作用状态，尚未实现。
+[多轮任务交互](MULTITURN_TASKS.md) 已接入：从直接前轮记录重建用户、回答及配对工具消息，移除旧宿主/项目指令前缀，为新工作区重新固定当前指令；完整继承历史与新要求共同计入已有输入预算，超限明确停止。历史来源的事件序号及消息摘要在模型调用前再次核对。历史压缩通过统一构建入口接入，采用下述可追溯投影；中断后沿用普通消息核对当前代码与未知工具结果，不维护独立检查点协议。
 
 
 ## 6. 分层压缩策略（2026-10-22）
@@ -161,6 +161,6 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_compression_fixture.py -
 
 此服务使用脚本化模型，执行真实Runner、文件工具、回读、独立宿主验收和文件快照；专属记录在.runtime/compression-browser/runs。验证证据集中维护于WEB_CONSOLE.md。
 
-首版尚无向量检索、子Agent隔离、可进化过滤规则或摘要语义质量保证。摘要不是中断恢复检查点。全部用户要求、失败信息或单个受保护工具批次本身占满预算时仍会停止，不能宣称无限会话或已证明能力提升。
+首版尚无向量检索、子Agent隔离、可进化过滤规则或摘要语义质量保证。摘要只投影模型输入，不保存文件或进程的执行状态。全部用户要求、失败信息或单个受保护工具批次本身占满预算时仍会停止，不能宣称无限会话或已证明能力提升。
 
 参考：[DeepSeek裁剪](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/compaction/compaction-tool-result-pruner/README.md)、[DeepSeek压缩](https://deepseek-harness.github.io/deepseek-harness/en/reference/subsystems/compaction)、[Deep Agents](https://docs.langchain.com/oss/python/deepagents/context-engineering)、[Observation masking实证](https://arxiv.org/html/2508.21433v3)。本项目采用自己的Python实现，不声称复现其评测成绩。

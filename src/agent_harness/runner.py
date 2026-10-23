@@ -1,9 +1,8 @@
 """单次运行的生命周期与计数；超时和取消统一在这里保存终态。"""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 import traceback
-import inspect
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,43 +48,12 @@ class RunContext:
     deadline: float  # 事件循环单调时钟上的绝对时间，不是 UTC 时间戳。
     event_count: int = 1
     phase: str = "starting"
-    started_at: float = 0.0  # 本次尝试事件循环单调起点，不含此前运行或停机时长。
-    on_checkpoint: Callable[..., object] | None = None  # 可选封存回调，返回Checkpoint或可等待对象。
-    resume_checkpoint: object | None = None  # Runner预核验的固定恢复证据，原任务为空。
+    started_at: float = 0.0  # 本次运行的单调起点，用于计量实际执行时长。
 
     def active_duration(self) -> float:
-        """返回本次主动耗时秒数；事件循环单调时间计量，不包含此前尝试或停机。"""
+        """返回本次运行耗时秒数；使用单调时间，不受系统时间校准影响。"""
         return max(0.0, time.monotonic() - self.started_at)
 
-    def used_model_turns(self) -> int:
-        """返回整条恢复链已开始模型请求数，供统一额度检查，不修改计数。"""
-        return self.result.model_turns + (self.result.resume_budget.model_turns if self.result.resume_budget else 0)
-
-    def used_tool_calls(self) -> int:
-        """返回整条恢复链已接纳工具数；此前执行不会因新尝试而重置。"""
-        return self.result.tool_calls + (self.result.resume_budget.tool_calls if self.result.resume_budget else 0)
-
-    async def checkpoint(self, messages: list[dict], compressor, builder) -> None:
-        """在安全边界调用封存回调并单写发布；业务失败只禁恢复，存储写失败继续向外传播。
-
-        messages保持原始配对历史；compressor/builder提供已生效投影与指令快照。
-        回调不得写JSONL；返回None表示未启用或已经达到捕获限制。
-        """
-        if self.on_checkpoint is None:
-            return
-        from .checkpoints import CheckpointError
-        try:
-            pending = self.on_checkpoint(self, messages, compressor, builder)
-            checkpoint = await pending if inspect.isawaitable(pending) else pending
-            if checkpoint is not None:
-                self.emit("checkpoint_created", {
-                    "checkpoint_id": str(checkpoint.checkpoint_id), "sha256": checkpoint.sha256,
-                    "last_seq": checkpoint.last_seq, "created_at": checkpoint.created_at.isoformat(),
-                    "budget": checkpoint.budget.model_dump(mode="json"),
-                    "tool_batch_count": checkpoint.tool_batch_count,
-                })
-        except CheckpointError as error:
-            self.emit("checkpoint_failed", {"code": error.code, "message": error.message})
 
     def emit(self, kind: str, payload: dict | None = None) -> None:
         """提交 kind 事件，成功后更新计数与阶段，返回 None。
@@ -217,7 +185,6 @@ async def run_task(
     executor: ToolExecutor | None = None,
     cancellation_state: CancellationState | None = None,
     on_context: Callable[[RunContext], None] | None = None,
-    on_checkpoint: Callable[..., object] | None = None,
 ) -> RunOutcome:
     """执行模型任务及可选独立验收，返回已保存的结果、目录和事件数。
 
@@ -226,8 +193,6 @@ async def run_task(
     cancellation_state 默认 None；只按宿主明确标记区分SIGINT、网页取消与服务关闭。
     on_context 默认None；非空时在记录创建后、首次模型调用前同步通知一次，返回值忽略。
     接收方只能读取该可变上下文供进度查询，不能修改状态或另行写入运行事件。
-    on_checkpoint默认None；可选同步/异步回调封存完整边界，返回Checkpoint且不得另写事件。
-    恢复从固定resume_source核验消息及累计消耗，run_timeout只给剩余主动时间。
     总秒级预算同时覆盖模型、工具与验收；验收异常保留 completed 执行状态。
     函数会调用外部服务、执行工具并写文件；StorageError 立即传播，不伪造落盘成功。
     """
@@ -237,21 +202,13 @@ async def run_task(
         tool_executor = executor or ToolExecutor(manifest.task.workspace, runs_root, manifest.config)
     except (OSError, RuntimeError, ValueError):
         raise StorageError("运行记录目录无法解析，请检查目录和符号链接。") from None
-    resume_checkpoint = None
-    if manifest.resume_source is not None:
-        from .checkpoints import load_resume
-        resume_checkpoint, _ = load_resume(runs_root, manifest)
     store = RunStore.create(runs_root, manifest)
     if hasattr(tool_executor, "bind_run"):
         tool_executor.bind_run(store.run_dir)
     result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True)
-    if resume_checkpoint is not None:
-        result.resume_budget = resume_checkpoint.budget.model_copy(deep=True)
     started_at = asyncio.get_running_loop().time()
-    remaining = manifest.config.limits.run_timeout_seconds - (result.resume_budget.active_duration_seconds if result.resume_budget else 0)
-    deadline = started_at + max(0.0, remaining)
-    context = RunContext(manifest, store, result, deadline, started_at=started_at,
-                         on_checkpoint=on_checkpoint, resume_checkpoint=resume_checkpoint)
+    deadline = started_at + manifest.config.limits.run_timeout_seconds
+    context = RunContext(manifest, store, result, deadline, started_at=started_at)
     verifier = Verifier(manifest.config.limits, store.run_dir) if manifest.task.verifier is not None else None
     from .agent import run_agent
 

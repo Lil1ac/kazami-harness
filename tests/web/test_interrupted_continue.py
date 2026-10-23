@@ -17,7 +17,7 @@ from agent_harness.store import RunStore
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.web.api import create_app
 from agent_harness.workspace import Workspace
-from test_checkpoint_api import project, idle
+from continuation_support import project, idle
 
 
 class ContinueModel:
@@ -115,9 +115,9 @@ def test_send_continue_inherits_interrupted_record_and_current_code(project, pro
                 assert conversation["turns"][0]["interrupted"] is True
                 assert conversation["turns"][1]["prompt"] == "继续"
                 old = await client.get(f"/api/runs/{identifier}/recovery")
-                assert old.json()["supported"] is False and old.json()["blocked_code"] == "use_followup"
+                assert old.status_code == 404
                 old = await client.post(f"/api/runs/{identifier}/resumes", json={"request_id": str(uuid4()), "checkpoint_id": str(uuid4())})
-                assert old.status_code == 410
+                assert old.status_code == 404
             assert all(hashlib.sha256((store.run_dir / name).read_bytes()).hexdigest() == value for name, value in before.items())
     asyncio.run(scenario())
 

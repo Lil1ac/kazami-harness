@@ -21,7 +21,6 @@ interface InspectorPanelsProps {
   events: RunEventView; // 对应该运行的事件窗口。
   tab: string; // overview/code/artifacts/context/trace，旧answer映射为overview。
   onTab: (value: string) => void; // 把查看分类同步到URL。
-  onConfirmed: (view: RunView) => void; // 恢复确认后更新会话，不覆盖源记录。
 }
 
 /** 独立显示选中运行的预算、测试、代码与轨迹；所有审阅决定仍由现有后端校验。 */
@@ -149,7 +148,6 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                       project={run.project}
                       active={run.active}
                       parentRunId={run.parent_run_id}
-                      resumeSourceId={run.resume_source?.source_run_id}
                     />
                   ),
                 },
@@ -184,12 +182,10 @@ function HistoricalInspector({
   runId,
   tab,
   onTab,
-  onConfirmed,
 }: {
   runId: string;
   tab: string;
   onTab: (value: string) => void;
-  onConfirmed: (view: RunView) => void; // 恢复成功时交付真实执行记录。
 }) {
   const query = useQuery({
     queryKey: ['run', runId],
@@ -200,15 +196,7 @@ function HistoricalInspector({
   if (query.isPending) return <Skeleton active paragraph={{ rows: 8 }} />;
   if (!query.data)
     return <Alert type="error" title="无法读取本轮记录" description={errorMessage(query.error)} />;
-  return (
-    <InspectorPanels
-      run={query.data}
-      events={events}
-      tab={tab}
-      onTab={onTab}
-      onConfirmed={onConfirmed}
-    />
-  );
+  return <InspectorPanels run={query.data} events={events} tab={tab} onTab={onTab} />;
 }
 
 /** 按选择轮次展示详情；最新轮共享实时事件，历史轮使用独立只读窗口。 */
@@ -218,30 +206,16 @@ export function RunInspector({
   liveEvents,
   tab,
   onTab,
-  onConfirmed,
 }: {
   selectedId: string;
   latest: RunView;
   liveEvents: RunEventView;
   tab: string;
   onTab: (value: string) => void;
-  onConfirmed: (view: RunView) => void; // 恢复成功时交付真实执行记录。
 }) {
   return selectedId === latest.run_id ? (
-    <InspectorPanels
-      run={latest}
-      events={liveEvents}
-      tab={tab}
-      onTab={onTab}
-      onConfirmed={onConfirmed}
-    />
+    <InspectorPanels run={latest} events={liveEvents} tab={tab} onTab={onTab} />
   ) : (
-    <HistoricalInspector
-      key={selectedId}
-      runId={selectedId}
-      tab={tab}
-      onTab={onTab}
-      onConfirmed={onConfirmed}
-    />
+    <HistoricalInspector key={selectedId} runId={selectedId} tab={tab} onTab={onTab} />
   );
 }

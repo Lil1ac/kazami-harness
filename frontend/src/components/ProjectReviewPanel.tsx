@@ -20,15 +20,13 @@ export function ProjectReviewPanel({
   project,
   active,
   parentRunId,
-  resumeSourceId,
 }: {
   project: ProjectReview; // 宿主保存的项目、提交、文件清单与人工决定。
   active: boolean; // 后台任务仍执行或正在整理补丁时为 true。
   parentRunId?: string | null; // 追加轮来源，用于说明累计差异并链接前轮证据。
-  resumeSourceId?: string | null; // 恢复来源，优先说明同轮检查点继承。
 }) {
   const cache = useQueryClient();
-  const recovery = useQuery({
+  const snapshotQuery = useQuery({
     queryKey: ['project-review', project.run_id],
     queryFn: /* 仅对未活动的遗留 pending 读取宿主恢复接口，不重新执行模型或项目测试。 */ ({
       signal,
@@ -39,18 +37,17 @@ export function ProjectReviewPanel({
   });
   useEffect(
     /* 将宿主补捕获的真实证据同步到详情，ready/error 状态不请求重新拍摄。 */ () => {
-      if (!recovery.data) return;
+      if (!snapshotQuery.data) return;
       cache.setQueryData<RunView>(
         ['run', project.run_id],
         /* 恢复只替换项目证据，不能把中断执行改为已完成。 */ (current) =>
-          current ? { ...current, project: recovery.data } : current,
+          current ? { ...current, project: snapshotQuery.data } : current,
       );
       void cache.invalidateQueries({ queryKey: ['runs'] });
       // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
       void cache.invalidateQueries({ queryKey: ['conversation'] });
-      void cache.invalidateQueries({ queryKey: ['recovery', project.run_id] });
     },
-    [cache, project.run_id, recovery.data],
+    [cache, project.run_id, snapshotQuery.data],
   );
   const diff = useQuery({
     queryKey: ['diff', project.run_id],
@@ -73,7 +70,6 @@ export function ProjectReviewPanel({
       void cache.invalidateQueries({ queryKey: ['runs'] });
       // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
       void cache.invalidateQueries({ queryKey: ['conversation'] });
-      void cache.invalidateQueries({ queryKey: ['recovery', project.run_id] });
     },
   });
   const locked = active || project.snapshot_status !== 'ready' || decision.isPending;
@@ -111,12 +107,7 @@ export function ProjectReviewPanel({
         </div>
       </dl>
       <p className="muted">
-        {resumeSourceId ? (
-          <>
-            本次从<Link to={'/runs/' + resumeSourceId + '?tab=code'}>原执行检查点</Link>
-            恢复，以下为相对会话原始基线的累计差异。测试与审阅结果属于本次执行。
-          </>
-        ) : parentRunId ? (
+        {parentRunId ? (
           <>
             本轮继承<Link to={`/runs/${parentRunId}?tab=code`}>前轮修改</Link>
             ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
@@ -152,12 +143,12 @@ export function ProjectReviewPanel({
           description="请检查运行记录与上方提示，已有执行和测试证据仍可查看。"
         />
       )}
-      {recovery.error && (
+      {snapshotQuery.error && (
         <Alert
           showIcon
           type="error"
           title="无法恢复代码审阅快照"
-          description={errorMessage(recovery.error)}
+          description={errorMessage(snapshotQuery.error)}
         />
       )}
       {decision.error && (

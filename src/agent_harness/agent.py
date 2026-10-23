@@ -66,7 +66,7 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     """
     from .runner import AgentStopped
 
-    if context.used_model_turns() >= context.manifest.config.limits.max_model_turns:
+    if context.result.model_turns >= context.manifest.config.limits.max_model_turns:
         raise AgentStopped("limit_exceeded", "max_model_turns")
     context.result.model_turns += 1
     context.emit("model_request_started", {
@@ -95,10 +95,10 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
     from .runner import AgentStopped
 
     config = context.manifest.config
-    checkpoint = context.resume_checkpoint
-    builder = ContextBuilder(Workspace(context.manifest.task.workspace, context.store.run_dir.parent),
-                             context.manifest.task, config,
-                             **({"instruction": checkpoint.instruction} if checkpoint is not None else {}))
+    builder = ContextBuilder(
+        Workspace(context.manifest.task.workspace, context.store.run_dir.parent),
+        context.manifest.task, config,
+    )
     context.emit("context_prepared", {"instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION})
     if builder.instruction.status == "error":
         raise AgentStopped("failed", builder.instruction.error_code or "project_instructions_unreadable")
@@ -126,26 +126,12 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
         return await _request_model(context, client, messages, tools, purpose)
 
     messages = builder.initial_messages(inherited)
-    if checkpoint is not None:
-        from copy import deepcopy
-        messages = deepcopy(checkpoint.messages)
-        # 只迁移宿主说明中的实际工作区；项目约定与原用户请求继续使用封存原文。
-        messages[0] = builder.initial_messages()[0]
-        archive.bind_checkpoint_references(checkpoint.references)
-        compressor.restore_state(checkpoint.projection, messages)
-        context.emit("resume_loaded", {
-            "source_run_id": str(checkpoint.run_id), "checkpoint_id": str(checkpoint.checkpoint_id),
-            "checkpoint_sha256": checkpoint.sha256, "budget": checkpoint.budget.model_dump(mode="json"),
-            "message_count": len(messages), "references": checkpoint.references,
-        })
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
-    context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": checkpoint.conversation_start if checkpoint is not None else len(messages) - len(inherited) - 1})
-    if checkpoint is not None:
-        compressor.publish_restored(messages, executor.definitions)
+    context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
     if parent is not None:
         compressor.inherit(parent, messages, executor.definitions)
-    while context.used_model_turns() < config.limits.max_model_turns:
-        # 显式取消检查点，避免全为立即返回的本地操作时一直不响应取消。
+    while context.result.model_turns < config.limits.max_model_turns:
+        # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
         await asyncio.sleep(0)
         # 原始列表永不覆盖；压缩器返回的正是本次计量和实际发送的投影。
         prepared = await compressor.prepare(messages, executor.definitions, request_model)
@@ -153,7 +139,6 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
         if not prepared.check.allowed:
             reason = "max_model_input_bytes" if prepared.check.input_bytes > prepared.check.max_input_bytes else "max_model_input_tokens"
             raise AgentStopped("limit_exceeded", reason)
-        await context.checkpoint(messages, compressor, builder)
         response = await request_model(prepared.messages, prepared.tools, "execution")
         builder.observe_usage(prepared.check.input_bytes, response.usage)
         context.emit("assistant_message", {"model_turn": context.result.model_turns, "message": response.message})
@@ -164,7 +149,7 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
             return
 
         batch = response.tool_calls
-        if len(batch) > config.limits.max_tool_calls - context.used_tool_calls():
+        if len(batch) > config.limits.max_tool_calls - context.result.tool_calls:
             # 整批拒绝，避免只执行一半后把残缺配对历史再发给供应商。
             for call in batch:
                 _record_tool(context, call, _skipped("skipped_limit"), messages)

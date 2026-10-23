@@ -133,58 +133,6 @@ class ProjectManager:
             self._save(child)
             return child
 
-    def checkpoint_snapshot(self, run_id: UUID) -> tuple[str, bytes]:
-        """为运行生成独立检查点的tree与完整补丁；不发布或覆盖终态审阅快照。
-
-        run_id须属于本管理器且未丢弃；只使用临时索引，返回固定基线累计补丁。
-        调用方负责不可变落盘；归属、容量或Git失败抛ProjectError。
-        """
-        with self._lock:
-            review = self._required(run_id)
-            if review.status == "discarded":
-                raise ProjectError("project_already_decided", "工作树已经丢弃，无法恢复。")
-            self._owned_worktree(review)
-            tree, patch, _ = self._snapshot(review)
-            return tree, patch
-
-    def verify_checkpoint(self, run_id: UUID, tree: str) -> ProjectReview:
-        """核对当前工作树仍等于封存tree；不重写已有审阅补丁，变化抛ProjectError。"""
-        with self._lock:
-            review = self._required(run_id)
-            actual, _ = self.checkpoint_snapshot(run_id)
-            if actual != tree:
-                raise ProjectError("checkpoint_workspace_changed", "检查点之后代码发生变化，请先人工核对。")
-            return review
-
-    def prepare_checkpoint(self, preset: ProjectPreset, parent_id: UUID, run_id: UUID,
-                           tree: str, patch: bytes) -> ProjectReview:
-        """按封存补丁派生独立工作树，返回待审阅记录；父现场和审阅补丁保持不变。
-
-        tree是捕获时的Git树哈希，patch须已通过检查点SHA核验；来源登记和派生前后
-        父子代码均须一致。失败保留准备现场，不自动启动模型或重放工具。
-        """
-        with self._lock:
-            parent = self.verify_checkpoint(parent_id, tree)
-            if preset.id != parent.project_id or preset.path.resolve() != Path(parent.repository).resolve():
-                raise ProjectError("project_source_changed", "宿主登记项目与检查点来源不一致。")
-            child = self.prepare(preset, run_id, parent.base_commit)
-            child.base_ref = parent.base_ref
-            if patch:
-                # 检查点补丁独立于changes.patch，避免覆盖终态代码审阅证据。
-                temporary = self._metadata_dir(run_id) / ("resume-" + uuid4().hex + ".patch")
-                try:
-                    with temporary.open("xb") as stream:
-                        stream.write(patch)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    self._git(Path(child.worktree), ["apply", "--index",
-                              "--binary", "--whitespace=nowarn", "--", str(temporary)])
-                finally:
-                    temporary.unlink(missing_ok=True)
-            if self.checkpoint_snapshot(run_id)[0] != tree or self.checkpoint_snapshot(parent_id)[0] != tree:
-                raise ProjectError("checkpoint_workspace_changed", "恢复准备期间代码发生变化，未开始执行。")
-            self._save(child)
-            return child
 
     def inspect(self, preset: ProjectPreset) -> dict[str, str | bool]:
         """只读探测 preset 的 HEAD 与源 dirty 状态；返回固定键，不创建目录或刷新索引。

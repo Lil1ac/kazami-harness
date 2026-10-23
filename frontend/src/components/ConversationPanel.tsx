@@ -2,11 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Input } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { phaseLabel } from '../format';
-import { turnAttempts } from '../conversation';
 import { useConversationSend } from '../hooks/useConversationSend';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
-import type { ConversationAttempt, ConversationView, RunEvent, RunView } from '../types';
+import type { ConversationTurn, ConversationView, RunEvent, RunView } from '../types';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
@@ -37,83 +36,65 @@ function turnStatus(status: string | null, validation: string | null, interrupte
   return `${interrupted ? '运行已中断' : status ? labels[status] || status : '记录待确认'}${validation ? ` · ${checks[validation] || validation}` : ''}`;
 }
 
-/** 展示同一用户要求的一次真实执行；历史和恢复尝试各自保留过程、回答与详情入口。 */
-function AttemptMessage({
-  attempt,
-  ordinal,
-  multiple,
+/** 展示一轮用户要求对应的执行、回答和详情；历史轮只读取原记录。 */
+function TurnMessage({
+  turn,
   run,
   latestId,
   events,
   onInspect,
 }: {
-  attempt: ConversationAttempt; // 已接纳的独立运行，不包含用户重复输入。
-  ordinal: number; // 所属用户轮次，从 1 起。
-  multiple: boolean; // 同轮含多次尝试时明确显示每次执行编号。
+  turn: ConversationTurn; // 本轮唯一已接纳运行及独立结果。
   run?: RunView; // 最新运行快照，缺省时不伪造活动状态。
   latestId: string; // 唯一实时订阅对应的运行。
-  events: RunEvent[]; // 最新运行的共享事件。
-  onInspect: (runId: string, tab?: string) => void; // 仅改变检查器选择。
+  events: RunEvent[]; // 最新运行共享的真实事件。
+  onInspect: (runId: string, tab?: string) => void; // 只改变检查器选择。
 }) {
-  const selected = attempt.run_id === run?.run_id;
-  const interrupted = attempt.interrupted ?? (selected && Boolean(run?.interrupted));
-  const attemptLabel = attempt.resume_source ? '恢复尝试 ' + attempt.attempt_index : '首次执行';
+  const selected = turn.run_id === run?.run_id;
+  const interrupted = turn.interrupted ?? (selected && Boolean(run?.interrupted));
   return (
-    <div className="assistant-message" data-attempt-run-id={attempt.run_id}>
+    <div className="assistant-message">
       <span className="agent-avatar" aria-hidden="true">
         H
       </span>
       <div className="assistant-content">
         <div className="assistant-heading">
           <strong>Agent</strong>
-          <span>
-            第 {ordinal} 轮{multiple || attempt.resume_source ? ' · ' + attemptLabel : ''}
-          </span>
+          <span>第 {turn.turn_index} 轮</span>
         </div>
-        {attempt.resume_source && <p className="attempt-origin">从已核验检查点继续处理本轮要求</p>}
         <TurnActivity
-          runId={attempt.run_id}
-          liveEvents={attempt.run_id === latestId ? events : undefined}
+          runId={turn.run_id}
+          liveEvents={turn.run_id === latestId ? events : undefined}
           active={Boolean(selected && run?.active)}
           phase={phaseLabel(run?.phase || 'created')}
           onInspect={
-            /* 检查对应尝试的工具记录，不改变下一条输入目标。 */ () =>
-              onInspect(attempt.run_id, 'trace')
+            /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () => onInspect(turn.run_id, 'trace')
           }
         />
-        {attempt.final_answer ? (
-          <MarkdownMessage text={attempt.final_answer} />
+        {turn.final_answer ? (
+          <MarkdownMessage text={turn.final_answer} />
         ) : (
           <p className="message-waiting">
             {selected && run?.active
               ? '正在处理你的要求，结果将在完成后显示。'
-              : attempt.execution_status
-                ? turnStatus(attempt.execution_status, null, interrupted) +
-                  '，本次执行没有最终回答。'
+              : turn.execution_status
+                ? turnStatus(turn.execution_status, null, interrupted) + '，本次执行没有最终回答。'
                 : '运行记录待确认，请查看本次详情。'}
           </p>
         )}
         <div className="message-actions">
-          <span>
-            {turnStatus(attempt.execution_status, attempt.validation_status, interrupted)}
-          </span>
+          <span>{turnStatus(turn.execution_status, turn.validation_status, interrupted)}</span>
           <button
             type="button"
-            onClick={
-              /* 原执行及恢复均指向各自真实运行。 */ () => onInspect(attempt.run_id, 'overview')
-            }
-            aria-label={
-              multiple
-                ? '查看第 ' + ordinal + ' 轮尝试 ' + attempt.attempt_index + ' 详情'
-                : '查看第 ' + ordinal + ' 轮详情'
-            }
+            onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'overview')}
+            aria-label={'查看第 ' + turn.turn_index + ' 轮详情'}
           >
-            {multiple ? '本次详情' : '本轮详情'}
+            本轮详情
           </button>
           {run?.project && (
             <button
               type="button"
-              onClick={/* 审阅与差异始终属于所选尝试。 */ () => onInspect(attempt.run_id, 'code')}
+              onClick={/* 代码差异和审阅属于所选轮。 */ () => onInspect(turn.run_id, 'code')}
             >
               代码改动
             </button>
@@ -197,31 +178,21 @@ export function ConversationPanel({
       >
         <div className="conversation-content" ref={content}>
           {conversation.turns.map(
-            /* 用户消息按轮次保持稳定，恢复只在原消息下增加一次执行。 */ (turn) => {
-              const attempts = turnAttempts(turn);
-              return (
-                <article key={turn.turn_index} className="chat-turn" data-run-id={turn.run_id}>
-                  <div className="user-message">
-                    <span className="message-author">你</span>
-                    <div className="user-message-body">{turn.prompt}</div>
-                  </div>
-                  {attempts.map(
-                    /* 各尝试按独立运行编号保留过程和阅读状态。 */ (attempt) => (
-                      <AttemptMessage
-                        key={attempt.run_id}
-                        attempt={attempt}
-                        ordinal={turn.turn_index}
-                        multiple={attempts.length > 1}
-                        run={run}
-                        latestId={conversation.latest_run_id}
-                        events={events}
-                        onInspect={onInspect}
-                      />
-                    ),
-                  )}
-                </article>
-              );
-            },
+            /* 每条用户消息与本轮执行一一对应，稳定保留历史阅读位置。 */ (turn) => (
+              <article key={turn.run_id} className="chat-turn" data-run-id={turn.run_id}>
+                <div className="user-message">
+                  <span className="message-author">你</span>
+                  <div className="user-message-body">{turn.prompt}</div>
+                </div>
+                <TurnMessage
+                  turn={turn}
+                  run={run}
+                  latestId={conversation.latest_run_id}
+                  events={events}
+                  onInspect={onInspect}
+                />
+              </article>
+            ),
           )}
           {pendingVisible && (
             <div className="user-message pending-message">
@@ -257,7 +228,9 @@ export function ConversationPanel({
             </p>
           )}
           {conversation.continuation_notice && !conversation.blocked_reason && !send.confirming && (
-            <p className="composer-notice" role="status">{conversation.continuation_notice}</p>
+            <p className="composer-notice" role="status">
+              {conversation.continuation_notice}
+            </p>
           )}
           <form className="message-composer" onSubmit={submit}>
             <Input.TextArea

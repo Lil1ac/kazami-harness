@@ -12,13 +12,12 @@ from pydantic import ValidationError
 from ..config import ConfigurationError, load_config, prepare_task
 from ..providers.base import ModelClient
 from ..runner import CancellationState, RunContext, run_task, validate_execution, validate_output_paths
-from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec, ResumeBudget
+from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec
 from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview
 from ..store import RunHistory, RunStore, StorageError
 from ..sessions import SessionError
 from .config import WebConfig, WebWorkspace
 from .conversations import ConversationService
-from .recovery import RecoveryService
 from .schemas import CreateRunRequest, EventPage, RunView
 from ..workspace import Workspace, WorkspaceError
 
@@ -94,7 +93,6 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     """按history有效事件还原本次已开始计数和已知token；缺终态一律标用量不完整。
 
     本函数不补造终态、回答或测试结论；主动耗时仅采用最后落盘elapsed的下界。
-    恢复前预算只从已核验格式的resume_loaded读取，损坏载荷留空交后续核验拒绝。
     """
     result = RunResult(
         run_id=history.manifest.run_id, execution_status="running" if history.interrupted else "created",
@@ -135,11 +133,6 @@ def _unfinished_result(history: RunHistory) -> RunResult:
                 value = usage.get(field) if isinstance(usage, dict) else None
                 if type(value) is int and value >= 0:
                     setattr(result.usage, field, getattr(result.usage, field) + value)
-        elif event.type == "resume_loaded" and result.resume_budget is None:
-            try:
-                result.resume_budget = ResumeBudget.model_validate(event.payload.get("budget"))
-            except ValidationError:
-                pass
     if (pending_commands or verifier_pending) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
         result.cleanup_status = "unknown"
     return result
@@ -232,8 +225,6 @@ class WebRunManager:
         self._recovered: set[UUID] = set()  # 每个中断任务最多恢复捕获一次，避免 GET 重跑 Git。
         self._closing = False  # 关停后永久拒绝新提交。
         self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
-        self.recovery = RecoveryService(self)  # 检查点恢复复用同一会话、项目归属和执行槽。
-        self._legacy_checkpoint_mode = False  # 仅兼容协议回归显式启用；正式网页始终采用普通消息接续。
 
     @property
     def busy_run_id(self) -> UUID | None:
@@ -413,15 +404,6 @@ class WebRunManager:
                 item.cancellation.shutdown_requested = True
                 item.cancelling = True
                 raise asyncio.CancelledError
-        async def on_checkpoint(context, messages, compressor, builder):
-            """完整批次后在线程封存context和messages并返回检查点；Runner负责提交对应事件。"""
-            capturing = asyncio.create_task(asyncio.to_thread(self.recovery.checkpoints.capture, context, messages, compressor, builder))
-            try:
-                return await asyncio.shield(capturing)
-            except asyncio.CancelledError:
-                # 封存线程结束后才收尾，避免悬空Git操作与最终代码捕获发生竞争。
-                await asyncio.shield(capturing)
-                raise
         try:
             await run_task(
                 item.manifest,
@@ -431,8 +413,6 @@ class WebRunManager:
                 transport=self._transport,
                 cancellation_state=item.cancellation,
                 on_context=on_context,
-                # 网页接续复用既有历史，不再自动生成逐批检查点；旧回调仅留兼容。
-                on_checkpoint=on_checkpoint if self._legacy_checkpoint_mode else None,
             )
         except asyncio.CancelledError:
             self._warnings.setdefault(item.manifest.run_id, []).append("后台任务在运行器收尾之外被中断，请以已保存事件为准。")
@@ -565,8 +545,6 @@ class WebRunManager:
             session_id=history.manifest.session_id or identifier,
             parent_run_id=history.manifest.parent_run_id,
             turn_index=history.manifest.turn_index,
-            attempt_index=history.manifest.attempt_index,
-            resume_source=history.manifest.resume_source,
         )
 
     def list_runs(self, offset: int, limit: int, status: str | None) -> dict:

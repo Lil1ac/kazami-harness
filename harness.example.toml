@@ -3,6 +3,11 @@ provider = "deepseek"
 requested_model = "deepseek-flash"
 tools = ["read_file", "search_files", "write_file", "run_command"]
 
+# 宿主技能集合：相对本配置文件解析；网页只能选择名称，不能改路径。
+skill_roots = ["examples/skills"]
+# CLI 可在自定义配置中填写技能名；空列表表示不加载。
+skills = []
+
 [limits]
 max_model_turns = 20
 max_tool_calls = 40

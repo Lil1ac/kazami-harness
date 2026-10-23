@@ -15,6 +15,7 @@ from ..runner import CancellationState, RunContext, run_task, validate_execution
 from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec
 from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview
 from ..store import RunHistory, RunStore, StorageError
+from ..skills import SkillCatalog
 from ..sessions import SessionError
 from .config import WebConfig, WebWorkspace
 from .conversations import ConversationService
@@ -236,6 +237,7 @@ class WebRunManager:
         """返回可公开的配置、预设和槽位；密钥只报告是否存在，不返回环境值。"""
         return {
             "config": self.run_config,
+            "skills": SkillCatalog(self.run_config.skill_roots).discover(),
             "key_configured": bool(os.environ.get(self.run_config.api_key_env)),
             "workspaces": [
                 {

@@ -7,6 +7,7 @@ import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
 import { formatContextBytes } from '../context';
 import type { OptionsResponse } from '../types';
+import { SkillSelector } from './SkillSelector';
 
 /** 提交表单的本地值；outputs 为每行一个相对路径，提交时再拆分。 */
 interface TaskValues {
@@ -294,6 +295,14 @@ export function TaskForm({ options, busyId }: { options: OptionsResponse; busyId
         >
           <Input.TextArea rows={2} placeholder={'analyze_logs.py\nreport.json'} />
         </Form.Item>
+        <SkillSelector
+          options={options.skills || []}
+          selected={config.skills || []}
+          onChange={
+            /* 只覆盖当前浏览器后续任务的选名，不提交目录或正文。 */ (skills) =>
+              setDraft({ ...draft, skills })
+          }
+        />
         <div className="composer-config">
           <span>{config.requested_model}</span>
           <span>

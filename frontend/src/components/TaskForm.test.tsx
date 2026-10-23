@@ -156,3 +156,62 @@ describe('代码项目提交', /* 项目和普通工作区严格二选一，宿�
     expect(screen.getByText('仓库暂不可用')).toBeInTheDocument();
   });
 });
+
+it('选择技能只提交名称，不夹带技能目录、正文或工具权限', async () => {
+  // 目录由宿主管理；首次手动选择与取消使用同一真实表单提交入口。
+  vi.mocked(createRun).mockReset().mockRejectedValue(new Error('离线技能提交'));
+  const user = setup(null, {
+    ...options,
+    skills: [
+      {
+        name: 'review-code',
+        description: '先读测试再修改。',
+        source: '/skills/review-code/SKILL.md',
+        available: true,
+      },
+      {
+        name: 'broken',
+        description: '损坏示例。',
+        source: '/skills/broken/SKILL.md',
+        available: false,
+        error_message: '技能元数据无效。',
+      },
+    ],
+  });
+  expect(screen.getByRole('checkbox', { name: 'broken' })).toBeDisabled();
+  expect(screen.getByText('技能元数据无效。')).toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
+  await user.type(screen.getByLabelText('任务描述'), '修复代码');
+  await user.click(screen.getByRole('button', { name: /开始执行/ }));
+  await waitFor(/* 表单异步校验后检查公开配置。 */ () => expect(createRun).toHaveBeenCalledOnce());
+  expect(vi.mocked(createRun).mock.calls[0][0].config).toEqual({ skills: ['review-code'] });
+  await screen.findByText('离线技能提交');
+  await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
+  await user.click(screen.getByRole('button', { name: /开始执行/ }));
+  await waitFor(
+    /* 取消最后一项必须明确提交空列表。 */ () => expect(createRun).toHaveBeenCalledTimes(2),
+  );
+  expect(vi.mocked(createRun).mock.calls[1][0].config.skills).toEqual([]);
+});
+
+it('首轮默认展示宿主选择，未编辑时继续使用服务端默认', async () => {
+  // 缺省覆盖和明确空列表具有不同含义，页面不能在展示时意外清空默认值。
+  vi.mocked(createRun).mockReset().mockRejectedValue(new Error('离线默认技能'));
+  const user = setup(null, {
+    ...options,
+    config: { ...options.config, skills: ['host-skill'] },
+    skills: [
+      {
+        name: 'host-skill',
+        description: '宿主默认流程。',
+        source: '/host/SKILL.md',
+        available: true,
+      },
+    ],
+  });
+  expect(screen.getByRole('checkbox', { name: 'host-skill' })).toBeChecked();
+  await user.type(screen.getByLabelText('任务描述'), '按默认流程执行');
+  await user.click(screen.getByRole('button', { name: /开始执行/ }));
+  await waitFor(/* 未编辑时让后端加载宿主默认。 */ () => expect(createRun).toHaveBeenCalledOnce());
+  expect(vi.mocked(createRun).mock.calls[0][0].config).toEqual({});
+});

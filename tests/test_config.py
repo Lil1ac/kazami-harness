@@ -213,3 +213,31 @@ def test_verifier_python_paths_are_relative_to_explicit_cwd(tmp_path: Path) -> N
     )
     task = prepare_task("task", worktree, verifier)
     assert task.verifier.python_paths == [(worktree / "src").resolve()]
+
+
+def test_skill_roots_resolve_from_config_and_selections_replace(tmp_path: Path, monkeypatch) -> None:
+    """验证 TOML 路径相对文件位置；空选择覆盖且不修改输入，返回 None，无运行副作用。"""
+    folder = tmp_path / "host"
+    folder.mkdir()
+    path = write_toml(folder / "run.toml", 'skill_roots = ["skills"]\nskills = ["review-code"]\n')
+    monkeypatch.chdir(tmp_path)
+    original = {"skills": []}
+    config = load_config(path, original)
+    assert config.skill_roots == [folder / "skills"]
+    assert config.skills == []
+    assert original == {"skills": []}
+    assert load_config(path).skills == ["review-code"]
+
+
+@pytest.mark.parametrize("override", [
+    {"skills": ["../escape"]},
+    {"skills": ["UPPER"]},
+    {"skills": ["two--dashes"]},
+    {"skills": ["duplicate", "duplicate"]},
+    {"skills": [f"s{i}" for i in range(9)]},
+    {"skill_roots": ["unconverted-path"]},
+])
+def test_invalid_skill_config_is_rejected_without_input(override: dict) -> None:
+    """验证覆盖配置的名称、数量和 Path 类型边界；无效时抛受控错误，不加载文件。"""
+    with pytest.raises(ConfigurationError):
+        load_config(overrides=override)

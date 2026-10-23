@@ -103,3 +103,59 @@ describe('持久化上下文证据', /* 不从可截断的事件窗口推测加�
     expect(screen.queryByLabelText('项目指令内容')).not.toBeInTheDocument();
   });
 });
+
+it('技能详情保留本轮指纹与完整原文，纯文本展示且默认折叠', () => {
+  // 直接使用持久快照，目录后来发生变更也不能替换运行证据。
+  const content = '---\nname: review-code\ndescription: 旧版本指导\n---\n<script>unsafe()</script>';
+  const { container } = render(
+    <ContextPanel
+      context={makeContext({
+        skills: [
+          {
+            name: 'review-code',
+            description: '旧版本指导',
+            source: '/skills/v1/SKILL.md',
+            content,
+            sha256: 'c'.repeat(64),
+            size_bytes: 100,
+          },
+        ],
+        skill_error: null,
+      })}
+      stopReason="final_answer"
+    />,
+  );
+  expect(screen.getByText('/skills/v1/SKILL.md')).toBeInTheDocument();
+  expect(screen.getByText('c'.repeat(64))).toBeInTheDocument();
+  expect(screen.getByLabelText('技能 review-code 正文')).toHaveTextContent(
+    '<script>unsafe()</script>',
+  );
+  expect(container.querySelector('script')).toBeNull();
+  expect(container.querySelector('.skill-snapshot')).not.toHaveAttribute('open');
+});
+
+it('技能加载失败展示原因，空列表与旧记录缺省分别说明', () => {
+  // 失败时不能显示“未选择”，否则用户会误以为选择没有生效。
+  const { rerender } = render(
+    <ContextPanel
+      context={makeContext({
+        skills: [],
+        skill_error: {
+          name: 'missing-skill',
+          code: 'skill_not_found',
+          message: '所选技能已不存在。',
+        },
+      })}
+      stopReason="skill_not_found"
+    />,
+  );
+  expect(screen.getByText('技能加载失败：missing-skill')).toBeInTheDocument();
+  expect(screen.getByText('skill_not_found')).toBeInTheDocument();
+  expect(screen.queryByText('本轮未选择技能。')).not.toBeInTheDocument();
+  rerender(
+    <ContextPanel context={makeContext({ skills: [], skill_error: null })} stopReason={null} />,
+  );
+  expect(screen.getByText('本轮未选择技能。')).toBeInTheDocument();
+  rerender(<ContextPanel context={makeContext()} stopReason={null} />);
+  expect(screen.getByText('此记录未保存技能快照，无法推断当时的加载情况。')).toBeInTheDocument();
+});

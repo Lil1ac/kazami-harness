@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { cancelRun, createFollowup, getConversation, getRun } from '../api';
+import { cancelRun, createFollowup, getConversation, getOptions, getRun } from '../api';
 import { ConfigDraftProvider } from '../config';
-import { makeRun } from '../test/fixtures';
+import { makeRun, options } from '../test/fixtures';
 import type { ConversationTurn, ConversationView, RunView } from '../types';
 import { RunDetailPage } from './RunDetailPage';
 
@@ -13,6 +13,7 @@ vi.mock(
   '../api',
   /* HTTP替身保留真实会话工作区、输入、路由、Markdown和检查器组件。 */ () => ({
     getRun: vi.fn(),
+    getOptions: vi.fn(),
     getConversation: vi.fn(),
     createFollowup: vi.fn(),
     cancelRun: vi.fn(),
@@ -90,6 +91,7 @@ function show(initialPath = '/runs/run-a') {
 beforeEach(
   /* 每个用例从同一可信首轮开始，不共享草稿或前例的请求。 */ () => {
     vi.resetAllMocks();
+    vi.mocked(getOptions).mockResolvedValue(options);
     sessionStorage.clear();
     runs.clear();
     readsFail = false;

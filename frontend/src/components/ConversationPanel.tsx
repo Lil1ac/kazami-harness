@@ -5,13 +5,15 @@ import { phaseLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
-import type { ConversationTurn, ConversationView, RunEvent, RunView } from '../types';
+import { SkillSelector } from './SkillSelector';
+import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
   run?: RunView; // 最新快照暂缺时保留消息与编辑，确认旧请求之外禁止新提交。
   conversation: ConversationView; // 当前会话的有序消息与继续条件。
   events: RunEvent[]; // 最新轮共享订阅，不为每条消息创建SSE。
+  skills?: SkillOption[]; // 当前宿主目录仅用于下一条的选择，不改写旧轮证据。
   onInspect: (runId: string, tab?: string) => void; // 查看某轮详情，不更改追加父轮。
   onConfirmed: (run: RunView) => void; // 服务确认新运行后原地更新会话与路由。
 }
@@ -112,6 +114,7 @@ export function ConversationPanel({
   events,
   onInspect,
   onConfirmed,
+  skills = [],
 }: ConversationPanelProps) {
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
@@ -232,6 +235,19 @@ export function ConversationPanel({
               {conversation.continuation_notice}
             </p>
           )}
+          <details className="composer-skills">
+            <summary>下一轮技能 · {send.skills.length ? send.skills.join('、') : '未选择'}</summary>
+            <SkillSelector
+              label="下一轮技能"
+              options={skills}
+              selected={send.skills}
+              onChange={send.setSkills}
+              disabled={!run}
+            />
+            {send.confirming && (
+              <p className="muted">重试确认仍使用原请求的技能选择；这里的修改用于下一条新消息。</p>
+            )}
+          </details>
           <form className="message-composer" onSubmit={submit}>
             <Input.TextArea
               aria-label="输入消息"

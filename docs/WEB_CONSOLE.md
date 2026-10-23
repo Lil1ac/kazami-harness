@@ -322,3 +322,25 @@ Web 模块迁至 `src/agent_harness/web/`，对应测试归入 `tests/web/`。�
 新建专属18778服务及真实Git项目验证：源运行380ebf67-de8f-454d-a097-56f2eb6f5d83先实际修复文件、执行计数命令并读取证据，然后中断服务。在原输入框发送“继续”生成1d947dfb-cefa-4874-9634-da3c92e73b9e，3次模型、2次工具（read_context/write_file），completed/passed并等待代码审阅。宿主pytest确认原命令计数仍为1、加法修复和说明文件存在；原run.json、JSONL及源仓库README/Git状态保持。模型为离线脚本响应，工具、Git、持久化和pytest均实际执行。
 
 发送前后输入DOM保持，历史详情与刷新均保留草稿；刷新0个POST，消息仍为2轮。390×844手机宽度与滚动宽度均390，浏览器0错误0警告。新旧运行均没有checkpoints目录，新记录与API均不输出废弃字段。记录与核验摘要在.runtime/continuation-browser-clean，截图为output/playwright/checkpoint-removal-desktop.png及checkpoint-removal-mobile.png。本轮证明清理后的工程链路，不代表真实模型能力评测。
+
+
+### 2026-10-23：手动技能加载与逐轮快照
+
+宿主登记 SKILL.md 集合，新任务表单和会话输入区可手动选择；续轮默认沿用最新实际选择，支持更换及明确清空。运行开始固定完整正文、来源和字节指纹，详情“上下文”查看；正文参与输入预算并受压缩保护。技能不能更改宿主工具、预算或验收；本阶段不执行附属脚本，协议见 [任务技能](SKILLS.md)。
+
+最终后端全量 550 passed、10 skipped，耗时198.43秒；跳过项来自 Windows 符号链接权限与 POSIX FIFO。前端19个文件87项通过，类型检查和生产构建通过。前端首次并发运行时原有设置页用例撞20秒超时，独立及最终单进程全量均通过，未放宽超时时间。已有 JSDOM 样式模拟提示及 Vite 单包体积提示保留。自动化额外覆盖损坏快照、失效技能后清空续聊、hybrid摘要期间保护全文，以及仅技能前缀增减时祖先摘要的正确偏移。
+
+页面联动使用专属18779服务、真实Git项目、文件工具与宿主pytest；模型为确定性离线响应，没有新增真实供应商调用：
+
+| 轮次与运行 | 页面操作和真实结果 |
+| --- | --- |
+| 1 / bfcffb33-8e55-40ff-9900-cd1a9aa37a08 | 勾选alpha提交；实际模型收到STYLE_ALPHA_V1，交付文件包含对应标记，pytest通过 |
+| 2 / e025094d-33ad-4d69-89b6-aa6cfa02ea2f | 更新专属技能源文件后，页面默认沿用alpha；实际加载V2，pytest通过；第1轮快照仍为V1 |
+| 3 / 144127ad-1667-4b4c-be9e-fe404658da9a | 页面取消全部选择，配置和快照为空；交付文件为NO_SKILL，pytest通过 |
+| 4 / aa6d2f00-3427-405a-98e2-fa387eb9cb34 | 页面选择beta；新文件包含STYLE_BETA，pytest通过；重启服务后历史可读 |
+| 5 / 749f315a-f0fe-41ba-bc57-95a5e1fb3d82 | 暂移专属Beta文件后发送；明确failed / skill_unreadable，模型与工具均0，详情展示原因且会话可继续 |
+| 6 / bdd3d513-9b37-4870-9223-448abc883fcc | 页面清空失效技能后普通发送，真实修改与pytest再次通过；发送前后输入DOM保持 |
+
+5个成功运行各3次离线模型、2次真实工具，共15次模型输入记录；失败轮没有调用。源仓库实现、README、未提交local.txt及Git状态保持，首轮run.json、events.jsonl、summary.json的SHA保持。刷新0个POST、草稿保留，不自动续跑。390×844手机宽度与滚动宽度均390、页面高844，输入栏保持底部；技能选择与旧快照抽屉可读，关闭详情保留草稿。浏览器控制台0错误0警告。
+
+证据位于.runtime/skills-browser/verification.json、requests.jsonl及runs/，截图为output/playwright/skills-alpha-snapshot.png、skills-load-failed.png、skills-mobile-selector.png及skills-mobile-snapshot.png。该检查证明技能加载及交付链路，不是技能质量或模型能力提升评测。

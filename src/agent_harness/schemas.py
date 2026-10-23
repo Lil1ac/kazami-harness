@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
@@ -175,9 +176,46 @@ class ContextAction(DataModel):
         return self
 
 
+# 宿主发现的技能目录项；无效项保留普通字符串以便页面解释禁用原因。
+class SkillOption(DataModel):
+    name: str  # 有效技能的选择编号；目录级故障可为空。
+    description: str  # 技能用途；损坏目录无法解析时为空。
+    source: str  # 宿主固定的 SKILL.md 或故障根目录绝对路径。
+    available: bool = True  # 仅有效且无歧义的技能可选择。
+    error_code: str | None = None  # 禁用时的稳定原因码。
+    error_message: str | None = None  # 禁用时可展示的受控中文说明。
+
+
+# 一轮实际加载的完整技能快照；后续修改源文件不会改变此记录。
+class SkillSnapshot(DataModel):
+    name: str  # 符合目录命名规范的技能编号。
+    description: str  # 本次加载时的用途描述。
+    source: str  # 本次读取的绝对文件路径，仅用于来源展示。
+    content: str  # 包含 YAML frontmatter 的完整 UTF-8 原文，不截断。
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 原始文件字节的 SHA-256 指纹。
+    size_bytes: int = Field(ge=0)  # 原始 UTF-8 文件的字节数。
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> "SkillSnapshot":
+        """核对本实例完整正文的字节数与摘要并返回自身；不一致抛 ValueError，不读取源文件。"""
+        raw = self.content.encode("utf-8")
+        if len(raw) != self.size_bytes or hashlib.sha256(raw).hexdigest() != self.sha256:
+            raise ValueError("技能正文与保存的字节指纹不一致")
+        return self
+
+
+# 选中技能无法加载时保存的受控错误，不包含异常正文或部分文件内容。
+class SkillFailure(DataModel):
+    name: str | None = None  # 可定位时为选中技能名，根目录故障可为空。
+    code: str  # 稳定失败原因，供页面及运行结果识别。
+    message: str  # 可以直接展示的中文说明。
+
+
 # API 从事件派生的上下文视图；旧运行没有对应事件时整体视图可为 None。
 class ContextView(DataModel):
     instruction: ProjectInstructionSnapshot  # 本次运行固定的项目约定快照。
+    skills: list[SkillSnapshot] = Field(default_factory=list)  # 本轮真正加载的完整技能快照，旧记录默认为空。
+    skill_error: SkillFailure | None = None  # 加载失败时保存原因；没有选择或加载成功时为空。
     last_check: ContextCheck | None = None  # 最后一次检查；指令失败或尚未检查时为 None。
     serialization: Literal["json_utf8_v1"] = "json_utf8_v1"  # 明确计量版本，不等同 HTTP 封装或 token 数。
     actions: list[ContextAction] = Field(default_factory=list)  # 最近50条，完整记录保留在事件中。
@@ -203,6 +241,8 @@ class RunConfig(DataModel):
         default="你是一个工具型任务助手。根据工具结果继续操作，并如实说明完成情况。",
         min_length=1,
     )
+    skill_roots: list[Path] = Field(default_factory=list, max_length=8)  # 宿主登记的技能集合目录，浏览器不能覆盖。
+    skills: list[str] = Field(default_factory=list, max_length=8)  # 本轮按名称选择的技能，空列表表示不加载。
     # 每个配置创建独立的限制对象，避免不同运行共享可变设置。
     limits: RunLimits = Field(default_factory=RunLimits)
     # 每次运行独立的指令加载与整体模型输入预算策略。
@@ -210,7 +250,7 @@ class RunConfig(DataModel):
 
     @model_validator(mode="after")
     def validate_config(self) -> "RunConfig":
-        """在字段类型校验后拒绝空白模型名、空白提示词和重复工具名。"""
+        """校验模型、窗口及工具/技能选择，返回自身；重复或非法选择抛 ValueError。"""
         if not self.requested_model.strip() or not self.system_prompt.strip():
             raise ValueError("模型名和系统提示词不能为空白")
         window = self.context.model_context_tokens
@@ -218,6 +258,13 @@ class RunConfig(DataModel):
             raise ValueError("模型窗口必须大于输出预留与安全余量之和")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("工具名称不能重复")
+        if len(self.skills) != len(set(self.skills)):
+            raise ValueError("技能名称不能重复")
+        for name in self.skills:
+            if len(name) > 64 or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) is None:
+                raise ValueError("技能名称必须为不超过64字符的小写字母、数字和单连字符")
+        if len(self.skill_roots) != len(set(self.skill_roots)):
+            raise ValueError("技能目录不能重复")
         return self
 
 

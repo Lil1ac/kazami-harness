@@ -19,13 +19,13 @@ max_project_instruction_bytes = 32768
 
 网页在“运行配置”设置加载开关及两个上限，输入单位为 KiB（1024 字节），提交时转换回字节。应用只影响后续提交，已开始任务使用固定配置。任务详情的上下文展示来源、内容、摘要、最新拟请求轮次、输入大小和上限。刷新和服务重启后读取同一份保存记录。
 
-`--prepare-only` 仍只创建准备记录，不读取项目指令、不调用模型。没有上下文事件的旧任务显示“未记录”，不能由当前文件或新增默认值推断当时加载情况。
+`--prepare-only` 仍只创建准备记录，不读取项目指令或技能文件、不调用模型。没有上下文事件的旧任务显示“未记录”，不能由当前文件或新增默认值推断当时加载情况。
 
 ## 2. 输入组装与计量
 
 `context.py` 的 `ContextBuilder` 在一次运行内固定任务、配置与项目指令；Agent 维护原始消息列表。每次请求前构建独立的消息和工具定义副本，适配器接收的正是本次检查的副本。
 
-消息依次为宿主系统规则、可选的项目约定 user 消息、实际用户任务，以及后续模型与工具消息。项目约定被标识为项目输入，不能改变宿主权限、预算或验收入口；这些边界仍由后端代码执行。工具调用、对应结果及供应商保留的 `reasoning_content` 一起参与计量，原始历史完整保存，实际模型输入可以使用下述压缩投影。
+消息依次为宿主系统规则、可选的固定上下文 user 前缀（项目约定与所选技能共用一条）、实际用户任务，以及后续模型与工具消息。项目约定被标识为项目输入，不能改变宿主权限、预算或验收入口；这些边界仍由后端代码执行。工具调用、对应结果及供应商保留的 `reasoning_content` 一起参与计量，原始历史完整保存，实际模型输入可以使用下述压缩投影。
 
 计量版本 `json_utf8_v1` 定义为：
 
@@ -164,3 +164,10 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_compression_fixture.py -
 首版尚无向量检索、子Agent隔离、可进化过滤规则或摘要语义质量保证。摘要只投影模型输入，不保存文件或进程的执行状态。全部用户要求、失败信息或单个受保护工具批次本身占满预算时仍会停止，不能宣称无限会话或已证明能力提升。
 
 参考：[DeepSeek裁剪](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/compaction/compaction-tool-result-pruner/README.md)、[DeepSeek压缩](https://deepseek-harness.github.io/deepseek-harness/en/reference/subsystems/compaction)、[Deep Agents](https://docs.langchain.com/oss/python/deepagents/context-engineering)、[Observation masking实证](https://arxiv.org/html/2508.21433v3)。本项目采用自己的Python实现，不声称复现其评测成绩。
+
+
+## 手动技能与固定前缀（2026-10-23）
+
+所选 SKILL.md 在启动时完整加载并固定于项目约定所在的 user 前缀；即使没有 AGENTS.md，只要有技能就仍有这条前缀。续轮移除旧宿主/项目/技能前缀，依据本轮选择重新读取，不在原历史中反复附加旧正文。压缩器按本轮前缀长度映射继承摘要，支持选择、清空及再次选择时的 2↔1 条前缀变化。
+
+context_prepared 新增 skills 与 skill_error，RunView.context 原样聚合；正文与工具定义一起计量，不能被输出外置、遮蔽或摘要替换。加载失败保存受控原因并在调用模型前停止。宿主目录、快照字段、选择继承和大小限制见 [任务技能](SKILLS.md)。

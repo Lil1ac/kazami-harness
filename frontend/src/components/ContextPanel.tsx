@@ -94,6 +94,64 @@ export function ContextPanel({
           </p>
         )}
       </section>
+      <section className="context-skills" aria-labelledby="skills-heading">
+        <h3 id="skills-heading">本轮技能快照</h3>
+        {context.skill_error && (
+          <Alert
+            type="error"
+            showIcon
+            title={
+              context.skill_error.name
+                ? '技能加载失败：' + context.skill_error.name
+                : '技能加载失败'
+            }
+            description={
+              <>
+                {context.skill_error.message} <code>{context.skill_error.code}</code>
+              </>
+            }
+          />
+        )}
+        {context.skills === undefined ? (
+          <p className="muted">此记录未保存技能快照，无法推断当时的加载情况。</p>
+        ) : !context.skills.length && !context.skill_error ? (
+          <p className="muted">本轮未选择技能。</p>
+        ) : (
+          context.skills.map(
+            /* 仅读取本轮持久化内容；目录当前版本不会覆盖这份历史。 */ (skill) => (
+              <details className="skill-snapshot" key={skill.name}>
+                <summary>
+                  {skill.name} · {formatContextBytes(skill.size_bytes)}
+                </summary>
+                <p>{skill.description}</p>
+                <dl className="compact-dl">
+                  <div>
+                    <dt>来源</dt>
+                    <dd>{skill.source}</dd>
+                  </div>
+                  <div>
+                    <dt>文件大小</dt>
+                    <dd>{skill.size_bytes.toLocaleString('zh-CN')} 字节</dd>
+                  </div>
+                  <div>
+                    <dt>SHA-256</dt>
+                    <dd>
+                      <code>{skill.sha256}</code>
+                    </dd>
+                  </div>
+                </dl>
+                <p className="muted">建立本轮运行时固定的完整正文，后续文件修改不会改变此快照。</p>
+                <pre
+                  className="context-instruction-text"
+                  aria-label={'技能 ' + skill.name + ' 正文'}
+                >
+                  {skill.content}
+                </pre>
+              </details>
+            ),
+          )
+        )}
+      </section>
       <CompressionActions context={context} />
       <section className="context-instruction" aria-labelledby="instruction-heading">
         <div className="section-heading">

@@ -183,6 +183,7 @@ class ConversationService:
             merged = parent.manifest.config.model_dump(mode='python')
             # 宿主系统规则重新生成；网页可编辑部分默认沿用前轮，覆盖仍严格校验。
             merged['system_prompt'] = self.manager.run_config.system_prompt
+            merged['skill_roots'] = list(self.manager.run_config.skill_roots)  # 技能来源使用当前宿主登记，选择默认沿用前轮。
             patch = request.config.model_dump(exclude_none=True)
             for section in ('limits', 'context'):
                 if section in patch:

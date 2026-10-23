@@ -9,6 +9,7 @@ import { DEFAULT_CONTEXT_POLICY } from '../context';
 import { config, options } from '../test/fixtures';
 import { TaskForm } from '../components/TaskForm';
 import { SettingsPage } from './SettingsPage';
+import type { OptionsResponse } from '../types';
 
 vi.mock(
   '../api',
@@ -21,8 +22,8 @@ vi.mock(
 );
 
 /** 在相同配置上下文内挂载设置与提交两个真实页面，返回用户交互驱动器。 */
-function setup() {
-  vi.mocked(getOptions).mockReset().mockResolvedValue(options);
+function setup(initialPath = '/settings', configuredOptions: OptionsResponse = options) {
+  vi.mocked(getOptions).mockReset().mockResolvedValue(configuredOptions);
   vi.mocked(createRun).mockReset().mockRejectedValue(new Error('离线检查阻止实际模型运行'));
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -30,11 +31,11 @@ function setup() {
   render(
     <QueryClientProvider client={client}>
       <ConfigDraftProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={[initialPath]}>
           <Link to="/runs">前往提交</Link>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/runs" element={<TaskForm options={options} busyId={null} />} />
+            <Route path="/runs" element={<TaskForm options={configuredOptions} busyId={null} />} />
           </Routes>
         </MemoryRouter>
       </ConfigDraftProvider>
@@ -132,4 +133,32 @@ it('混合压缩与预算设置随真实任务提交，非法目标比例阻止�
     max_summary_calls: 4,
     model_context_tokens: 64000,
   });
+}, 20000);
+
+it('任务页选择技能后调整模型预算，不丢失已选择的技能', async () => {
+  // 设置表单不编辑技能，其应用动作必须保留任务页此前的明确选择。
+  const user = setup('/runs', {
+    ...options,
+    skills: [
+      {
+        name: 'review-code',
+        description: '代码审阅流程。',
+        source: '/skills/review-code/SKILL.md',
+        available: true,
+      },
+    ],
+  });
+  await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
+  await user.click(screen.getByRole('button', { name: '调整配置' }));
+  await screen.findByLabelText('整体输入上限（KiB）');
+  await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
+  await screen.findByRole('status');
+  await user.click(screen.getByRole('link', { name: '前往提交' }));
+  expect(await screen.findByRole('checkbox', { name: 'review-code' })).toBeChecked();
+  await user.type(screen.getByLabelText('任务描述'), '保持已选审阅技能');
+  await user.click(screen.getByRole('button', { name: /开始执行/ }));
+  await waitFor(
+    /* 检查跨页面编辑后的真实提交参数。 */ () => expect(createRun).toHaveBeenCalledOnce(),
+  );
+  expect(vi.mocked(createRun).mock.calls[0][0].config.skills).toEqual(['review-code']);
 }, 20000);

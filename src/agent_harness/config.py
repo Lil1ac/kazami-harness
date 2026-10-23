@@ -62,12 +62,25 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
     """按默认值、显式 TOML、CLI 覆盖的顺序合并并严格校验运行配置。
 
     limits 与 context 按字段合并，列表等其他值整体替换；不修改调用方覆盖字典。
+    TOML 的 skill_roots 相对该配置文件解释，overrides 仍要求严格的 Path 列表。
     不读取环境变量值或 .env，返回的配置只保存密钥来源的固定变量名。
     """
     if overrides is not None and not isinstance(overrides, dict):
         raise ConfigurationError("配置覆盖参数必须是字典。")
     merged = RunConfig().model_dump(mode="python")
-    sources = [_read_toml(path, "运行配置文件")] if path is not None else []
+    sources = []
+    if path is not None:
+        document = _read_toml(path, "运行配置文件")
+        if "skill_roots" in document:
+            roots = document["skill_roots"]
+            if not isinstance(roots, list) or any(not isinstance(item, str) or not item.strip() for item in roots):
+                raise ConfigurationError("技能目录必须是非空路径字符串数组。")
+            try:
+                # 只转换 TOML 输入边界；目录可暂时缺失，由技能目录页解释不可用原因。
+                document["skill_roots"] = [(path.absolute().parent / item).absolute() for item in roots]
+            except (OSError, ValueError):
+                raise ConfigurationError("技能目录路径无法解析。") from None
+        sources.append(document)
     if overrides is not None:
         sources.append(overrides)
     for source in sources:

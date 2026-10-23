@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Drawer, Popconfirm, Skeleton } from 'antd';
 import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined, StopOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { cancelRun, errorMessage, getConversation, getRun } from '../api';
+import { cancelRun, errorMessage, getConversation, getOptions, getRun } from '../api';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { mergeConfirmedRun } from '../conversation';
 import { RunStatus } from '../components/RunStatus';
@@ -117,6 +117,11 @@ function SessionWorkspace({
       state.state.data?.active ? 1500 : false,
   });
   const latest = query.data;
+  const options = useQuery({
+    queryKey: ['options'],
+    queryFn: /* 只读当前可选技能，不依据目录重建历史快照。 */ ({ signal }) => getOptions(signal),
+    retry: false,
+  });
   const events = useRunEvents(
     conversation.latest_run_id,
     latest?.active ?? false,
@@ -234,6 +239,7 @@ function SessionWorkspace({
           run={latest}
           conversation={conversation}
           events={events.events}
+          skills={options.data?.skills || []}
           onInspect={inspect}
           onConfirmed={confirmed}
         />

@@ -10,6 +10,12 @@ export interface PendingSend {
   body: FollowupRequest; // 固定编号、正文及公开配置，不含模型凭据。
 }
 
+/** 对最新父轮的手动技能覆盖；新轮确认后默认沿用其真实配置。 */
+interface SkillChoice {
+  parentId: string; // 用户编辑时对应的最新轮编号。
+  names: string[]; // 明确选择；空列表也代表一次有效覆盖。
+}
+
 /** 当前标签页的会话草稿；未知发送状态刷新后只供用户确认，不自动执行。 */
 interface SavedDraft {
   text: string; // 尚未发送或等待确认的可编辑文本。
@@ -77,6 +83,10 @@ export function useConversationSend(
   );
   const [text, setText] = useState(initial.text); // 同一会话内连续编辑，允许执行中预写下一条。
   const [pending, setPending] = useState<PendingSend | null>(initial.pending); // 只在明确确认后清除。
+  const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
+  // 续轮默认读取最新真实配置；首轮页面的全局 draft.skills 不能覆盖继承结果。
+  const skills =
+    skillChoice?.parentId === conversation.latest_run_id ? skillChoice.names : run?.config.skills;
   const inFlight = useRef(false); // 同一事件循环中的连续 Enter 也只能开始一次发送。
   useEffect(
     /* 持久化当前标签页草稿；此 effect 从不发送网络请求。 */ () => {
@@ -95,6 +105,12 @@ export function useConversationSend(
     ) => {
       clearLegacy(submission.parentId);
       setPending(null);
+      setSkillChoice(
+        /* 发送期间若已预写不同技能选择，将其留给下一条；否则继承已确认新轮。 */ (choice) =>
+          choice && JSON.stringify(choice.names) !== JSON.stringify(submission.body.config?.skills)
+            ? { parentId: view.run_id, names: choice.names }
+            : null,
+      );
       setText(
         /* 清空已发送正文，保留发送期间编辑的不同草稿。 */ (current) =>
           current.trim() === submission.body.prompt ? '' : current,
@@ -136,9 +152,18 @@ export function useConversationSend(
   /** 发送新要求或确认原请求；返回 void，忙碌和空输入直接忽略，不制造新编号。 */
   function send(): void {
     if (inFlight.current || !canSend) return;
+    const { skills: _previousTaskSkills, ...overrides } = draft;
     const submission = pending || {
       parentId: conversation.latest_run_id,
-      body: { request_id: crypto.randomUUID(), prompt: text.trim(), config: draft },
+      body: {
+        request_id: crypto.randomUUID(),
+        prompt: text.trim(),
+        // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
+        config: structuredClone({
+          ...overrides,
+          ...(skills !== undefined ? { skills } : {}),
+        }),
+      },
     };
     inFlight.current = true;
     setPending(submission);
@@ -147,6 +172,9 @@ export function useConversationSend(
   return {
     text,
     setText,
+    skills: skills || [],
+    setSkills: /* 当前最新轮下的明确选择；空列表也必须保留。 */ (names: string[]) =>
+      setSkillChoice({ parentId: conversation.latest_run_id, names }),
     pending,
     sending: mutation.isPending,
     confirming,

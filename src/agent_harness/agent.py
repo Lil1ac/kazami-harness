@@ -8,7 +8,8 @@ from .context import ContextBuilder, SERIALIZATION
 from .compression import ContextCompressor
 from .context_archive import ContextArchive
 from .providers.base import ModelClient, ModelResponse, ToolCall
-from .schemas import ArtifactRef
+from .schemas import ArtifactRef, SkillFailure
+from .skills import SkillCatalog, SkillError
 from .tools.registry import ToolExecutor
 from .store import RunStore, StorageError
 from .sessions import SessionError, history_messages, payload_digest
@@ -95,11 +96,21 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
     from .runner import AgentStopped
 
     config = context.manifest.config
+    skills = []  # 每轮开始只读取一次；后续模型调用和历史页都使用固定快照。
+    skill_error = None  # 加载失败同样落盘受控事实，模型和工具均不执行。
+    try:
+        skills = SkillCatalog(config.skill_roots).load(config.skills)
+    except SkillError as error:
+        skill_error = SkillFailure(name=error.name, code=error.code, message=error.message)
     builder = ContextBuilder(
         Workspace(context.manifest.task.workspace, context.store.run_dir.parent),
-        context.manifest.task, config,
+        context.manifest.task, config, skills=skills,
     )
-    context.emit("context_prepared", {"instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION})
+    context.emit("context_prepared", {
+        "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
+        "skills": [item.model_dump(mode="json") for item in builder.skills],
+        "skill_error": skill_error.model_dump(mode="json") if skill_error is not None else None,
+    })
     if builder.instruction.status == "error":
         raise AgentStopped("failed", builder.instruction.error_code or "project_instructions_unreadable")
     inherited = []
@@ -128,6 +139,9 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
     messages = builder.initial_messages(inherited)
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
     context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
+    if skill_error is not None:
+        # 仍保存本轮要求与可信历史，便于用户清空失效选择后在同一会话继续。
+        raise AgentStopped("failed", skill_error.code)
     if parent is not None:
         compressor.inherit(parent, messages, executor.definitions)
     while context.result.model_turns < config.limits.max_model_turns:

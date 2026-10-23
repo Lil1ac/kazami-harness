@@ -84,6 +84,33 @@ export interface ContextAction {
   reason: string | null; // 失败原因。
 }
 
+/** 宿主发现的技能选项；不可用项仍保留受控说明，页面不能修改来源。 */
+export interface SkillOption {
+  name: string; // 可提交的技能标识；不可用项仅用于说明。
+  description: string; // 描述适用任务与工作方式。
+  source: string; // 宿主登记文件来源，只读展示。
+  available: boolean; // false 时不能新增选择。
+  error_code?: string | null; // 发现或解析失败的稳定原因码。
+  error_message?: string | null; // 宿主返回的安全中文说明。
+}
+
+/** 本轮建立时固定的完整技能文件，历史显示不读取当前目录。 */
+export interface SkillSnapshot {
+  name: string; // 本轮实际加载的技能标识。
+  description: string; // 本轮文件中的用途描述。
+  source: string; // 加载时的文件来源。
+  content: string; // 完整 UTF-8 SKILL.md，包含 frontmatter。
+  sha256: string; // 原文件字节的 SHA-256。
+  size_bytes: number; // 原文件 UTF-8 字节数。
+}
+
+/** 所选技能加载失败时保留的受控错误；失败发生在模型与工具执行之前。 */
+export interface SkillFailure {
+  name?: string | null; // 已知的失败技能；无法确定时为空。
+  code: string; // 宿主稳定错误码。
+  message: string; // 面向用户的安全说明。
+}
+
 /** 后端从完整轨迹聚合的上下文快照，不依赖浏览器当前保留的事件窗口。 */
 export interface ContextView {
   instruction: ProjectInstructionSnapshot; // 本次实际加载的项目规则及错误。
@@ -92,6 +119,8 @@ export interface ContextView {
   actions?: ContextAction[]; // 最近50条变换，旧记录可缺省。
   action_count?: number; // 全部变换数，包含失败。
   summary_calls?: number; // 已开始摘要次数，包含失败/取消。
+  skills?: SkillSnapshot[]; // 本轮固定的实际技能快照；旧记录缺省时不推断。
+  skill_error?: SkillFailure | null; // 所选技能读取失败的原因，无错误时为空。
 }
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
@@ -101,6 +130,8 @@ export interface RunConfig {
   api_key_env: 'DEEPSEEK_API_KEY'; // 仅展示宿主环境变量来源。
   tools: ToolName[]; // 本次任务允许使用的工具集合。
   system_prompt: string; // 服务端系统提示词，只读展示。
+  skill_roots?: string[]; // 宿主登记技能集合目录，只读且不能通过页面覆盖。
+  skills?: string[]; // 本次选择的技能名称；空列表明确表示不加载。
   limits: RunLimits; // 每个任务独立的预算快照。
   context: ContextPolicy; // 项目指令加载与整体输入预算快照。
 }
@@ -241,6 +272,7 @@ export interface OptionsResponse {
   workspaces: WorkspaceOption[]; // 已登记目录。
   verifiers: VerifierOption[]; // 已登记验收程序。
   projects?: ProjectOption[]; // 已登记 Git 项目；旧服务缺省等价于空列表。
+  skills?: SkillOption[]; // 宿主技能目录元数据；正文只在所选运行中加载。
   busy_run_id: string | null; // 唯一运行槽当前占用者。
 }
 
@@ -248,6 +280,7 @@ export interface OptionsResponse {
 export interface ConfigOverrides {
   requested_model?: string; // 缺省沿用宿主模型。
   tools?: ToolName[]; // 缺省沿用宿主工具。
+  skills?: string[]; // 缺省继承宿主或前轮选择，[] 明确清空。
   limits?: Partial<RunLimits>; // 仅覆盖明确填写的预算字段。
   context?: Partial<ContextPolicy>; // 逐字段覆盖本次上下文策略，未设置字段沿用宿主默认。
 }

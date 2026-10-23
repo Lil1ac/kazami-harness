@@ -15,6 +15,7 @@ class RunConfigPatch(DataModel):
     requested_model: str | None = Field(default=None, min_length=1, max_length=200)  # None 沿用宿主模型。
     tools: list[ToolName] | None = Field(default=None, min_length=1)  # None 沿用宿主工具。
     limits: dict[str, JsonValue] | None = None  # 按预算字段局部合并，再由 RunLimits 严格校验。
+    skills: list[str] | None = Field(default=None, max_length=8)  # None 沿用宿主或前轮选择；空列表明确清空。
     context: dict[str, JsonValue] | None = None  # 上下文策略按字段覆盖；不开放任意指令文件路径。
 
 

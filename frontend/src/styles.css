@@ -2202,3 +2202,60 @@ pre {
   padding-left: 20px;
   margin: 0;
 }
+
+/* 技能使用现有表单排版，长描述、来源和指纹在窄屏中保持可读。 */
+.skill-selector {
+  border: 0;
+  padding: 0;
+  margin: 20px 0;
+  min-width: 0;
+}
+.skill-selector legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 4px;
+}
+.skill-selector legend .muted {
+  font-weight: 400;
+  font-size: 12px;
+}
+.skill-choice {
+  margin-top: 10px;
+}
+.skill-description,
+.skill-unavailable {
+  margin: 3px 0 0 24px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.skill-description {
+  color: var(--text-secondary, #68706b);
+}
+.skill-unavailable {
+  color: #a14435;
+}
+.composer-skills {
+  font-size: 12px;
+  margin: 0 0 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+.composer-skills > summary,
+.skill-snapshot > summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.composer-skills .skill-selector {
+  margin: 10px 0;
+}
+.context-skills {
+  margin: 24px 0;
+}
+.skill-snapshot {
+  margin-top: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e5e7e3;
+}
+.skill-snapshot dd {
+  overflow-wrap: anywhere;
+}

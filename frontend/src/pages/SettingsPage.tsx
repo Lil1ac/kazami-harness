@@ -127,6 +127,8 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
   /** 保存已通过表单校验的模型、工具和预算到上下文，返回 void，不发送 API 请求。 */
   function apply(values: RunConfig): void {
     setDraft({
+      // 模型与预算表单不编辑任务技能，保留任务页已经明确选择的名称。
+      ...draft,
       requested_model: values.requested_model.trim(),
       tools: values.tools,
       limits: values.limits,

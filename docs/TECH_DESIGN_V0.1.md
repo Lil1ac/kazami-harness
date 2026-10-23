@@ -1,6 +1,6 @@
 # V0.1 技术设计
 
-- 文档版本：0.7
+- 文档版本：0.8
 - 更新日期：2026-10-23
 - 状态：维护当前实现的架构与协议；交付进度统一见 PROJECT.md
 - 对应需求：[PRD](PRD.md)
@@ -55,7 +55,8 @@ src/agent_harness/
 ├── config.py         # 运行配置加载与脱敏快照
 ├── runner.py         # 生命周期、验收与收尾
 ├── agent.py          # 多轮模型/工具循环
-├── context.py        # 根指令快照与整体模型输入预算
+├── context.py        # 根指令/所选技能快照与整体模型输入预算
+├── skills.py         # 宿主技能发现、规范校验与完整正文冻结
 ├── sessions.py       # 会话关系、请求幂等与历史重建
 ├── snapshots.py      # 普通工作区有界快照与后续副本
 ├── workspace.py      # 路径边界与原子文件提交
@@ -88,6 +89,7 @@ frontend/
     └── events.ts     # 事件合并；测试放在对应源码旁
 examples/
 ├── logs/             # Agent 可操作的固定输入和任务说明
+├── skills/           # 宿主可选的 SKILL.md 流程说明
 └── verifiers/        # 宿主验收脚本与 TOML
 tests/
 ├── projects/         # 临时真实Git仓库的工作树与补丁测试
@@ -379,3 +381,10 @@ Sessions只为最后一批缺失工具结果补充未知或未开始标记，要
 
 
 运行与会话格式仅保留逐用户轮次。磁盘读取对普通旧记录的空元数据做受限清理，普通请求的冗余轮次核对线性关系后移除，实际非空恢复来源仍按严格未知字段拒绝；该读取过程不写盘，新模型、API与记录不再输出废弃字段。宿主进程、外部副作用及旧检查点尝试不做迁移。
+
+
+## 手动技能加载（V0.2）
+
+skills.py 只负责从宿主配置的 skill_roots 有界发现技能并冻结显式选择的正文；Agent 启动时加载一次，context_prepared 保存原文和指纹。ContextBuilder 把技能和项目约定合并为同一条固定 user 前缀，避免更改原有 conversation_start 的 1/2 条前缀协议；跨轮摘要偏移同时考虑技能存在。固定正文参与输入计量，受压缩保护。
+
+RunConfig 的 skills 保存当前选择，浏览器 RunConfigPatch 只能覆盖名称数组；目录来源由宿主控制，续轮重新使用当前宿主登记，选择默认沿用前轮。WebRunManager.options 提供可选目录及禁用原因，详情通过既有上下文视图展示实际快照。PyYAML safe_load 解析 frontmatter，正文不解释为代码，不执行附属脚本。模块限额、配置与字段见 [任务技能](SKILLS.md)。

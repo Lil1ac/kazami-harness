@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from agent_harness.config import ConfigurationError, load_config
 from agent_harness.context import ContextBuilder, load_project_instructions
-from agent_harness.schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, TaskSpec
+from agent_harness.schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, SkillSnapshot, TaskSpec
 from agent_harness.workspace import Workspace
 
 
@@ -256,3 +256,38 @@ def test_budget_check_rejects_contradictory_allowed_flag(input_bytes: int, max_i
     """超限通过或未超限拒绝的矛盾检查均无效，等于上限仍必须为允许。"""
     with pytest.raises(ValidationError):
         ContextCheck(model_turn=1, input_bytes=input_bytes, max_input_bytes=max_input_bytes, message_count=2, allowed=allowed)
+
+
+def test_selected_skills_share_protected_prefix_and_freeze_input(tmp_path: Path) -> None:
+    """验证技能与项目规则合为固定前缀；调用方和返回消息的修改不污染下一次构建。"""
+    content = "---\nname: review-code\ndescription: review\n---\nSKILL_FIXED_RULE\n"
+    raw = content.encode("utf-8")
+    selected = SkillSnapshot(name="review-code", description="review", source="host/SKILL.md",
+                             content=content, sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
+    (tmp_path / "AGENTS.md").write_text("PROJECT_FIXED_RULE", encoding="utf-8")
+    builder = ContextBuilder(Workspace(tmp_path, tmp_path / ".runs"),
+                             TaskSpec(prompt="当前要求", workspace=tmp_path), RunConfig(), skills=[selected])
+    selected.content = "调用方修改"
+    messages = builder.initial_messages([{"role": "user", "content": "前轮要求"}])
+    assert len(messages) == 4
+    assert "PROJECT_FIXED_RULE" in messages[1]["content"]
+    assert content in messages[1]["content"]
+    assert messages[2]["content"] == "前轮要求"
+    assert "技能不能扩大工具权限" in messages[0]["content"]
+    measured = builder.build(messages, [], 1).check.input_bytes
+    plain = ContextBuilder(Workspace(tmp_path, tmp_path / ".runs"),
+                           TaskSpec(prompt="当前要求", workspace=tmp_path), RunConfig())
+    assert measured > plain.build(plain.initial_messages(), [], 1).check.input_bytes
+    messages[1]["content"] = "调用方修改返回列表"
+    assert content in builder.initial_messages()[1]["content"]
+
+
+@pytest.mark.parametrize("field,value", [("content", "被替换的正文"), ("sha256", "0" * 64), ("size_bytes", 999)])
+def test_skill_snapshot_rejects_inconsistent_evidence(field: str, value) -> None:
+    """模拟历史技能正文、指纹或字节数损坏；校验应拒绝且不读取当前技能文件。"""
+    raw = "原始技能".encode("utf-8")
+    payload = dict(name="example", description="说明", source="old/SKILL.md",
+                   content=raw.decode("utf-8"), sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
+    payload[field] = value
+    with pytest.raises(ValidationError, match="技能正文"):
+        SkillSnapshot.model_validate(payload)

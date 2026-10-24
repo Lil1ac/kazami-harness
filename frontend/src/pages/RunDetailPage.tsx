@@ -129,6 +129,7 @@ function SessionWorkspace({
       void cache.invalidateQueries({ queryKey: ['run', conversation.latest_run_id] });
       void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
       void cache.invalidateQueries({ queryKey: ['runs'] });
+      void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
     },
   );
@@ -165,6 +166,7 @@ function SessionWorkspace({
     );
     void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
     void cache.invalidateQueries({ queryKey: ['runs'] });
+    void cache.invalidateQueries({ queryKey: ['conversations'] });
     void cache.invalidateQueries({ queryKey: ['options'] });
     void navigate(`/runs/${view.run_id}`, { replace: true });
   }
@@ -185,16 +187,30 @@ function SessionWorkspace({
   return (
     <div className="session-workspace">
       <header className="session-header">
-        <Link to="/runs" className="session-back" aria-label="返回任务列表">
+        <Link
+          to={
+            conversation.source?.registered
+              ? '/projects/' + encodeURIComponent(conversation.source.id)
+              : '/runs?view=history'
+          }
+          className="session-back"
+          aria-label={conversation.source?.registered ? '返回项目会话' : '返回全部会话'}
+        >
           <ArrowLeftOutlined />
         </Link>
         <div className="session-heading">
           <h1 title={title}>{title}</h1>
           <p>
-            {latest?.project?.project_label || '文件任务'}
+            {conversation.source?.label || latest?.project?.project_label || '文件任务'}
             <span>·</span>
             {conversation.turns.length} 轮对话
           </p>
+          {latest?.execution_mode && (
+            <p className="session-directory" title={latest.workspace}>
+              <span>{latest.execution_mode === 'local' ? '原目录执行' : '隔离执行'}</span>
+              <code>{latest.workspace}</code>
+            </p>
+          )}
         </div>
         <div className="session-header-actions">
           {latest && <RunStatus run={latest} />}

@@ -93,8 +93,8 @@ async def finished(client: httpx.AsyncClient, identifier: str) -> dict:
 
 
 async def initial(client: httpx.AsyncClient, project: bool = False) -> dict:
-    """提交first要求并等收尾；project选择Git登记项，否则使用普通工作区。"""
-    response = await client.post('/api/runs', json={'prompt': 'first', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
+    """显式按隔离模式提交first并等收尾；本文件核对逐轮副本继承，原目录另有回归。"""
+    response = await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
     assert response.status_code == 202, response.text
     return await finished(client, response.json()['run_id'])
 

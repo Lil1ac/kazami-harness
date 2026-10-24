@@ -1,6 +1,12 @@
 import { Tag } from 'antd';
 import { reviewLabels } from '../format';
-import type { CleanupStatus, ExecutionStatus, RunView, ValidationStatus } from '../types';
+import type {
+  CleanupStatus,
+  ExecutionStatus,
+  RunView,
+  RunResult,
+  ValidationStatus,
+} from '../types';
 
 const executionLabels: Record<ExecutionStatus, string> = {
   created: '待执行',
@@ -32,8 +38,20 @@ const cleanupLabels: Record<CleanupStatus, string> = {
   unknown: '清理未确认',
 };
 
+/** 列表与完整运行共用相同状态规则，项目布尔值仅控制测试文案。 */
+export interface RunStatusSnapshot {
+  active: boolean; // 服务是否实际持有任务。
+  cancelling: boolean; // 是否等待取消收尾。
+  interrupted: boolean; // 是否缺少可信终态。
+  phase: string; // 最新真实执行阶段。
+  project?: RunView['project'] | boolean; // 完整审阅或只读的项目类型标记。
+  source_kind?: 'project' | 'workspace' | null; // 原目录Git也显示项目测试，且不伪造待审阅。
+  result: Pick<RunResult, 'execution_status' | 'validation_status' | 'cleanup_status'>; // 三个独立状态。
+}
+
 /** 根据真实终态生成概览，active/中断/清理异常优先，completed 本身不等于成功。 */
-export function runSummary(run: RunView): { label: string; color?: string } {
+export function runSummary(run: RunStatusSnapshot): { label: string; color?: string } {
+  const isProject = Boolean(run.project) || run.source_kind === 'project'; // 测试类型独立于工作树审阅。
   if (run.interrupted) return { label: '运行已中断', color: 'warning' };
   if (run.cancelling) return { label: '正在取消', color: 'processing' };
   if (run.active)
@@ -42,7 +60,7 @@ export function runSummary(run: RunView): { label: string; color?: string } {
         run.phase === 'project_snapshot'
           ? '整理代码改动'
           : run.phase === 'verification'
-            ? run.project
+            ? isProject
               ? '测试中'
               : '验收中'
             : '运行中',
@@ -55,10 +73,10 @@ export function runSummary(run: RunView): { label: string; color?: string } {
     return {
       label:
         status === 'unverified'
-          ? run.project
+          ? isProject
             ? '完成 · 未测试'
             : '完成 · 未验收'
-          : run.project
+          : isProject
             ? testLabels[status]
             : validationLabels[status],
       color: status === 'passed' ? 'success' : status === 'unverified' ? undefined : 'error',
@@ -73,7 +91,7 @@ export function runSummary(run: RunView): { label: string; color?: string } {
 }
 
 /** 展示概览标签；run 为服务端快照，不根据模型最终回答推断成功。 */
-export function RunStatus({ run }: { run: RunView }) {
+export function RunStatus({ run }: { run: RunStatusSnapshot }) {
   const status = runSummary(run);
   return (
     <Tag color={status.color} variant="filled">
@@ -85,15 +103,17 @@ export function RunStatus({ run }: { run: RunView }) {
 /** 分别展示执行、验收或测试、人工审阅和清理；项目审阅不会覆盖执行或测试事实。 */
 export function StateBreakdown({ run }: { run: RunView }) {
   return (
-    <dl className={`state-breakdown${run.project ? ' project-state' : ''}`}>
+    <dl
+      className={`state-breakdown${run.project || run.source_kind === 'project' ? ' project-state' : ''}`}
+    >
       <div>
         <dt>执行</dt>
         <dd>{run.interrupted ? '运行已中断' : executionLabels[run.result.execution_status]}</dd>
       </div>
       <div>
-        <dt>{run.project ? '测试' : '验收'}</dt>
+        <dt>{run.project || run.source_kind === 'project' ? '测试' : '验收'}</dt>
         <dd>
-          {run.project
+          {run.project || run.source_kind === 'project'
             ? testLabels[run.result.validation_status]
             : validationLabels[run.result.validation_status]}
         </dd>

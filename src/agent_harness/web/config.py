@@ -17,6 +17,7 @@ class WebWorkspace(DataModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")  # 页面选择使用的稳定编号。
     label: str = Field(min_length=1, max_length=100)  # 面向用户的目录用途说明。
     path: Path  # 解析后的宿主目录；仅服务端配置能够登记。
+    is_example: bool = False  # 示例目录仅在辅助入口展示，不充当最近打开的个人项目。
     copy_on_run: bool = False  # True 时复制样例，为每次运行提供独立目录。
 
 
@@ -39,9 +40,7 @@ class WebConfig(DataModel):
 
     @model_validator(mode="after")
     def unique_identifiers(self) -> "WebConfig":
-        """校验各预设列表内部编号唯一并至少有一种任务入口；返回自身，不访问文件系统。"""
-        if not self.workspaces and not self.projects:
-            raise ValueError("至少登记一个普通工作区或 Git 项目")
+        """校验各预设列表内部编号唯一；空列表允许首次打开本机项目；返回自身，不访问文件系统。"""
         for entries in (self.workspaces, self.verifiers, self.projects):
             if len({entry.id for entry in entries}) != len(entries):
                 raise ValueError("预设编号不能重复")
@@ -53,6 +52,28 @@ def _absolute(base: Path, raw: object) -> Path:
     if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
         raise ConfigurationError("Web 配置路径必须是非空字符串。")
     return (base / raw).resolve()
+
+
+def prepare_project_test(preset: ProjectPreset, base: Path) -> ProjectPreset:
+    """固定 preset 的测试可执行入口，返回独立副本；空命令不预检，base 解释相对程序路径。"""
+    if not preset.test_argv:
+        return preset.model_copy(deep=True)
+    program = preset.test_argv[0]
+    if "{workspace}" in program:
+        raise ConfigurationError("项目测试入口不能来自任务工作树。")
+    local = base / program
+    if Path(program).is_absolute() or "/" in program or "\\" in program or local.exists():
+        executable = local.resolve(strict=True)
+    else:
+        found = shutil.which(program)
+        if found is None:
+            raise ConfigurationError("未找到项目测试入口，请登记已配置依赖的解释器或程序。")
+        executable = Path(found).resolve(strict=True)
+    if not executable.is_file() or (os.name != "nt" and not os.access(executable, os.X_OK)):
+        raise ConfigurationError("项目测试入口必须是可执行文件。")
+    if os.name == "nt" and executable.suffix.lower() not in {".exe", ".com"}:
+        raise ConfigurationError("Windows 项目测试需通过 .exe 或 .com 解释器启动。")
+    return preset.model_copy(update={"test_argv": [str(executable), *preset.test_argv[1:]]})
 
 
 def load_web_config(path: Path | None = None, *, project_dir: Path | None = None) -> WebConfig:
@@ -67,14 +88,14 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
         if path is None:
             ordinary = project / ".runtime" / "workspace"
             ordinary.mkdir(parents=True, exist_ok=True)
-            workspaces = [WebWorkspace(id="workspace", label="本地任务工作区", path=ordinary)]
+            workspaces = [WebWorkspace(id="workspace", label="本地任务工作区", path=ordinary, is_example=True)]
             verifiers: list[WebVerifier] = []
             sample = project / "examples" / "logs"
             verifier = project / "examples" / "verifiers" / "logs.toml"
             if sample.is_dir():
                 workspaces.append(
                     WebWorkspace(
-                        id="logs", label="日志样例（每次独立复制）", path=sample, copy_on_run=True
+                        id="logs", label="日志样例（每次独立复制）", path=sample, copy_on_run=True, is_example=True
                     )
                 )
             if verifier.is_file():
@@ -125,25 +146,7 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
         for verifier in config.verifiers:
             if not verifier.path.is_file():
                 raise ConfigurationError("登记的验收配置文件不存在。")
-        for preset in config.projects:
-            # 命令入口在宿主配置边界固定，参数仅允许工作树路径占位。
-            argv = preset.test_argv
-            program = argv[0]
-            if "{workspace}" in program:
-                raise ConfigurationError("项目测试入口不能来自任务工作树。")
-            local = base / program
-            if Path(program).is_absolute() or "/" in program or "\\" in program or local.exists():
-                executable = local.resolve(strict=True)
-            else:
-                found = shutil.which(program)
-                if found is None:
-                    raise ConfigurationError("未找到项目测试入口，请登记已配置依赖的解释器或程序。")
-                executable = Path(found).resolve(strict=True)
-            if not executable.is_file() or (os.name != "nt" and not os.access(executable, os.X_OK)):
-                raise ConfigurationError("项目测试入口必须是可执行文件。")
-            if os.name == "nt" and executable.suffix.lower() not in {".exe", ".com"}:
-                raise ConfigurationError("Windows 项目测试需通过 .exe 或 .com 解释器启动。")
-            preset.test_argv = [str(executable), *argv[1:]]
+        config.projects = [prepare_project_test(preset, base) for preset in config.projects]
         return config
     except ConfigurationError:
         raise

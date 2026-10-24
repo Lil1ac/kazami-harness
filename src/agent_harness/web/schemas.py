@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 
 from ..schemas import ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from ..projects import ProjectReview
+from ..local_execution import LocalChangeView
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
@@ -24,6 +25,7 @@ class CreateRunRequest(DataModel):
     prompt: str = Field(min_length=1, max_length=65536)  # 本次任务描述，空白由 TaskSpec 拒绝。
     workspace_id: str | None = Field(default=None, min_length=1, max_length=64)  # 普通任务工作区，与 project_id 二选一。
     project_id: str | None = Field(default=None, min_length=1, max_length=64)  # Git 项目任务编号。
+    execution_mode: Literal["local", "isolated"] | None = None  # None按来源默认；本机登记默认原目录，示例沿用隔离。
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)  # 固定提交引用，默认提交时 HEAD。
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
     expected_outputs: list[str] = Field(default_factory=list, max_length=100)  # 工作区内相对产物引用。
@@ -39,6 +41,8 @@ class CreateRunRequest(DataModel):
             raise ValueError("项目任务不接受普通验收器")
         if self.project_id is None and self.base_ref != "HEAD":
             raise ValueError("普通任务不能指定 Git 基线")
+        if self.execution_mode == "local" and self.base_ref != "HEAD":
+            raise ValueError("原目录执行不能切换 Git 基线，请选择隔离执行")
         return self
 
 
@@ -63,8 +67,55 @@ class ConversationTurn(DataModel):
     interrupted: bool = False  # 本轮因服务中断缺少可信终态；缺省为False。
 
 
+class ConversationSource(DataModel):
+    """会话创建时的项目身份；同编号改指其他路径时，不把旧会话移到新项目。"""
+
+    id: str  # 原登记编号，普通目录与Git目录统一用于列表筛选。
+    kind: Literal["project", "workspace"]  # 固定来源类型，不取实际派生工作区类型。
+    label: str  # 当前同身份登记名称；登记移除时使用原目录名称。
+    path: str  # 会话来源绝对目录，与逐轮工作树分别保存。
+    registered: bool  # 当前目录登记仍匹配编号、类型和规范路径。
+    execution_mode: Literal["local", "isolated"] = "isolated"  # 会话固定方式；旧副本缺省仍按隔离展示。
+
+
+class ConversationRunState(DataModel):
+    """会话列表使用的最新轮状态；不携带完整回答、配置或工具输出。"""
+
+    execution_status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"]  # 最新轮执行事实。
+    validation_status: Literal["unverified", "passed", "failed", "error"]  # 最新轮验收事实。
+    cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"]  # 最新轮清理事实。
+    active: bool  # 当前服务仍持有该轮任务，包括快照收尾。
+    cancelling: bool  # 当前轮已明确请求取消。
+    interrupted: bool  # 缺少可信终态且本服务未执行该轮。
+    phase: str  # 当前真实执行阶段。
+
+
+class ConversationSummary(DataModel):
+    """一个会话只有一条导航记录；无法核对最新轮时保留入口并明确提示。"""
+
+    session_id: UUID  # 稳定会话编号，等于首次运行编号。
+    title: str  # 从首条用户要求生成，后续消息不替换标题。
+    entry_run_id: UUID  # 正常指向最新轮；记录异常时指向仍可读取的入口。
+    latest_run_id: UUID | None  # 以会话元数据为准，无法核对元数据时为空。
+    turn_count: int | None  # 已接纳用户轮数；元数据损坏时不猜测。
+    created_at: datetime  # 首轮创建时间；根缺失时取最早可读清单。
+    updated_at: datetime  # 已读取轮次的最后真实事件时间，不因浏览更新。
+    source: ConversationSource | None  # 旧CLI等无可核对项目来源时为空，仍可全局查看。
+    latest: ConversationRunState | None  # 最新轮缺失或关联异常时为空，不沿用旧轮成功。
+    error: str | None = None  # 记录异常的受控中文原因。
+
+
+class ConversationPage(DataModel):
+    """聚合和筛选之后分页的会话列表，不是对运行分页后再去重。"""
+
+    items: list[ConversationSummary]  # 当前页会话，按更新时间倒序。
+    total: int = Field(ge=0)  # 筛选后的会话总数。
+    busy_run_id: UUID | None  # 全局单任务实际活动编号。
+
+
 # 会话读取不启动任何任务，can_continue仅为初步条件，提交时重新核验代码。
 class ConversationView(DataModel):
+    source: ConversationSource | None = None  # 只读项目身份，供返回项目和新建对话导航。
     session_id: UUID  # 会话根运行编号。
     latest_run_id: UUID  # 线性会话最新已提交轮次。
     turns: list[ConversationTurn]  # 顺序展示用户要求和各轮回答。
@@ -84,7 +135,11 @@ class ReviewDecision(DataModel):
 class RunView(DataModel):
     run_id: UUID  # 与落盘登记一致的运行编号。
     prompt: str  # 原任务描述。
-    workspace: str  # 本次实际使用目录，样例复制后指向独立副本。
+    workspace: str  # 模型工具、命令和验收实际使用的绝对目录。
+    execution_mode: Literal["local", "isolated"] | None = None  # CLI未知为None；网页明确原目录或隔离。
+    source_path: str | None = None  # 网页最初选择的项目目录，旧记录未知时不猜测。
+    source_kind: Literal["project", "workspace"] | None = None  # 原目录Git任务仍按项目测试展示，无需伪造工作树审阅。
+    local_changes: LocalChangeView | None = None  # 原目录每轮前后差异；隔离任务沿用项目审阅。
     created_at: datetime  # 运行创建 UTC 时间。
     result: RunResult  # 当前内存快照或日志恢复的可信结果。
     phase: str  # 最近提交的真实执行阶段。
@@ -107,3 +162,9 @@ class EventPage(DataModel):
     items: list[RunEvent]  # after 之后最多 limit 条事件。
     has_more: bool  # 当前磁盘已有更多事件可继续读取。
     last_seq: int  # 当前有效事件前缀的最大序号，不是本页最后序号。
+
+
+# 用户明确保存的后续项目测试设置，不属于模型可修改的任务参数。
+class ProjectTestRequest(DataModel):
+    test_command: str = Field(default="", max_length=4096)  # 空字符串清空测试；仅分词，不经 Shell。
+    test_timeout_seconds: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)  # 项目测试超时，单位秒。

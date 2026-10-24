@@ -45,10 +45,18 @@ class FileSnapshotStore:
     MAX_ENTRIES = 1000  # 包含文件和空目录，防止目录遍历无界增长。
     MAX_METADATA_BYTES = 2 * 1024 * 1024  # 快照清单读取上限。
 
-    def __init__(self, runs_root: Path) -> None:
-        """绑定受保护 runs_root；构造时不创建目录或读取工作区。"""
-        self.runs_root = runs_root.resolve()  # 普通模型工具不能访问的记录根目录。
-        self.root = self.runs_root / '.file-snapshots'  # 按运行 UUID 存清单和原始文件副本。
+    def __init__(self, runs_root: Path, *, namespace: str = '.file-snapshots', exclude_names: frozenset[str] = frozenset(), protected_roots: tuple[Path, ...] = ()) -> None:
+        """绑定受保护记录根；namespace隔离不同用途，排除项仅由宿主传入，构造不写文件。
+
+        默认不排除任何内容，继续服务严格的普通副本派生；原目录差异使用独立命名空间，
+        排除Git、依赖缓存及宿主记录目录，不把不完整快照当作可自动恢复的代码。
+        """
+        if '/' in namespace or '\\' in namespace or not namespace.startswith('.') or namespace in ('.', '..'):
+            raise ValueError('快照命名空间必须是单层隐藏目录')
+        self.runs_root = runs_root.resolve()  # 模型不能访问的记录根目录。
+        self.root = self.runs_root / namespace  # 按运行UUID固定保存，不覆盖旧轮。
+        self.exclude_names = exclude_names  # 此配置只影响采集范围，不扩大工具可访问路径。
+        self.protected_roots = tuple(path.resolve() for path in protected_roots)  # 不采集宿主运行数据。
 
     def _directory(self, run_id: UUID) -> Path:
         """返回 run_id 的快照目录，拒绝链接替换和路径越界，不创建目录。"""
@@ -72,6 +80,8 @@ class FileSnapshotStore:
         while stack:
             directory = stack.pop()
             for path in sorted(directory.iterdir()):
+                if path.name in self.exclude_names or any(path == protected or path.is_relative_to(protected) for protected in self.protected_roots):
+                    continue  # 原目录报告只收集项目文件；严格派生默认仍无名称排除。
                 if len(entries) >= self.MAX_ENTRIES:
                     raise SnapshotError('workspace_snapshot_limit', '普通工作区超过1000个目录项，无法保存可继续快照。')
                 name = _relative(path.relative_to(root).as_posix())
@@ -229,3 +239,26 @@ class FileSnapshotStore:
             raise
         except (OSError, ValueError, KeyError, WorkspaceError):
             raise SnapshotError('workspace_snapshot_unreadable', '无法核对或创建后续文件工作区，尚未调用模型。') from None
+
+
+    def saved_file(self, run_id: UUID, relative: str) -> Path:
+        """返回run_id已保存的relative文件；核对路径、大小和SHA，缺失/损坏抛SnapshotError。
+
+        仅访问保护区内的固定副本，不读取当前项目同名文件；不保存或修改任何内容。
+        """
+        try:
+            name = _relative(relative)
+            value = self.info(run_id)
+            entry = next((item for item in value['entries'] if item['path'] == name and item['kind'] == 'file'), None) if value and value['status'] == 'ready' else None
+            if entry is None:
+                raise ValueError('missing file')
+            target = self._directory(run_id) / 'files' / name
+            if target.resolve() != target or target.is_symlink() or target.is_junction():
+                raise ValueError('linked file')
+            with target.open('rb') as source:
+                raw = source.read(self.MAX_BYTES + 1)
+            if len(raw) != entry['size_bytes'] or hashlib.sha256(raw).hexdigest() != entry['sha256']:
+                raise ValueError('invalid file')
+            return target
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SnapshotError('workspace_snapshot_unreadable', '本轮固定产物缺失或完整性核对失败。') from None

@@ -141,7 +141,7 @@ class ProjectManager:
         调用方应放在线程中执行；Git 输出与等待时长都遵循本管理器的上限。
         """
         _, commit, dirty = self._inspect_base(preset, "HEAD")
-        return {"head_commit": commit, "source_dirty": dirty}
+        return {"head_commit": commit, "source_dirty": dirty, "branch": self._git(preset.path, ["rev-parse", "--abbrev-ref", "HEAD"]).decode("utf-8").strip()}
 
     def _inspect_base(self, preset: ProjectPreset, base_ref: str) -> tuple[Path, str, bool]:
         """校验宿主 Git 根项目并解析 base_ref，返回实体根目录、固定提交与源 dirty 状态。"""

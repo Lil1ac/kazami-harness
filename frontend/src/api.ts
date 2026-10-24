@@ -1,5 +1,7 @@
 import type {
   ArtifactRef,
+  ConversationPage,
+  LocalProjectOption,
   ConversationView,
   FollowupRequest,
   CreateRunRequest,
@@ -149,4 +151,41 @@ export function createFollowup(runId: string, body: FollowupRequest): Promise<Ru
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+/** 由用户点击后打开系统目录窗口；取消返回null，不创建任务或上传目录。 */
+export function pickProject(): Promise<{ cancelled: boolean; project: LocalProjectOption | null }> {
+  return request('/api/projects/pick', { method: 'POST' });
+}
+
+/** 重新核验已登记项目id并更新最近时间；只读打开，不调用模型。 */
+export function openProject(id: string): Promise<LocalProjectOption> {
+  return request('/api/projects/' + encodeURIComponent(id) + '/open', { method: 'POST' });
+}
+
+/** 保存项目下一轮使用的测试设置；空命令清空，保存动作不执行程序。 */
+export function saveProjectSettings(
+  id: string,
+  command: string,
+  seconds: number,
+): Promise<LocalProjectOption> {
+  return request('/api/projects/' + encodeURIComponent(id) + '/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ test_command: command, test_timeout_seconds: seconds }),
+  });
+}
+
+/** 查询会话页；默认全项目、offset=0、limit=20，按最新轮状态筛选，只读不执行。 */
+export function getConversations(
+  filters: { projectId?: string; offset?: number; limit?: number; status?: string } = {},
+  signal?: AbortSignal,
+): Promise<ConversationPage> {
+  const query = new URLSearchParams({
+    offset: String(filters.offset || 0),
+    limit: String(filters.limit || 20),
+  });
+  if (filters.projectId) query.set('project_id', filters.projectId);
+  if (filters.status) query.set('status', filters.status);
+  return request('/api/conversations?' + query, { signal });
 }

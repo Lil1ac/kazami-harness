@@ -6,6 +6,7 @@ import { useRunEvents } from '../hooks/useRunEvents';
 import { StateBreakdown } from './RunStatus';
 import { VerificationPanel } from './VerificationPanel';
 import { ProjectReviewPanel } from './ProjectReviewPanel';
+import { LocalChangesPanel } from './LocalChangesPanel';
 import { ArtifactPanel } from './ArtifactPanel';
 import { ContextPanel } from './ContextPanel';
 import { EventTrail } from './EventTrail';
@@ -26,7 +27,13 @@ interface InspectorPanelsProps {
 /** 独立显示选中运行的预算、测试、代码与轨迹；所有审阅决定仍由现有后端校验。 */
 function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
-  const keys = ['overview', 'artifacts', 'context', 'trace', ...(run.project ? ['code'] : [])];
+  const keys = [
+    'overview',
+    'artifacts',
+    'context',
+    'trace',
+    ...(run.project || run.local_changes ? ['code'] : []),
+  ];
   return (
     <div className="inspector-panels">
       <Tabs
@@ -54,7 +61,7 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                 <VerificationPanel
                   detail={run.result.verification}
                   active={run.active}
-                  project={Boolean(run.project)}
+                  project={Boolean(run.project) || run.source_kind === 'project'}
                 />
                 <section>
                   <h3>运行记录</h3>
@@ -70,8 +77,20 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                         <code>{run.run_id}</code>
                       </dd>
                     </div>
+                    {run.execution_mode && (
+                      <div>
+                        <dt>执行方式</dt>
+                        <dd>{run.execution_mode === 'local' ? '原目录执行' : '隔离执行'}</dd>
+                      </div>
+                    )}
+                    {run.source_path && (
+                      <div>
+                        <dt>所选项目</dt>
+                        <dd>{run.source_path}</dd>
+                      </div>
+                    )}
                     <div>
-                      <dt>工作区</dt>
+                      <dt>实际执行目录</dt>
                       <dd>{run.workspace}</dd>
                     </div>
                     <div>
@@ -138,21 +157,36 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
               </div>
             ),
           },
-          ...(run.project
+          ...(run.local_changes
             ? [
                 {
                   key: 'code',
                   label: '代码',
                   children: (
-                    <ProjectReviewPanel
-                      project={run.project}
+                    <LocalChangesPanel
+                      runId={run.run_id}
+                      workspace={run.workspace}
+                      changes={run.local_changes}
                       active={run.active}
-                      parentRunId={run.parent_run_id}
                     />
                   ),
                 },
               ]
-            : []),
+            : run.project
+              ? [
+                  {
+                    key: 'code',
+                    label: '代码',
+                    children: (
+                      <ProjectReviewPanel
+                        project={run.project}
+                        active={run.active}
+                        parentRunId={run.parent_run_id}
+                      />
+                    ),
+                  },
+                ]
+              : []),
           {
             key: 'artifacts',
             label: '产物',

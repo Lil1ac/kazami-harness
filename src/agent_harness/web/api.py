@@ -19,8 +19,9 @@ from ..schemas import RunConfig
 from ..sessions import SessionError
 from ..store import StorageError
 from .config import WebConfig
-from .schemas import ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
+from .schemas import ConversationPage, ProjectTestRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
+from .project_catalog import CatalogError
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -92,6 +93,11 @@ def create_app(
         return _error(error.status, error.code, error.message)
 
 
+    @app.exception_handler(CatalogError)
+    async def catalog_error(request: Request, error: CatalogError) -> JSONResponse:
+        """将 request 的目录登记失败映射为受控响应；不回显文件或异常正文。"""
+        return _error(error.status, error.code, error.message)
+
     @app.exception_handler(SessionError)
     async def session_error(request: Request, error: SessionError) -> JSONResponse:
         """将会话 error 映射为受控响应；读取/写入故障503，其余继续条件冲突409，不回显输入。"""
@@ -120,6 +126,30 @@ def create_app(
         """返回宿主登记选项、默认配置、密钥存在标记和当前槽位；不接收参数。"""
         return await asyncio.to_thread(manager.options)
 
+    @app.post("/api/projects/pick")
+    async def pick_project() -> dict:
+        """打开本机原生选择框；取消不登记，选择成功返回目录信息，不启动任务。"""
+        selected = await manager.folder_picker.choose()
+        if selected is None:
+            return {"cancelled": True, "project": None}
+        identifier = await asyncio.to_thread(manager.catalog.register, selected)
+        options = await asyncio.to_thread(manager.options)
+        return {"cancelled": False, "project": next(item for item in options["recent_projects"] if item["id"] == identifier)}
+
+    @app.post("/api/projects/{project_id}/open")
+    async def open_project(project_id: str) -> dict:
+        """重新打开已登记 project_id 并更新最近记录；不接受宿主新路径，不创建任务。"""
+        identifier = await asyncio.to_thread(manager.catalog.reopen, project_id)
+        options = await asyncio.to_thread(manager.options)
+        return next(item for item in options["recent_projects"] if item["id"] == identifier)
+
+    @app.put("/api/projects/{project_id}/settings")
+    async def project_settings(project_id: str, body: ProjectTestRequest) -> dict:
+        """保存用户明确填写的项目测试设置；只检查程序入口，执行留到新任务验收阶段。"""
+        await asyncio.to_thread(manager.catalog.configure_test, project_id, body.test_command, body.test_timeout_seconds)
+        options = await asyncio.to_thread(manager.options)
+        return next(item for item in options["recent_projects"] if item["id"] == project_id)
+
     @app.post("/api/runs", status_code=202, response_model=RunView)
     async def submit(request: CreateRunRequest) -> RunView:
         """按 request 创建独立后台任务并返回初始视图；不等待模型完成，忙时 409。"""
@@ -135,6 +165,17 @@ def create_app(
     ) -> dict:
         """按零起始 offset 和 1..100 的 limit 分页；status=None 不按执行状态筛选。"""
         return manager.list_runs(offset, limit, status)
+
+    @app.get("/api/conversations", response_model=ConversationPage)
+    async def conversations(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=20, ge=1, le=100),
+        project_id: str | None = Query(default=None, min_length=1, max_length=64),
+        status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"] | None = None,
+    ) -> ConversationPage:
+        """按最新状态和当前项目身份聚合分页；只读磁盘事实，不打开目录或启动模型。"""
+        # 与现有运行列表一样串行读取，共享的历史LRU不跨线程修改。
+        return manager.conversation_index.list(offset, limit, project_id, status)
 
     @app.get("/api/runs/{run_id}", response_model=RunView)
     async def run_detail(run_id: UUID) -> RunView:
@@ -191,7 +232,7 @@ def create_app(
         """下载 run_id 完整固化补丁；强制附件，不将代码作为浏览器可执行内容。"""
         target = await manager.project_patch(run_id)
         return FileResponse(
-            target, media_type="application/octet-stream", filename=f"{run_id}.patch",
+            target, media_type="application/octet-stream", filename=f"{run_id}.diff" if manager.get_run(run_id).execution_mode == "local" else f"{run_id}.patch",
             headers={"X-Content-Type-Options": "nosniff"},
         )
 
@@ -305,6 +346,7 @@ def create_app(
     @app.get("/tasks")
     @app.get("/tasks/{run_id}")
     @app.get("/settings")
+    @app.get("/projects/{project_id}")
     async def frontend_page() -> Response:
         """返回前端路由统一 index；尚未构建时给出本地构建步骤，不影响 API 使用。"""
         try:

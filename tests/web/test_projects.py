@@ -161,8 +161,9 @@ def test_project_config_resolves_relative_paths_and_fixed_program(project_config
     assert loaded.projects[0].path == project_config.projects[0].path
     assert Path(loaded.projects[0].test_argv[0]).is_absolute()
     location.write_text('workspaces=[]\n', encoding="utf-8")
-    with pytest.raises(ConfigurationError):
-        load_web_config(location, project_dir=project_config.project_dir)
+    # 首次使用允许空目录列表，用户可在首页明确打开本机文件夹。
+    empty = load_web_config(location, project_dir=project_config.project_dir)
+    assert empty.workspaces == [] and empty.projects == []
 
 
 def test_missing_key_prevents_git_worktree_creation(project_config: WebConfig, monkeypatch):

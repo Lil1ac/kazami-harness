@@ -434,7 +434,7 @@ def test_inspect_reads_fixed_head_without_directories_or_index_refresh(repositor
     original_index = index.read_bytes()
     original_stat = index.stat().st_mtime_ns
     clean = service.inspect(preset(repository))
-    assert clean == {"head_commit": git(repository, "rev-parse", "HEAD").decode().strip(), "source_dirty": False}
+    assert clean == {"head_commit": git(repository, "rev-parse", "HEAD").decode().strip(), "source_dirty": False, "branch": git(repository, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()}
     (repository / "app.txt").write_text("source edit", encoding="utf-8")
     dirty = service.inspect(preset(repository))
     assert dirty["source_dirty"] is True

@@ -311,7 +311,9 @@ class TaskSpec(DataModel):
 class RunOrigin(DataModel):
     kind: Literal["workspace", "project"]  # 普通文件任务或 Git 项目。
     preset_id: str = Field(min_length=1, max_length=64)  # 启动时的宿主登记编号。
-    registered_path: Path  # 宿主登记根目录；与每轮独立实际工作目录分别保存。
+    registered_path: Path  # 会话固定的来源目录；原目录执行时也等于实际工作区。
+    execution_mode: Literal["local", "isolated"] = "isolated"  # 新会话固定执行方式；旧副本记录缺省仍为隔离。
+    workspace_identity: tuple[int, int] | None = None  # 原目录的设备/对象编号，隔离模式为空；续轮拒绝目录被替换。
     verifier_id: str | None = None  # 普通任务选择的宿主验收编号；项目任务使用项目测试。
 
 

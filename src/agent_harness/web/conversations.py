@@ -41,7 +41,7 @@ class ConversationService:
                 origin = RunOrigin(kind='project', preset_id=review.project_id, registered_path=Path(review.repository))
         if origin is None:
             raise SessionError('continuation_source_missing', '旧记录没有可核对的工作区来源，请新建任务。')
-        presets = self.manager.web_config.projects if origin.kind == 'project' else self.manager.web_config.workspaces
+        presets = self.manager.catalog.project_presets() if origin.kind == 'project' else self.manager.catalog.workspace_presets()
         preset = next((item for item in presets if item.id == origin.preset_id), None)
         if preset is None or preset.path.resolve() != origin.registered_path.resolve():
             raise SessionError('continuation_source_changed', '宿主工作区登记与前轮来源不一致，请核对配置。')
@@ -56,6 +56,12 @@ class ConversationService:
             raise SessionError('continuation_cleanup', '前轮进程清理状态无法确认，不能继续。')
         history_messages(history, allow_interrupted=interrupted)
         origin = self._origin(history)
+        if origin.execution_mode == 'local':
+            try:
+                self.manager.local_changes.verify(origin, history.manifest.task.workspace)
+            except SnapshotError as error:
+                raise SessionError(error.code, error.message) from None
+            return origin
         if origin.kind == 'project':
             review = self.manager.projects.get(history.manifest.run_id)
             if review is None or (not interrupted and (review.snapshot_status != 'ready' or not review.patch_available)):
@@ -84,6 +90,7 @@ class ConversationService:
             raise SessionError('session_unreadable', '本轮与会话关联不一致，请检查运行记录。')
         turns: list[ConversationTurn] = []
         latest_history = None
+        source = None  # 根运行缺失时不从后续工作树猜测项目来源。
         blocked = None
         for index, identifier in enumerate(record.run_ids):
             expected_parent = record.run_ids[index - 1] if index else None
@@ -92,6 +99,8 @@ class ConversationService:
             try:
                 history = self.manager._read_history(identifier)
                 manifest = history.manifest
+                if index == 0:
+                    source = self.manager.conversation_index.source_for(history)
                 if (
                     manifest.parent_run_id != expected_parent
                     or (manifest.session_id or identifier) != session_id
@@ -128,7 +137,7 @@ class ConversationService:
                 self._ready(latest_history)
             except (SessionError, SnapshotError, ProjectError) as error:
                 blocked = SessionError(error.code, error.message)
-        return ConversationView(session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, busy_run_id=busy, continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
+        return ConversationView(source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, busy_run_id=busy, continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
 
     async def submit(self, parent_id: UUID, request: FollowupRequest):
         """幂等接纳追加 request；HTTP断开不取消准备，同进程重复请求共享原任务等待。"""
@@ -206,8 +215,22 @@ class ConversationService:
                 raise SessionError('invalid_run', str(error) if isinstance(error, ConfigurationError) else '追加任务配置无效。') from None
             self.store.begin(session_id, request.request_id, parent_id, identifier, digest, prompt)
             try:
-                if origin.kind == 'project':
-                    preset = next(item for item in self.manager.web_config.projects if item.id == origin.preset_id)
+                if origin.execution_mode == 'local':
+                    root = self.manager.local_changes.verify(origin, parent.manifest.task.workspace)
+                    if origin.kind == 'project':
+                        preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
+                        await asyncio.to_thread(self.manager.projects.inspect, preset)
+                        verifier = self.manager.project_verifier(preset, root)
+                    else:
+                        verifier_path = None
+                        if origin.verifier_id is not None:
+                            selected = next((item for item in self.manager.web_config.verifiers if item.id == origin.verifier_id), None)
+                            if selected is None:
+                                raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
+                            verifier_path = selected.path
+                        verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected).verifier
+                elif origin.kind == 'project':
+                    preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
                     def prepare_project():
                         """沿用原逐轮代码副本流程；中断来源只在明确发送时捕获一次当前代码。"""
                         if interrupted:
@@ -220,7 +243,7 @@ class ConversationService:
                         await asyncio.shield(preparation)
                         raise
                     root = Path(review.worktree)
-                    verifier = VerifierSpec(argv=[part.replace('{workspace}', str(root)) for part in preset.test_argv], cwd=root, timeout_seconds=preset.test_timeout_seconds, python_paths=[root / part for part in preset.test_python_paths])
+                    verifier = self.manager.project_verifier(preset, root)
                 else:
                     root = self.manager.web_config.runtime_root.resolve() / str(identifier)
                     def prepare_workspace():

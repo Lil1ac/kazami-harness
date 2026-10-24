@@ -9,7 +9,7 @@
 安装依赖、设置密钥与首次构建按 [README](../README.md#安装与密钥) 执行。构建完成后，在项目根目录启动：
 
 ```powershell
-uv --cache-dir .uv-cache run harness serve --web-config web.example.toml --config harness.example.toml
+uv --cache-dir .uv-cache run harness serve --config harness.example.toml
 ```
 
 打开 [本地任务工作台](http://127.0.0.1:8765/runs)。启动终端需已有 DEEPSEEK_API_KEY，页面只报告是否配置，不接收、保存或回显密钥。没有密钥仍可查看历史，提交时会提前拒绝。
@@ -25,20 +25,22 @@ Vite默认在127.0.0.1:5173提供页面，将/api代理到127.0.0.1:8765。前�
 
 ## 2. 操作流程
 
-- **普通任务**：先将输入文件放入登记工作区，填写任务、选择工作区、声明可选预期产物，再开始执行。任务产物可以是代码、文本、CSV等格式；不要求输出JSON。未选择验收器时最终明确显示“未验收”。
+- **打开项目**：首页点击“选择项目文件夹”，从 Windows 系统窗口选择本机 Git 根目录或普通文件夹，也可重新打开最近项目。默认直接修改所选目录，明确选择隔离时才创建工作树或有界副本；取消保留输入且不执行。详细协议见 [打开本机项目](LOCAL_PROJECTS.md)。
+- **普通任务**：打开输入所在目录，填写任务、声明可选预期产物，再开始执行。任务产物可以是代码、文本、CSV等格式；不要求输出JSON。未选择验收器时最终明确显示“未验收”。
 - **日志样例**：点击“填充日志样例”，检查任务与固定验收器后提交。表单会为本浏览器启用所需四工具。后端每次复制输入到新的独立目录，Agent生成脚本和报告后，宿主运行固定日志检查器。该验收器只适用于仓库样例。
 - **运行详情**：消息区展示用户要求、Markdown回答和折叠过程；右侧或手机抽屉按轮查看测试、代码、产物、上下文、完整轨迹与预算，工具参数/输出继续按纯文本展开。产物提供64KiB以内UTF-8文本预览，二进制文件可下载。
 - **运行配置**：修改模型、四类工具和已有预算，仅影响本浏览器之后提交的任务；刷新页面恢复宿主默认。正在运行的配置不变，页面不修改服务端TOML。
 - **取消**：明确点击并确认取消后，先显示正在取消，后端清理完成后才显示终态。刷新、页面切换、关闭网页或SSE断开只清理订阅，不取消Agent。
+- **项目与会话**：侧栏或最近项目进入项目会话列表，“新建对话”从当前项目开始，点击已有会话则进入完整消息区。首页最近会话与全部会话按稳定会话聚合，每段多轮工作只显示一条；手机使用项目导航抽屉。
 - **历史**：重新启动服务后可读取既有记录；读取不会重放工具动作。缺少可信结束事件的记录显示中断与警告，不推断其副作用已经完成。
 
 执行、验收、清理状态分别展示。只有最终execution_status=completed、validation_status=passed且cleanup_status为not_needed/complete时展示成功。报告错误是验收failed；验收进程出错是error；两者都保留模型已完成的执行事实。
 
-任务结束后在会话工作区底部输入消息继续修改。后续运行核对前轮历史与代码，派生独立工作区，再执行、验收并重新待审阅；每轮可独立查看轨迹、上下文、产物和累计差异。发送始终继续最新轮；查看旧轮只切换详情面板，运行中保留编辑但禁止新提交。快照上限、网络重试及旧记录兼容见 [多轮任务交互](MULTITURN_TASKS.md)。
+任务结束后在会话工作区底部输入消息继续修改。后续运行核对历史和目录身份，原目录会话沿用当前目录，隔离会话派生副本，再执行和验收；每轮独立查看轨迹、上下文、产物与差异。仅隔离Git工作树重新等待保留/丢弃。发送始终继续最新轮；查看旧轮只切换详情面板，运行中保留编辑但禁止新提交。快照上限、网络重试及旧记录兼容见 [多轮任务交互](MULTITURN_TASKS.md)。
 
 ## 3. 宿主配置
 
-web.example.toml采用表数组登记工作区和验收器。相对路径以该TOML所在目录解释：
+首次使用可直接在页面打开目录；可选 --web-config web.example.toml 采用表数组登记初始工作区、项目和验收器。相对路径以该TOML所在目录解释：
 
 ```toml
 runtime_root = ".runtime/web-workspaces"
@@ -49,12 +51,14 @@ id = "workspace"
 label = "本地任务工作区"
 path = ".runtime/workspace"
 copy_on_run = false
+is_example = true
 
 [[workspaces]]
 id = "logs"
 label = "日志样例（每次独立复制）"
 path = "examples/logs"
 copy_on_run = true
+is_example = true
 
 [[verifiers]]
 id = "logs"
@@ -63,9 +67,9 @@ description = "仅适用于仓库固定样例。"
 path = "examples/verifiers/logs.toml"
 ```
 
-默认的project/.runtime/workspace可按需创建，其余自定义普通目录必须事先存在。copy_on_run=true的目录复制到runtime_root下的UUID新目录，限制1000目录项和16MiB，拒绝链接与特殊文件。工作区/验收编号必须唯一。网页只能提交登记编号，不能传入任意宿主路径、验收argv或凭据。
+默认的project/.runtime/workspace可按需创建，其余自定义普通目录必须事先存在。copy_on_run=true的目录复制到runtime_root下的UUID新目录，限制1000目录项和16MiB，拒绝链接与特殊文件。工作区/验收编号必须唯一。任务接口只提交登记编号，不能传入任意宿主路径、验收argv或凭据；项目测试由独立的显式设置接口保存，不在任务配置覆盖中开放。普通目录副本排除运行记录与任务目录。
 
-普通工作区的历史产物沿用现有路径引用：后续任务覆盖同名文件时，历史下载读取的是该路径当前内容。历史验收结论属于当次运行，不代表文件之后未变化。日志复制样例每次独立，仍不应手动修改已交付的副本。普通工作区新增的有界快照仅用于核验与派生下一轮，不改变产物下载的路径引用语义；容器隔离尚未实现。
+原目录执行的历史产物从该轮固定结束快照读取，快照不可用时返回409，不回退到当前同名文件。隔离模式的普通工作区产物仍使用路径引用：后续任务覆盖同名文件时，历史下载读取的是该路径当前内容。历史验收结论属于当次运行，不代表文件之后未变化。日志复制样例每次独立，仍不应手动修改已交付的副本。隔离普通工作区的有界快照用于核验与派生下一轮；原目录执行单独保存逐轮产物。容器隔离尚未实现。
 
 ## 4. 模块与生命周期
 
@@ -82,9 +86,12 @@ Web 接入集中在 `src/agent_harness/web/`：
 | 模块 | 职责 |
 | --- | --- |
 | `config.py` | 宿主工作区、验收预设及构建目录 |
+| `project_catalog.py` | 本机目录、最近项目与可选测试的持久登记 |
+| `folder_picker.py` / `native_dialog.py` | 异步协调本机系统目录窗口、取消与超时 |
 | `schemas.py` | 受限请求与运行视图 |
 | `service.py` | 单槽后台任务、进度、取消、历史、样例复制与产物 |
 | `conversations.py` | 会话查询、追加条件、历史与工作区继承和幂等调度 |
+| `conversation_index.py` | 从现有记录只读聚合项目会话、保守核验最新轮、筛选与分页 |
 | `api.py` | HTTP/SSE、静态资源和受限产物访问 |
 
 CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路线见 [技术设计](TECH_DESIGN_V0.1.md#2-模块职责与调用方向)，前端阅读入口见 [前端工程说明](../frontend/README.md)。
@@ -97,9 +104,13 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 
 | 方法与路径 | 请求/返回含义 |
 | --- | --- |
-| GET /api/options | 默认运行配置、密钥是否配置、工作区/验收/代码项目预设与忙碌任务ID |
+| GET /api/options | 默认配置、密钥存在、工作区/验收/项目、最近项目、选择器能力与忙碌任务ID |
+| POST /api/projects/pick | 系统选择目录；取消不登记，成功返回项目选项，不启动任务 |
+| POST /api/projects/{id}/open | 重新核验已登记目录并更新最近时间，返回项目选项 |
+| PUT /api/projects/{id}/settings | 显式保存 Git 项目的测试命令与秒级超时；保存不执行 |
 | POST /api/runs | 接收prompt、workspace_id/project_id二选一、项目base_ref或普通verifier_id、expected_outputs及config；成功202，忙碌409 |
-| GET /api/runs | offset从0开始，limit为1至100，可按执行status筛选；返回items/total/busy_run_id |
+| GET /api/runs | offset从0开始，limit为1至100，可按执行status筛选；返回逐运行items/total/busy_run_id |
+| GET /api/conversations | 先聚合会话再按project_id、最新轮status筛选及offset/limit分页；返回会话摘要items/total/busy_run_id |
 | GET /api/runs/{id} | 返回统一RunView，不恢复执行 |
 | GET /api/runs/{id}/conversation | 返回所属会话的逐轮要求/回答、最新轮与可继续条件；只读 |
 | POST /api/runs/{id}/followups | request_id、prompt及可选config/expected_outputs，成功202；同编号同载荷复用原运行，不重放 |
@@ -108,13 +119,13 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 | GET /api/runs/{id}/stream | SSE补发与持续订阅，支持after和Last-Event-ID，取较大非负游标 |
 | GET /api/runs/{id}/review | 读取终态项目审阅；中断遗留pending可补捕获一次，不恢复模型 |
 | POST /api/runs/{id}/review | decision为keep/discard；独立保存审阅决定，不自动提交或合并 |
-| GET /api/runs/{id}/diff | 有界UTF-8补丁预览，返回content/truncated/size_bytes |
+| GET /api/runs/{id}/diff | 固定隔离补丁或原目录逐轮文本差异，返回content/truncated/size_bytes |
 | GET /api/runs/{id}/patch | 下载已核对完整性的完整补丁，丢弃后仍可访问 |
 | GET /api/runs/{id}/artifacts | location+path必须匹配登记引用；preview=true返回文本预览，否则附件下载 |
 
 RunView包含run_id、prompt、workspace、created_at、result、phase、event_count、last_seq、active、cancelling、interrupted、warnings、本次config、可空project审阅详情及可空context上下文详情；追加session_id、可空parent_run_id及从1开始的turn_index描述用户轮次。result继续使用RunResult及可空verification；毫秒、字节、字符等单位沿用后端定义。用户消息、工具输出、日志、指令和补丁按纯文本转义，Agent最终回答按受限Markdown渲染，不启用原始HTML。
 
-config覆盖只接受requested_model、tools、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，旧记录为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
+config覆盖只接受requested_model、tools、skills、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，旧记录为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
 
 SSE逐条发送event=run_event、id=seq、data=完整RunEvent；每10秒注释心跳。终态或无活动任务的中断历史补齐已落盘事件后发送stream_end，其中包含last_seq与interrupted。前端按run_id+seq排序去重、遇缺口补历史；重新建立连接时显式携带游标，收到终止通知后重新查询持久化快照。
 
@@ -344,3 +355,57 @@ Web 模块迁至 `src/agent_harness/web/`，对应测试归入 `tests/web/`。�
 5个成功运行各3次离线模型、2次真实工具，共15次模型输入记录；失败轮没有调用。源仓库实现、README、未提交local.txt及Git状态保持，首轮run.json、events.jsonl、summary.json的SHA保持。刷新0个POST、草稿保留，不自动续跑。390×844手机宽度与滚动宽度均390、页面高844，输入栏保持底部；技能选择与旧快照抽屉可读，关闭详情保留草稿。浏览器控制台0错误0警告。
 
 证据位于.runtime/skills-browser/verification.json、requests.jsonl及runs/，截图为output/playwright/skills-alpha-snapshot.png、skills-load-failed.png、skills-mobile-selector.png及skills-mobile-snapshot.png。该检查证明技能加载及交付链路，不是技能质量或模型能力提升评测。
+
+
+### 2026-10-24：本机项目入口与首页重构
+
+首页以打开本机文件夹、任务输入和发送为主操作；最近项目持久保存，完整历史单独查看，技能、测试、基线和产物收在高级设置，示例作为辅助入口。Windows 原生选择器独立运行；Git 根目录走工作树，普通目录走有界副本。测试可留空，保存测试设置不会执行，后续运行使用新设置，旧轮证据保持。使用和协议见 [打开本机项目](LOCAL_PROJECTS.md)。
+
+后端完整回归 **576 passed、10 skipped**，耗时 248.93 秒；跳过来自 Windows 符号链接权限与 POSIX FIFO。前端完整回归 **20 个文件、87 项通过**，耗时 234.50 秒；最终补充状态标记后再验首页与草稿相关 11 项通过，类型检查和最终生产构建通过。保留已有 JSDOM 样式模拟提示及 Vite 单包体积提示。
+
+修复并覆盖了 Windows 测试命令的嵌套引号往返、同路径 Git/普通类型变化的稳定编号、目录列表读取的并发一致性、普通副本排除运行记录及任务目录，以及后台项目刷新失败时表单不卸载。原生窗口仅额外继承系统桌面路径变量，工作目录固定为临时目录，工具进程的环境限制保持原规则；已清理早期验证窗口误生成的专属 Shell 缓存。
+
+页面联动使用专属 18780 服务及“我的 后端项目”真实 Git 仓库，模型为确定性离线响应，文件工具、Git、持久化和 pytest 实际执行，没有新增真实供应商调用：
+
+| 场景 | 实际结果 |
+| --- | --- |
+| 系统选择目录 | 页面打开真实原生窗口，选择中文和空格目录后显示真实路径、master、HEAD 短提交及未提交提示；草稿保持，运行总数仍为 0 |
+| 取消选择 | 实际响应为 `{cancelled:true,project:null}`；项目登记文件哈希、输入及运行总数保持，没有模型或工具调用 |
+| 第一轮 `088dc69c-f5b7-423d-abe9-4c387defbfb4` | 从新首页发送，在独立工作树真实修改 app.py；2 次离线模型、1 次文件工具，completed/unverified，等待审阅 |
+| 首页保存项目测试 | 显式保存现有解释器的 `-m pytest -q`，60 秒超时；出现已保存，运行总数仍为 1 |
+| 第二轮 `bf09eda5-a5c3-484f-82ef-ba8b70f518d6` | 从原会话追加要求，派生另一工作树并继承修改，2 次离线模型、1 次文件工具；真实 pytest 为 1 passed，completed/passed，重新等待审阅 |
+| 源码及旧记录 | 源项目 app.py、test_app.py、未提交 local.txt 和 Git 状态保持；首轮 run.json、events.jsonl 的 SHA-256 保持，更新设置不改写旧验收结论 |
+| 重启、刷新、最近项目 | 空闲后仅重启专属辅助服务，最近项目及测试命令仍可读；刷新 0 个 POST，未发送草稿保持，重新打开不创建运行，运行总数仍为 2 |
+| 手机与控制台 | 390×844 视口；首页内容宽与滚动宽均 390，高级设置出现系统滚动条时可用宽与滚动宽均 375，无横向溢出；0 个页面错误、0 个警告 |
+
+证据位于 `.runtime/open-project-browser/final-verification.json` 及该目录的 `runs/`。截图为 `output/playwright/open-project-final-home.png`、`open-project-final-settings.png`、`open-project-final-passed.png`、`open-project-final-diff.png`、`open-project-final-mobile.png` 和 `open-project-final-mobile-settings.png`。P01/P03/P04/P05/P06 由上述页面流程核对；P02 的普通目录、无提交、子目录及裸仓库边界由接口和真实文件/Git 回归补充。该验证说明工程链路可运行，不代表复杂真实模型任务能力的评测。
+
+
+### 2026-10-24：项目会话导航与原目录默认执行
+
+桌面侧栏按项目组织会话，项目页与全部会话先聚合再分页；同一会话仅一条入口，从旧轮链接进入仍展示完整消息，发送指向最新轮。项目直达路由支持刷新/冷启动，草稿按项目和会话分别保存，手机使用同一项目树抽屉。异常最新轮不借用旧轮成功，来源编号、类型与路径同时匹配才归入当前项目。
+
+本机新会话默认直接在所选目录执行；执行方式、来源路径和目录对象身份随会话固定。文件工具、命令与项目测试使用实际目录，后续消息不复制代码或应用旧补丁，允许用户手动编辑后继续。隔离模式需明确选择，仍采用原逐轮工作树/副本流程。原目录差异相对本轮开始状态，产物从固定结束快照读取；快照超限不阻止当前目录继续。详细协议见 [本机项目](LOCAL_PROJECTS.md)，产品验收为 PRD N01—N04、D01—D05。
+
+后端最终全量 **587 passed、10 skipped**，耗时288.14秒；跳过项来自Windows符号链接权限与POSIX FIFO。新增原目录接口回归覆盖普通/Git三轮、真实命令cwd、项目测试cwd、重启、两轮间手动修改、已有Git索引/提交保留、显式隔离、目录替换拒绝、采集超限可继续、原产物不可用时受控拒绝，以及差异损坏拒绝读取。
+
+前端最终全量 **21个文件、95项通过**，耗时214.83秒；TypeScript检查与最终生产构建通过。保留全部请求与状态断言、原用例超时上限：设置页采用一次选中粘贴与每控件一次可点击性核对，提交页按保存设置和发送基线两个独立行为拆分。另覆盖差异元数据已经固化、后台尚在收尾时等待终态再读取，避免临时409留在查询缓存中。已有JSDOM布局/样式提示及Vite包体积提示保留，最终真实浏览器控制台0错误、0警告。
+
+真实页面联动使用专属18781/18782服务。模型为确定性离线响应；文件、Git、持久化与pytest均实际执行，没有新增真实供应商请求：
+
+| 页面场景 | 实际结果 |
+| --- | --- |
+| 隔离Alpha连续会话 | 前三轮只有一个项目入口；重启后从旧首轮继续得到第4轮 `9fe84456-f002-4b37-b861-9f06ae74b615`，父轮为原第3轮，pytest通过；Beta项目独立一条 |
+| 原目录Git第1轮 `a3bbaeb9-11d8-4395-a34c-8e291afd7db0` | 首页明确原目录发送，真实修改所选app.py，3次离线模型、2次文件工具，completed/passed；无工作树审阅记录 |
+| 原目录Git第2轮 `9345dca8-ae02-4856-b84c-f26be7dd7704` | 沿用相同目录和已有修复，pytest通过；项目页仍只显示1条、2轮 |
+| 普通目录 `33ddcdf7-b1f6-4422-9847-8dd012dabd60` | 从该目录新建入口发送，实际目录等于来源，真实app.py修改和差异可查看；未配置验收，保持unverified |
+| 原目录Git重启后第3轮 `d59748a1-eb3d-4689-a6cf-7202b431fc5d` | 重启前在专用源文件手动追加说明；旧首轮入口继续指向最新第2轮，同目录执行并保留手动内容，pytest通过；差异只增加本轮说明 |
+| 旧证据 | 隔离24个、原目录32个文件SHA-256保持，包括原轮事件、清单、结果、固定产物和差异；隔离源仓库状态保持，原目录索引及用户local.txt保持 |
+| 草稿与浏览 | 重启、刷新、项目列表及旧轮导航保留草稿；浏览0个POST，两次重启后的明确发送各只有1个followup请求 |
+| 手机/平板 | 390×844宽度/滚动宽度均390，输入底部780.33；820×1000均820，输入底部929.33；导航抽屉为预期深色，进入同一会话后草稿保留 |
+
+浏览器普通目录使用宿主明确配置的专用工作区；本轮原生系统选择器沿用前轮页面验收，明确登记普通目录后的默认原目录行为另由真实ASGI回归覆盖。该验证说明工程链路，不作为复杂任务的模型能力评测。
+
+证据在 `.runtime/conversation-navigation-browser/final-verification.json` 和 `.runtime/local-execution-browser/final-verification.json`。截图为 `output/playwright/conversation-nav-project.png`、`conversation-nav-restarted.png`、`local-execution-first.png`、`local-execution-restarted.png`、`local-execution-project.png`、`local-execution-files.png`、`local-execution-mobile.png` 和 `local-execution-mobile-menu.png`。
+
+升级后需重启当前Python服务并刷新页面。旧隔离会话沿用原方式，不自动把已有文件迁移到原目录；使用新默认方式请从项目页新建对话。项目Git未自动暂存、提交或推送。

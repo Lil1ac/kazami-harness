@@ -394,7 +394,8 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
             <h2>配置作用范围</h2>
             <p className="muted">这份草稿用于下一次提交。正在运行的任务使用创建时的配置快照。</p>
             <p className="muted">
-              工作区和验收程序由服务端登记。如需增加目录或检查程序，请调整宿主启动配置。
+              在新任务页打开电脑中的文件夹。Git
+              项目的测试命令可在该页高级设置中保存；其他独立验收程序由宿主提供。
             </p>
           </section>
           <details>

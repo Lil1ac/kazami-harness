@@ -163,7 +163,7 @@ def test_busy_rejects_second_submission_without_second_record(web_config: WebCon
             response = await client.post("/api/runs", json={"prompt": "第二个任务", "workspace_id": "sample"})
             assert response.status_code == 409
             assert response.json()["error"]["code"]
-            assert len([path for path in (web_config.project_dir / "records").iterdir() if path.is_dir()]) == 1
+            assert len([path for path in (web_config.project_dir / "records").iterdir() if path.is_dir() and (path / "run.json").is_file()]) == 1
             model.release.set()
             await finished(client, first["run_id"])
 
@@ -444,7 +444,7 @@ def test_static_spa_fallback_never_masks_api_or_asset_errors(web_config: WebConf
     async def scenario():
         """读取真实静态文件和深层页面，再检查两个不应触发SPA回退的路径。"""
         async with api_client(web_config) as (client, app):
-            for path in ["/", "/runs/example", "/settings"]:
+            for path in ["/", "/runs/example", "/settings", "/projects/nav-alpha"]:
                 response = await client.get(path)
                 assert response.status_code == 200
                 assert "test-console" in response.text

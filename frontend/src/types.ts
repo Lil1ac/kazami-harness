@@ -183,7 +183,11 @@ export interface RunResult {
 export interface RunView {
   run_id: string; // 可用于详情路由及订阅的 UUID。
   prompt: string; // 原始任务描述。
-  workspace: string; // 本次实际使用的工作区绝对路径。
+  workspace: string; // 工具、命令和验收实际使用的绝对目录。
+  execution_mode?: 'local' | 'isolated' | null; // 旧CLI未知可为空；网页会话固定此值。
+  source_path?: string | null; // 用户最初选择的目录。
+  source_kind?: 'project' | 'workspace' | null; // 项目测试与普通验收文案的来源。
+  local_changes?: LocalChangeView | null; // 原目录的本轮前后差异，隔离任务为空。
   created_at: string; // 带时区的创建时间。
   result: RunResult; // 持久化结果或安全构造的当前快照。
   phase: string; // 当前执行阶段。
@@ -218,6 +222,7 @@ export interface WorkspaceOption {
   label: string; // 可读名称。
   path: string; // 源目录说明。
   copy_on_run: boolean; // true 时每次运行使用独立副本。
+  is_example?: boolean; // 示例只在辅助入口出现。
 }
 
 /** 宿主预设验收器；固定样例在名称与说明中标明适用范围。 */
@@ -232,6 +237,8 @@ export interface ProjectOption {
   id: string; // 提交给 API 的受控项目标识。
   label: string; // 项目的可读名称。
   path: string; // 原始 Git 仓库目录，只读展示。
+  branch?: string | null; // 当前分支，分离HEAD时为HEAD。
+  test_command?: string; // 供项目设置编辑的完整命令，不经Shell执行。
   base_ref: string; // 默认提交引用，通常为 HEAD。
   head_commit: string | null; // 读取选项时的 HEAD 提交，不可用项目可能为 null。
   source_dirty: boolean; // 原目录是否包含不会带入任务的未提交改动。
@@ -265,8 +272,27 @@ export interface DiffResponse {
   size_bytes: number; // 完整补丁 UTF-8 字节数。
 }
 
+/** 用户明确打开的本机目录；Git元数据仅在kind=project时存在。 */
+export interface LocalProjectOption {
+  id: string; // 后续任务只提交这个稳定编号。
+  label: string; // 用户可读的文件夹名称。
+  path: string; // 真实本机路径，仅作展示。
+  kind: 'project' | 'workspace'; // Git项目或普通目录。
+  last_opened_at?: string | null; // 用户最后明确打开的时间，读取页面不更新。
+  available?: boolean; // false表示路径或Git状态暂不可用。
+  error?: string | null; // 不可用的具体原因。
+  branch?: string | null; // Git分支。
+  source_dirty?: boolean; // 原目录是否含未提交改动。
+  head_commit?: string | null; // 当前Git提交。
+  test_argv?: string[]; // 已固定的测试程序与参数；空数组表示未配置。
+  test_command?: string; // 编辑用测试命令。
+  test_timeout_seconds?: number; // 项目测试的秒级期限。
+}
+
 /** 启动能力选项；密钥仅返回是否配置，不返回值。 */
 export interface OptionsResponse {
+  recent_projects?: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
+  folder_picker_available?: boolean; // 本机原生文件夹选择器是否受支持。
   config: RunConfig; // 服务端默认配置。
   key_configured: boolean; // 进程中是否存在可用模型密钥。
   workspaces: WorkspaceOption[]; // 已登记目录。
@@ -288,6 +314,7 @@ export interface ConfigOverrides {
 /** 提交任务的受控 HTTP 请求体；不支持模型密钥或任意验收命令。 */
 export type CreateRunRequest = {
   prompt: string; // 非空任务文本。
+  execution_mode?: 'local' | 'isolated'; // 默认原目录，隔离必须明确选择；续聊不允许切换。
   expected_outputs: string[]; // 工作区相对产物路径。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
 } & (
@@ -335,6 +362,7 @@ export interface ConversationTurn {
 
 /** 会话读取结果；可继续为初步条件，提交时后端会重新核验实际代码。 */
 export interface ConversationView {
+  source?: ConversationSource | null; // 用于返回所属项目和在相同来源新建会话。
   continuation_notice?: string | null; // 中断后可以普通发送继续时的非阻断提示。
   session_id: string; // 会话根编号。
   latest_run_id: string; // 只允许从最新轮次追加。
@@ -343,4 +371,54 @@ export interface ConversationView {
   blocked_code: string | null; // 阻止原因码。
   blocked_reason: string | null; // 受控中文提示。
   busy_run_id: string | null; // 当前全局活动运行。
+}
+
+/** 创建会话时固定的来源；编号、类型和路径必须同时匹配当前登记。 */
+export interface ConversationSource {
+  id: string; // 原宿主登记编号，普通文件夹和Git项目统一导航。
+  kind: 'project' | 'workspace'; // 原目录类型。
+  label: string; // 可读项目名称。
+  path: string; // 原目录，而非逐轮派生目录。
+  registered: boolean; // 当前登记是否仍指向相同目录。
+  execution_mode?: 'local' | 'isolated'; // 同一会话中保持不变，旧副本按隔离。
+}
+
+/** 最新轮的有界导航状态，不携带完整回答和工具记录。 */
+export interface ConversationRunState {
+  execution_status: ExecutionStatus; // 最新轮执行结果。
+  validation_status: ValidationStatus; // 最新轮独立验收结果。
+  cleanup_status: CleanupStatus; // 最新轮清理结果。
+  active: boolean; // 运行或整理快照期间为true。
+  cancelling: boolean; // 是否已经明确请求取消。
+  interrupted: boolean; // 本服务没有执行、且历史缺少可信终态。
+  phase: string; // 当前真实阶段。
+}
+
+/** 一个会话只有一个入口，异常记录保留入口并显示受控原因。 */
+export interface ConversationSummary {
+  session_id: string; // 稳定会话编号。
+  title: string; // 首次用户要求形成的标题。
+  entry_run_id: string; // 正常进入最新轮，异常时进入可读轮次。
+  latest_run_id: string | null; // 以权威会话关系为准，未知时为空。
+  turn_count: number | null; // 已接纳用户轮数，记录损坏时未知。
+  created_at: string; // 会话创建时间。
+  updated_at: string; // 最后已落盘事件时间，查看不更新时间。
+  source: ConversationSource | null; // 旧CLI记录可能没有项目来源。
+  latest: ConversationRunState | null; // 最新轮不可核对时不显示旧轮通过。
+  error: string | null; // 关联或记录异常的中文说明。
+}
+
+/** 按完整会话筛选、排序和分页之后的导航结果。 */
+export interface ConversationPage {
+  items: ConversationSummary[]; // 当前页每会话一条。
+  total: number; // 筛选后的会话总数。
+  busy_run_id: string | null; // 真实全局单槽。
+}
+
+/** 原目录相对本轮开始状态的变化，不提供自动保留、丢弃或回滚原目录操作。 */
+export interface LocalChangeView {
+  status: 'pending' | 'ready' | 'error'; // 差异报告采集状态，与执行/验收分开。
+  files: { path: string; status: 'added' | 'modified' | 'deleted'; binary: boolean }[]; // 完整变化清单。
+  patch_available: boolean; // 固定文本差异可读取；二进制仅列变化。
+  warnings: string[]; // 超出范围或损坏时的受控提示。
 }

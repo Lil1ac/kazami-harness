@@ -490,3 +490,28 @@ Git 隔离改为一个会话一个工作树，prepare_turn 只登记新轮证据
 共15次离线模型轮次、12次工具调用；刷新及重启读取没有额外模型调用，未创建工作树或文件执行副本。第三轮完成后首轮 run.json、events.jsonl、summary.json 的 SHA-256 全部保持，实际页面首轮文件预览仍为 ROUND=1。专属项目与记录位于 `D:/Codex/Temp/harness-pruning-browser-20261028`。
 
 证据：[页面事实核对](../output/playwright/pruning-20261028/checks.json)、[设置页](../output/playwright/pruning-20261028/settings.png)、[首轮代码](../output/playwright/pruning-20261028/first-code.png)、[重启后第三轮](../output/playwright/pruning-20261028/restarted-third.png)、[第三轮后首轮产物](../output/playwright/pruning-20261028/first-artifact-after-third.png)。本轮不用于评估真实模型成功率或效率提升。
+
+### 2026-10-28：局部编辑的换行可靠性与失败原因展示
+
+统一 LF/CRLF 文件中的 old_text、新增多行 new_text 均按原文件格式处理，其他字符仍精确匹配；混合换行、仅 CR 和无换行文件维持原片段语义。独立 CR、歧义、无变化和指纹冲突在提交前拒绝。原BOM、未匹配字节、权限及末尾无换行保持；完整替换省略BOM也保留原编码标记。read_file 在原有有界指纹扫描中同时报告完整 newline，超过编辑预算时与 sha256 一起为 null。没有新增用户配置项或编辑旁路。
+
+展开会话执行过程即可看到局部编辑的真实失败说明，完整轨迹摘要同步展示；原始参数及结果按需展开，均纯文本转义。成功与失败来自工具事件，项目测试与单项工具结果分开展示。
+
+验证：
+
+- 后端完整回归 **657 passed、10 skipped**，336.39秒；跳过为 Windows 符号链接权限与 POSIX FIFO。
+- 前端 **22个测试文件、102项通过**，106.96秒；TypeScript、生产构建、Python语法与差异空白检查通过。保留既有JSDOM样式模拟和Vite大包提示。
+- 修改前用相同输入复现了5项换行失败：跨LF/CRLF的多行匹配、带BOM匹配以及单行命中后插入LF制造混合换行。新增64KiB块边界样例首次因默认用例名过长触发Windows临时路径限制，改用短编号后保持原输入和断言验收。
+- 回归覆盖完整文件换行分类、CRLF跨64KiB块、未知类型预算边界、BOM、无末尾换行、单行插入、混合换行精确编辑、大小写/空白不容错、重复/重叠片段、等价后无变化，以及原有外部改动和提交前二次指纹核验。
+
+页面使用独立18807离线服务。模型故意用LF片段操作CRLF文件，文件、Git、pytest、命令和原目录快照均实际执行：
+
+| 用户轮次 | 运行ID | 结果 |
+| --- | --- | --- |
+| 1 | 1aaa1665-c1e7-4205-a293-4c60438b6f90 | LF多行片段成功修复CRLF加法函数；结果逐字节等于预期，1项项目测试通过 |
+| 2 | a2d5cbcc-642c-4a7d-9d7a-26a2daf108ca | 单行旧片段插入LF多行空值检查，实际文件仍统一CRLF；2项测试通过，页面展示真实差异 |
+| 3 | 6bfff651-c8de-47c6-9f32-287b153a868f | 重启、刷新后模拟过期指纹；edit_file以file_changed拒绝，页面直接展示原因；原代码及测试文件SHA-256保持，原代码的2项测试仍通过 |
+
+共14次离线模型轮次、11次工具调用，供应商HTTP尝试为0。重启读取未创建额外运行，两轮核心记录SHA保持；第三轮未产生代码差异，首轮固定产物与差异仍与第一轮结束时一致。此验收证明功能链路，不用于推算真实模型成功率或调用成本收益。
+
+证据：[后端完整回归](../.runtime/newline-edit-tests/backend-full.txt)、[前端完整回归](../.runtime/newline-edit-tests/frontend-full.txt)、[页面事实核对](../output/playwright/newline-edit-20261028/proof.json)、[第二轮差异](../output/playwright/newline-edit-20261028/second-code.png)、[冲突原因](../output/playwright/newline-edit-20261028/conflict-message.png)。专属项目和运行记录保留于 `D:/Codex/Temp/harness-newline-edit-browser-20261028`。

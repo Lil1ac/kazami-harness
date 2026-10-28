@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { activitySteps } from './activity';
+import { activitySteps, toolFailureMessage } from './activity';
 import { makeEvent } from './test/fixtures';
 
 it('按调用编号配对工具，保留真实参数与失败结果', () => {
@@ -86,5 +86,21 @@ it('局部编辑显示文件与真实替换参数，版本冲突保留失败原�
     state: 'failed',
     arguments: args,
     result,
+    errorMessage: '文件已变化，请重新读取',
   });
+});
+
+it('错误说明只来自明确失败的工具结果，损坏字段和成功结果不伪造失败', () => {
+  // 终态和原始载荷可能不完整，不能因出现error字段就把成功步骤改成失败。
+  for (const result of [
+    null,
+    'damaged',
+    { ok: true, error: { message: '过期错误' } },
+    { ok: false, error: { message: 123 } },
+    { ok: false, error: { message: ' ' } },
+  ])
+    expect(toolFailureMessage(result)).toBeNull();
+  expect(
+    toolFailureMessage({ ok: false, error: { message: '原片段匹配多处，请补充上下文。' } }),
+  ).toBe('原片段匹配多处，请补充上下文。');
 });

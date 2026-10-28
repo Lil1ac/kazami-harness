@@ -1736,6 +1736,12 @@ pre {
   padding: 0;
   list-style: none;
 }
+.activity-error {
+  margin: 5px 0;
+  color: #b66350;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .activity-steps > li {
   display: grid;
   grid-template-columns: 13px minmax(0, 1fr);

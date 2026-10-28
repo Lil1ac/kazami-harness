@@ -18,9 +18,9 @@ from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, 
 
 _TOOL_SPECS = {
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
-    "read_file": (ReadFileArguments, "只读工作区 UTF-8 文件；offset/max_bytes 按字节计数。如 eof=false，使用 next_offset 继续读取直到完成。sha256 是完整文件版本；超过文件写入预算时为 null，不可 edit_file。"),
+    "read_file": (ReadFileArguments, "只读工作区UTF-8文件；offset/max_bytes按字节，next_offset用于继续分页。sha256是完整原字节指纹，newline是完整文件的lf/crlf/cr/mixed/none；超出编辑预算时两者为null，不可edit_file。"),
     "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
-    "edit_file": (EditFileArguments, "局部修改已有 UTF-8 文件：先 read_file 取得 sha256，用 expected_sha256 校验当前版本；old_text 必须包含原换行且唯一匹配，new_text 可为空。file_changed 时重新读取，禁止盲目重试或改用覆盖绕过冲突。"),
+    "edit_file": (EditFileArguments, "局部修改已有UTF-8文件：先read_file取得sha256，用expected_sha256校验完整版本。old_text须唯一匹配；统一LF/CRLF等价并保持原格式，mixed/cr须提供原换行。new_text可为空。file_changed或edit_not_found时重读核对，edit_ambiguous时增加上下文；禁止原样盲重试或覆盖绕过冲突。"),
     "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件优先使用 edit_file；整文件覆盖必须显式 overwrite=true，不具备版本冲突检查。写入有大小上限。"),
     "run_command": (RunCommandArguments, "用 argv 数组在工作区运行程序，不自动解析 Shell；python/python3 使用项目配置或 PATH 解析的本轮解释器，并加载当轮工作区源码目录，返回退出码、输出、超时与清理状态。"),
 }

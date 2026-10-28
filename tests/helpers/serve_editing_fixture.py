@@ -30,19 +30,25 @@ class EditingModel:
         """根据本轮工具观察返回下一项调用或最终回答；输入来自真实 Agent 循环，不直接修改文件。"""
         latest = max(index for index, message in enumerate(messages) if message["role"] == "user")
         observations = [json.loads(message["content"]) for message in messages[latest + 1:] if message["role"] == "tool"]
+        conflict = "版本冲突" in messages[latest]["content"]  # 专用任务故意使用过期指纹，核对页面展示真实工具失败。
+        stage = len(observations)
+        if conflict and stage == 2:
+            assert observations[-1]["ok"] is False and observations[-1]["error"]["code"] == "file_changed"
+            return ModelResponse(message={"role": "assistant", "content": "本轮编辑被版本核验拒绝，原文件未修改；请重新读取后再编辑。"},
+                                 tool_calls=[], finish_reason="stop", response_model="offline-editing")
         assert all(result["ok"] for result in observations), observations
         assert "edit_file" in {item["function"]["name"] for item in tools}
         following = "空值" in messages[latest]["content"] or "None" in messages[latest]["content"]
-        stage = len(observations)
         if stage == 0:
             name, arguments = "read_file", {"path": "calculator.py"}
         elif stage == 1:
             data = observations[0]["data"]
-            newline = "\r\n" if "\r\n" in data["content"] else "\n"
-            old = "return a + b" if following else "return a - b"
-            new = ("if a is None or b is None:" + newline + "        raise ValueError('参数不能为空')"
-                   + newline + "    return a + b") if following else "return a + b"
-            name, arguments = "edit_file", {"path": "calculator.py", "old_text": old, "new_text": new, "expected_sha256": data["sha256"]}
+            # 模型统一使用LF片段，首轮多行匹配与续轮插入均由产品保持原CRLF格式。
+            old = "return a + b" if following else 'def add(a, b):\n    """返回两数之和。"""\n    return a - b'
+            new = ("if a is None or b is None:\n        raise ValueError('参数不能为空')\n    return a + b"
+                   if following else old.replace("return a - b", "return a + b"))
+            name, arguments = "edit_file", {"path": "calculator.py", "old_text": old, "new_text": new,
+                                            "expected_sha256": "0" * 64 if conflict else data["sha256"]}
         elif stage == 2:
             if following:
                 name, arguments = "read_file", {"path": "test_calculator.py"}
@@ -88,13 +94,14 @@ def fixture_app(root: Path, frontend_dist: Path):
 
 
 def main() -> None:
-    """启动 --port 指定服务（默认18786）；仅使用专属离线密钥与持久化夹具目录。"""
+    """启动--port指定服务（默认18786）；--root为专属持久目录，省略使用本轮D盘目录，返回None。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18786)
+    parser.add_argument("--root", type=Path, default=Path("D:/Codex/Temp/harness-newline-edit-browser-20261028"))
     args = parser.parse_args()
     project = Path(__file__).resolve().parents[2]
     os.environ["DEEPSEEK_API_KEY"] = "offline-editing-fixture"
-    app = fixture_app(project / ".runtime/edit-file-browser-20261026", project / "frontend/dist")
+    app = fixture_app(args.root.resolve(), project / "frontend/dist")
     uvicorn.run(app, host="127.0.0.1", port=args.port, loop="asyncio", timeout_graceful_shutdown=2)
 
 

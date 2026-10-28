@@ -196,7 +196,7 @@ max_model_turns 计算逻辑请求轮次；max_tool_calls 计算被模型提出�
 
 | 工具 | 参数与结果约定 |
 | --- | --- |
-| read_file | path、offset、max_bytes；按字节分页返回 content、next_offset、size_bytes；可编辑大小文件另返回完整原字节 sha256，超限为 null；截断保持字符边界 |
+| read_file | path、offset、max_bytes；按字节分页返回 content、next_offset、size_bytes；可编辑大小文件另返回完整原字节 sha256 和完整换行类型 newline，超限时两者为 null；截断保持字符边界 |
 | search_files | query、directory、glob、limit；首版做字面量文本搜索，返回相对路径和行号；限制扫描文件数/体积并报告跳过项，不依赖系统 rg |
 | write_file | path、content、overwrite（默认 false，覆盖必须显式指定）；UTF-8 写入，超出大小限制先拒绝；同目录临时文件后原子替换，返回相对路径和修改标识 |
 | edit_file | path、old_text、new_text、expected_sha256；原文唯一匹配且指纹一致才替换，返回 replacements=1、新 sha256 和 bytes_written；空 new_text 表示删除 |
@@ -216,9 +216,11 @@ read_file 使用有界短同步读取，取消和超时在协作让出执行时�
 
 
 
-edit_file 的 expected_sha256 必须使用最近 read_file 或成功 edit_file 返回的完整文件指纹，不能使用分页内容的哈希或过期历史中的值。old_text 是区分大小写、包含原换行的精确原文；匹配不存在返回 edit_not_found，出现多处或重叠匹配返回 edit_ambiguous，无变化返回 edit_no_change。只处理单文件单片段，不执行全局替换、模糊匹配、自动换行转换或自动格式化。
+edit_file 的 expected_sha256 必须使用最近 read_file 或成功 edit_file 返回的完整原字节指纹，不能使用分页哈希或过期历史值。old_text 区分大小写，空白及其他字符必须保持原文。仅当整份文件统一使用 LF 或 CRLF 时，将 old_text/new_text 的 LF、CRLF 转为原文件格式后唯一匹配并替换；单行匹配后插入的多行内容也保持该格式。混合换行、仅 CR 或无换行文件按传入片段精确处理，不推断转换方式。
 
-原文件与编辑结果均受 max_file_write_bytes 限制（默认1 MiB）；read_file 为预算内文件按64 KiB块计算完整SHA-256，不扩大返回的分页内容。更大文件仍可分页读取，但 sha256=null，不能使用 edit_file。原文件必须是无空字节的有效UTF-8；不可编码、二进制及超限均在提交前拒绝。编辑保留原BOM、未匹配字节与权限位，成功后同样登记工作区产物，沿用逐轮固定差异与产物快照。
+匹配不存在返回 edit_not_found；混合换行未命中时说明必须保留原换行。多处或重叠匹配返回 edit_ambiguous；按原格式及 BOM 处理后字节不变返回 edit_no_change。统一 LF/CRLF 文件的请求片段含独立 CR 时返回 edit_newline_mismatch，防止截断 CRLF 或制造混合换行。上述失败都发生在写临时文件之前；文件已变化仍先按 file_changed 拒绝。只处理单文件单片段，不做大小写、缩进等模糊匹配或全局替换。
+
+原文件与编辑结果均受 max_file_write_bytes 限制（默认1 MiB）。read_file 在同一64 KiB分块扫描内计算完整SHA-256与 newline：lf、crlf、cr、mixed、none（无换行），CRLF跨块也按一对计数；此值描述整份文件，不扩大分页正文。超预算文件仍可分页，但 sha256/newline 均为null，不能使用 edit_file。原文件必须是无空字节的有效UTF-8；不可编码、二进制及超限均在提交前拒绝。编辑保留原BOM、未匹配字节与权限位；整段替换省略原BOM时也保留标记，不额外补文件末尾换行。成功后登记工作区产物，沿用逐轮固定差异与产物快照。
 
 编辑先核对内容指纹和文件状态，写同目录临时文件并落盘，再次核对版本、对象和路径后原子替换；file_changed 要求重新读取再判断，不自动退回 overwrite=true。读取和编辑遇到变化均返回受控错误，系统异常不回显路径或输入。Windows stat/fstat 的 ctime 语义可能不同，元数据核验采用文件对象、大小、修改时间和权限位，内容版本采用SHA-256。该机制是乐观并发检查，不是对任意宿主进程的强锁：最后一次核验与替换之间仍有小窗口，沿用可信本地边界；已有 write_file 的显式整文件覆盖不因此获得版本核验。
 

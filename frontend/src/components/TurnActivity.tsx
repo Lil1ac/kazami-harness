@@ -73,6 +73,7 @@ export function TurnActivity({ runId, liveEvents, active, phase, onInspect }: Tu
                 </span>
                 <div>
                   <span className="activity-label">{step.label}</span>
+                  {step.errorMessage && <p className="activity-error">{step.errorMessage}</p>}
                   <details className="activity-payload">
                     <summary>参数与结果</summary>
                     {step.arguments !== null && <pre>{pretty(step.arguments)}</pre>}

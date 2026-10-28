@@ -74,6 +74,8 @@ def test_paginated_read_hashes_whole_file_and_edit_preserves_other_bytes(tmp_pat
     ("alpha alpha", "alpha", "new", "edit_ambiguous"),
     ("aaa", "aa", "new", "edit_ambiguous"),
     ("alpha", "alpha", "alpha", "edit_no_change"),
+    ("Alpha\r\n", "alpha\n", "new\n", "edit_not_found"),
+    ("  alpha\r\n", "   alpha\n", "new\n", "edit_not_found"),
 ])
 def test_missing_ambiguous_overlapping_and_noop_edits_leave_original(tmp_path: Path, content: str, old: str, new: str, code: str) -> None:
     """唯一匹配或有效修改条件不成立时，错误明确且没有任何写入产物。"""
@@ -201,14 +203,116 @@ def test_read_detects_change_while_fingerprinting(tmp_path: Path, monkeypatch) -
     tool = executor(tmp_path)
     path = tool.workspace / "app.py"
     path.write_bytes(b"original")
-    original_hash = files._hash_open_file
+    original_inspect = files._inspect_open_file
 
-    def hash_then_change(stream, max_bytes):
-        """完成真实有界哈希后变更目标，复现页面和版本不一致的读取窗口。"""
-        value = original_hash(stream, max_bytes)
+    def inspect_then_change(stream, max_bytes):
+        """完成stream的max_bytes有界指纹/换行检查后改动目标，返回原检查结果以复现不一致窗口。"""
+        value = original_inspect(stream, max_bytes)
         path.write_bytes(b"external")
         return value
 
-    monkeypatch.setattr(files, "_hash_open_file", hash_then_change)
+    monkeypatch.setattr(files, "_inspect_open_file", inspect_then_change)
     error(call(tool, "read_file", path="app.py"), "file_changed")
     assert path.read_bytes() == b"external"
+
+
+@pytest.mark.parametrize("raw,style", [
+    (b"", "none"), (b"one line", "none"), (b"a\nb\n", "lf"),
+    (b"a\r\nb\r\n", "crlf"), (b"a\rb\r", "cr"),
+    (b"a\r\nb\n", "mixed"), (b"a\rb\n", "mixed"),
+    (b"x" * 65535 + b"\r\nlast", "crlf"),
+], ids=["empty", "single-line", "lf", "crlf", "cr", "mixed-lf", "mixed-cr", "block-boundary"])
+def test_read_reports_whole_file_newline_style_without_expanding_page(tmp_path: Path, raw: bytes, style: str) -> None:
+    """raw覆盖各种换行及64KiB块边界；小页仍报告完整文件的style，返回None且不修改字节。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    path.write_bytes(raw)
+    page = call(tool, "read_file", path="app.py", max_bytes=1)
+    assert page["ok"] and page["data"]["newline"] == style
+    assert page["data"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert page["data"]["bytes_read"] <= 1
+    assert path.read_bytes() == raw
+
+
+def test_read_does_not_infer_whole_file_newline_outside_edit_budget(tmp_path: Path) -> None:
+    """超过编辑预算时仍可分页，但完整换行与指纹都未知；返回None，不扩大扫描范围。"""
+    tool = executor(tmp_path, max_bytes=4)
+    (tool.workspace / "app.py").write_bytes(b"abc\r\ntail")
+    result = call(tool, "read_file", path="app.py", max_bytes=3)
+    assert result["ok"] and result["data"]["content"] == "abc"
+    assert result["data"]["sha256"] is None and result["data"]["newline"] is None
+
+
+@pytest.mark.parametrize("source_eol,request_eol", [("\r\n", "\n"), ("\n", "\r\n")])
+@pytest.mark.parametrize("bom", ["", "\ufeff"])
+def test_equivalent_newlines_preserve_bom_unmatched_content_and_missing_final_newline(tmp_path: Path, source_eol: str, request_eol: str, bom: str) -> None:
+    """源文件与请求换行不同仍能唯一编辑；source_eol、bom及未匹配尾部按原字节保留，返回None。"""
+    tool = executor(tmp_path)
+    lines = [bom + "# 中文🙂保持", "def add(a, b):", "    return a - b", "# 尾部不加换行"]
+    original = source_eol.join(lines).encode("utf-8")
+    path = tool.workspace / "app.py"
+    path.write_bytes(original)
+    old = request_eol.join(lines[1:3])
+    new = request_eol.join(["def add(a, b):", "    # 新增说明", "    return a + b"])
+    result = edit(tool, old, new)
+    expected = source_eol.join([*lines[:1], "def add(a, b):", "    # 新增说明", "    return a + b", *lines[3:]]).encode("utf-8")
+    assert result["ok"], result
+    assert path.read_bytes() == expected
+    assert result["data"]["sha256"] == hashlib.sha256(expected).hexdigest()
+
+
+def test_exact_single_line_match_normalizes_inserted_newlines_to_source_style(tmp_path: Path) -> None:
+    """单行旧片段可精确命中时，新增多行仍采用原CRLF；返回None，防止成功编辑制造混合换行。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    path.write_bytes(b"prefix\r\nold\r\nsuffix\r\n")
+    assert edit(tool, "old", "new\nnext")["ok"]
+    assert path.read_bytes() == b"prefix\r\nnew\r\nnext\r\nsuffix\r\n"
+
+
+def test_replacing_complete_bom_file_preserves_encoding_marker(tmp_path: Path) -> None:
+    """完整原片段包含BOM而新片段省略时仍保留原编码标记和CRLF；返回None。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    path.write_bytes("\ufeffold\r\n".encode("utf-8"))
+    assert edit(tool, "\ufeffold\n", "new\n")["ok"]
+    assert path.read_bytes() == "\ufeffnew\r\n".encode("utf-8")
+
+
+def test_removing_only_bom_is_no_change_and_has_no_artifact(tmp_path: Path) -> None:
+    """局部工具保持原BOM；仅试图去除编码标记时按无变化拒绝，返回None且没有写入产物。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    path.write_bytes("\ufeffsame\n".encode("utf-8"))
+    error(edit(tool, "\ufeffsame\n", "same\r\n"), "edit_no_change")
+    assert path.read_bytes() == "\ufeffsame\n".encode("utf-8") and not tool.artifact_refs
+
+
+def test_mixed_newlines_require_exact_old_fragment_and_preserve_new_fragment(tmp_path: Path) -> None:
+    """混合换行不进行等价匹配；精确片段可编辑且其他字节保持，返回None。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    original = b"first\r\nold\r\nlast\n"
+    path.write_bytes(original)
+    rejected = edit(tool, "first\nold\n", "new\n")
+    error(rejected, "edit_not_found")
+    assert "混合换行" in rejected["error"]["message"]
+    assert path.read_bytes() == original and not tool.artifact_refs
+    assert edit(tool, "first\r\nold\r\n", "new\r\n")["ok"]
+    assert path.read_bytes() == b"new\r\nlast\n"
+
+
+@pytest.mark.parametrize("original,old,new,code", [
+    (b"same\r\nsame\r\n", "same\n", "new\n", "edit_ambiguous"),
+    (b"a\r\n", "a\n", "a\r\n", "edit_no_change"),
+    (b"old\r\n", "old", "new\ronly", "edit_newline_mismatch"),
+    (b"old\r\n", "old\r", "new", "edit_newline_mismatch"),
+])
+def test_newline_handling_rejects_ambiguity_noop_and_partial_crlf(tmp_path: Path, original: bytes, old: str, new: str, code: str) -> None:
+    """original与片段覆盖换行等价后的歧义、无修改及孤立CR；按code拒绝且不产生副作用，返回None。"""
+    tool = executor(tmp_path)
+    path = tool.workspace / "app.py"
+    path.write_bytes(original)
+    error(edit(tool, old, new), code)
+    assert path.read_bytes() == original and not tool.artifact_refs
+    assert list(tool.workspace.glob(".harness-edit-*")) == []

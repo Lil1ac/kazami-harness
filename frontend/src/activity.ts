@@ -7,6 +7,7 @@ export interface ActivityStep {
   state: 'running' | 'passed' | 'failed' | 'unknown'; // 仅由已保存结果确定。
   arguments: unknown; // 工具原始参数，展示时按纯文本转义。
   result: unknown; // 实际结果；尚未返回时为空。
+  errorMessage: string | null; // 局部编辑的真实失败说明；无失败或字段无法核对时为空。
 }
 const toolLabels: Record<string, string> = {
   read_file: '读取文件',
@@ -25,6 +26,17 @@ function argumentsValue(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+/** 从result读取已确认失败的工具说明；字段不完整、非字符串或成功结果返回null，不推断原因。 */
+export function toolFailureMessage(result: unknown): string | null {
+  if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== false)
+    return null;
+  if (!('error' in result) || !result.error || typeof result.error !== 'object') return null;
+  const error = result.error;
+  return 'message' in error && typeof error.message === 'string' && error.message.trim()
+    ? error.message
+    : null;
 }
 
 /** 从有界events投影工具/验收；active默认false，缺少结果只在确认活动时显示执行中。 */
@@ -48,6 +60,7 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
         state: 'running',
         arguments: args,
         result: null,
+        errorMessage: null,
       };
       tools.set(id, step);
       steps.push(step);
@@ -61,12 +74,14 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
           state: 'unknown',
           arguments: null,
           result: null,
+          errorMessage: null,
         };
         steps.push(step);
       }
       const result = payload.result as { ok?: unknown } | null;
       step.result = payload.result;
       step.state = result?.ok === true ? 'passed' : result?.ok === false ? 'failed' : 'unknown';
+      step.errorMessage = payload.name === 'edit_file' ? toolFailureMessage(payload.result) : null;
     } else if (event.type === 'verification_started') {
       verification = {
         id: `verification-${event.seq}`,
@@ -74,6 +89,7 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
         state: 'running',
         arguments: null,
         result: null,
+        errorMessage: null,
       };
       steps.push(verification);
     } else if (event.type === 'verification_result') {
@@ -83,6 +99,7 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
         state: 'unknown',
         arguments: null,
         result: null,
+        errorMessage: null,
       };
       if (!steps.includes(verification)) steps.push(verification);
       const result = payload.verification as { status?: string } | null;

@@ -48,6 +48,10 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
                 edits = [event for event in events if event["type"] == "tool_result" and event["payload"]["name"] == "edit_file"]
                 assert len(edits) == 1 and edits[0]["payload"]["result"]["ok"]
                 assert edits[0]["payload"]["result"]["data"]["replacements"] == 1
+                reads = [event for event in events if event["type"] == "tool_result" and event["payload"]["name"] == "read_file"]
+                assert reads[0]["payload"]["result"]["data"]["newline"] == "crlf"
+                started = next(event for event in events if event["type"] == "tool_started" and event["payload"]["name"] == "edit_file")
+                assert "\\n" in started["payload"]["arguments_json"] and "\\r" not in started["payload"]["arguments_json"]
                 old_diff = (await client.get("/api/runs/" + first["run_id"] + "/diff")).json()
                 old_artifact = (await client.get("/api/runs/" + first["run_id"] + "/artifacts", params={"location": "workspace", "path": "calculator.py", "preview": True})).json()
                 files = ["run.json", "events.jsonl", "summary.json"]
@@ -66,6 +70,8 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
                 assert "raise ValueError" in (selected / "calculator.py").read_text(encoding="utf-8")
                 assert (selected / "calculator.py").read_bytes().endswith("# 用户手动补充保持\r\n".encode("utf-8"))
                 assert SOURCE.split("\r\n\r\ndef untouched", 1)[1].encode("utf-8") in (selected / "calculator.py").read_bytes()
+                code_bytes = (selected / "calculator.py").read_bytes()
+                assert b"\n" not in code_bytes.replace(b"\r\n", b"")
                 assert (await client.get("/api/runs/" + first["run_id"] + "/diff")).json() == old_diff
                 assert (await client.get("/api/runs/" + first["run_id"] + "/artifacts", params={"location": "workspace", "path": "calculator.py", "preview": True})).json() == old_artifact
                 assert evidence == {name: hashlib.sha256((root / "runs" / first["run_id"] / name).read_bytes()).hexdigest() for name in files}

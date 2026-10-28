@@ -87,7 +87,7 @@ uv --cache-dir .uv-cache run harness show RUN_ID --json
 
 ## 配置与运行结果
 
-根目录的 `harness.example.toml` 配置模型、工具、上下文和内部限制；普通设置页只开放模型、工具、模型轮次、工具次数和总时限。项目目录可直接从页面打开。`web.example.toml` 可选登记初始项目、工作区和验收器，启动时用 `--web-config web.example.toml` 加载。内置默认只启用 `read_file`，显式传入示例运行配置才启用读、搜、写、局部编辑和命令五类工具。修改已有文件可使用带版本核验的 edit_file；具体协议见 [文件工具](docs/TECH_DESIGN_V0.1.md#6-文件与命令工具及本地执行边界)。CLI 可用 `--model` 和 `--max-model-turns` 覆盖配置。
+根目录的 `harness.example.toml` 配置模型、工具、上下文和内部限制；普通设置页只开放模型、工具、模型轮次、工具次数和总时限。项目目录可直接从页面打开。`web.example.toml` 可选登记初始项目、工作区和验收器，启动时用 `--web-config web.example.toml` 加载。内置默认只启用 `read_file`，显式传入示例运行配置才启用读、搜、写、局部编辑和命令五类工具。修改已有文件可使用带版本核验的 edit_file，统一 LF/CRLF 文件支持等价匹配并保持原换行与 BOM；具体协议见 [文件工具](docs/TECH_DESIGN_V0.1.md#6-文件与命令工具及本地执行边界)。CLI 可用 `--model` 和 `--max-model-turns` 覆盖配置。
 
 执行、验收和清理分别记录；模型回答结束不代表产物正确。退出码如下，PowerShell 用 `$LASTEXITCODE` 查看：
 

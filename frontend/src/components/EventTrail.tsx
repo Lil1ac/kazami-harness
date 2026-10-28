@@ -3,6 +3,7 @@ import { CheckOutlined, ToolOutlined, MessageOutlined, LoadingOutlined } from '@
 import type { ConnectionState } from '../hooks/useRunEvents';
 import { duration, pretty } from '../format';
 import { formatContextBytes, instructionStatusLabels } from '../context';
+import { toolFailureMessage } from '../activity';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
@@ -64,8 +65,13 @@ function eventSummary(event: RunEvent): string {
     );
   if (event.type === 'model_request_started' && payload.purpose === 'summary')
     return '生成历史工作摘要';
-  if (event.type === 'tool_started' || event.type === 'tool_result')
-    return String(payload.name ?? '');
+  if (event.type === 'tool_started' || event.type === 'tool_result') {
+    const failure =
+      event.type === 'tool_result' && payload.name === 'edit_file'
+        ? toolFailureMessage(payload.result)
+        : null;
+    return String(payload.name ?? '') + (failure ? ` · ${failure}` : '');
+  }
   if (event.type === 'model_request_started')
     return `第 ${String(payload.model_turn ?? '—')} 轮 · ${String(payload.requested_model ?? '')}`;
   if (event.type === 'assistant_message') {

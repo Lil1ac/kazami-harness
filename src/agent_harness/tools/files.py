@@ -8,7 +8,7 @@ import stat
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from pydantic import Field, field_validator
 
@@ -76,19 +76,40 @@ def _file_signature(info: os.stat_result) -> tuple[int, int, int, int, int]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode
 
 
-def _hash_open_file(stream: BinaryIO, max_bytes: int) -> str:
-    """从已打开句柄计算完整 SHA-256；最多读取 max_bytes+1 字节，超限以 file_changed 拒绝。
+# 整份文件的换行类型；none表示没有换行，mixed包含多种换行，超出扫描预算另用None表示未知。
+NewlineStyle = Literal["lf", "crlf", "cr", "mixed", "none"]
 
-    stream 的位置会移动到末尾；调用方负责路径、普通文件和前后状态检查。
+
+def _newline_style(line_feeds: int, carriage_returns: int, pairs: int) -> NewlineStyle:
+    """根据完整计数返回换行类型，不访问文件；line_feeds/carriage_returns包含pairs中的字符。
+
+    三个参数分别是LF、CR字符总数与CRLF对数；无换行返回none，多种换行返回mixed。
+    """
+    counts = {"lf": line_feeds - pairs, "crlf": pairs, "cr": carriage_returns - pairs}
+    present = [kind for kind, count in counts.items() if count]
+    return "none" if not present else present[0] if len(present) == 1 else "mixed"
+
+
+def _inspect_open_file(stream: BinaryIO, max_bytes: int) -> tuple[str, NewlineStyle]:
+    """从stream同时计算完整SHA-256和换行类型，返回二元组；max_bytes为完整检查的字节预算。
+
+    最多读取max_bytes+1字节，超限抛file_changed；以64KiB块扫描且处理跨块CRLF。
+    句柄位置移至末尾，调用方负责路径、普通文件和前后状态检查，不扩大模型可见内容。
     """
     stream.seek(0)
     digest = hashlib.sha256()
     remaining = max_bytes + 1
+    line_feeds = carriage_returns = pairs = 0  # 原始字符和配对数量，用于完整文件分类。
+    previous_cr = False  # 上一个块以CR结尾时，下一块首个LF仍与其属于同一CRLF。
     while remaining:
         block = stream.read(min(65536, remaining))
         if not block:
-            return digest.hexdigest()
+            return digest.hexdigest(), _newline_style(line_feeds, carriage_returns, pairs)
         digest.update(block)
+        line_feeds += block.count(b"\n")
+        carriage_returns += block.count(b"\r")
+        pairs += block.count(b"\r\n") + int(previous_cr and block.startswith(b"\n"))
+        previous_cr = block.endswith(b"\r")
         remaining -= len(block)
     raise FileToolError("file_changed", "文件在读取期间变大，请重新读取后编辑。")
 
@@ -100,11 +121,12 @@ def read_file(
     preview_chars: int,
     max_edit_bytes: int,
 ) -> dict:
-    """读取工作区普通文件的一页 UTF-8 内容，返回分页位置、大小与完整内容指纹。
+    """读取工作区普通文件的一页UTF-8内容，返回分页位置、大小、完整内容指纹与换行类型。
 
     workspace/runs_root 限定访问范围；arguments 的 offset/max_bytes 均为字节，
     preview_chars 限制可见字符。大小不超过 max_edit_bytes 的文件额外按有界块计算
-    sha256，供 edit_file 校验；更大文件仍可分页但 sha256 为 None，不整文件加载。
+    sha256与newline，供edit_file校验和选择原文；更大文件仍可分页，两字段均为None。
+    newline为lf/crlf/cr/mixed/none之一，始终描述完整文件而非当前页，不整文件加载。
     读取前后状态变化、编码或偏移错误转为 FileToolError；本函数不修改文件。
     """
     path = _resolve_file(workspace, runs_root, arguments.path)
@@ -130,7 +152,7 @@ def read_file(
             stream.seek(arguments.offset)
             # 分页与指纹共用句柄；指纹最多扫描编辑预算内的文件，不扩大模型可见内容。
             raw = stream.read(arguments.max_bytes + 4)
-            sha256 = _hash_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else None
+            sha256, newline = _inspect_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else (None, None)
             if (_file_signature(before) != _file_signature(opened)
                     or _file_signature(os.fstat(stream.fileno())) != _file_signature(opened)
                     or _file_signature(path.stat()) != _file_signature(opened)
@@ -151,6 +173,7 @@ def read_file(
             "eof": eof,
             "size_bytes": opened.st_size,
             "sha256": sha256,
+            "newline": newline,
         }
     except FileToolError:
         raise
@@ -478,11 +501,11 @@ def write_file(
 
 
 class EditFileArguments(DataModel):
-    """已有文件的单片段精确替换；版本与匹配均通过后才允许提交。"""
+    """已有文件的单片段替换；仅统一LF/CRLF等价，版本与唯一匹配通过后才允许提交。"""
 
     path: str = Field(min_length=1, description="工作区内已存在的普通 UTF-8 文件。")
-    old_text: str = Field(min_length=1, description="区分大小写、包含原换行的完整旧片段，必须恰好匹配一处。")
-    new_text: str = Field(description="替换为此文本；空字符串表示删除旧片段，不自动格式化或转换换行。")
+    old_text: str = Field(min_length=1, description="区分大小写的完整旧片段，必须唯一匹配。统一LF/CRLF文件允许这两种换行等价；混合换行或仅CR文件须保留原换行。")
+    new_text: str = Field(description="替换文本，空字符串表示删除；统一LF/CRLF文件按原格式写入，混合换行、仅CR或无换行文件按传入文本写入。不改缩进或其他内容。")
     expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", description="最近 read_file 或成功 edit_file 返回的完整文件 sha256；不可使用历史证据中的过期值。")
 
     @field_validator("path")
@@ -524,11 +547,29 @@ def _edit_source(boundary: Workspace, requested: str, path: Path, expected: str,
     return raw, opened
 
 
+def _edit_fragments(text: str, old: str, new: str) -> tuple[str, str, NewlineStyle]:
+    """按text整份原文的换行处理old/new片段，返回匹配片段、替换片段及原换行类型。
+
+    仅统一LF/CRLF文件执行等价转换，孤立CR抛edit_newline_mismatch，避免截断CRLF；
+    混合、仅CR和无换行文件按原片段精确处理。不改原文、空格、大小写或Unicode字符。
+    """
+    style = _newline_style(text.count("\n"), text.count("\r"), text.count("\r\n"))
+    if style not in {"lf", "crlf"}:
+        return old, new, style
+    old, new = old.replace("\r\n", "\n"), new.replace("\r\n", "\n")
+    if "\r" in old or "\r" in new:
+        raise FileToolError("edit_newline_mismatch", "片段含有独立CR，请使用完整LF或CRLF换行；原文件未修改。")
+    if style == "crlf":
+        old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
+    return old, new, style
+
+
 def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, max_bytes: int) -> dict:
     """按版本校验替换已有文件的唯一片段，返回新指纹、替换数量和文件字节数。
 
     workspace/runs_root 固定路径边界；arguments 提供原片段、新片段及最近读取指纹。
-    max_bytes 同时约束原文件和结果大小。原字节中的 BOM、换行及未匹配内容保持；
+    max_bytes同时约束原文件和结果大小；统一LF/CRLF文件转换请求片段的换行后匹配，
+    混合、仅CR和无换行文件精确匹配。原BOM及未匹配内容保持，统一换行格式保持；
     不存在、歧义、版本冲突或失败提交均保留原目标。提交前再次核对版本和路径，
     然后同目录原子替换并保留权限位；这是乐观并发检查，不是跨进程文件锁。
     """
@@ -545,15 +586,21 @@ def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, ma
             arguments.new_text.encode("utf-8", errors="strict")
         except (UnicodeDecodeError, UnicodeEncodeError):
             raise FileToolError("invalid_encoding", "原文件和替换片段必须是有效 UTF-8 文本。") from None
-        first = text.find(arguments.old_text)
+        old, new, newline = _edit_fragments(text, arguments.old_text, arguments.new_text)
+        first = text.find(old)
         if first < 0:
-            raise FileToolError("edit_not_found", "没有找到原片段，请重新读取并提供精确的原文。")
+            hint = "文件包含混合换行，old_text必须保留读取结果中的原换行。" if newline == "mixed" else "请重新read_file并核对原文、大小写和空白。"
+            raise FileToolError("edit_not_found", "没有找到原片段；" + hint)
         # 从 first+1 继续检查，重复且重叠的片段也属于歧义，不能只用 str.count。
-        if text.find(arguments.old_text, first + 1) >= 0:
+        if text.find(old, first + 1) >= 0:
             raise FileToolError("edit_ambiguous", "原片段匹配多处，请包含更多上下文使其唯一。")
-        if arguments.old_text == arguments.new_text:
-            raise FileToolError("edit_no_change", "原片段与新片段相同，没有需要提交的修改。")
-        result = (text[:first] + arguments.new_text + text[first + len(arguments.old_text):]).encode("utf-8")
+        updated = text[:first] + new + text[first + len(old):]
+        # BOM属于原文件编码格式，整段替换时模型省略BOM也不应把它删除。
+        if text.startswith("\ufeff") and not updated.startswith("\ufeff"):
+            updated = "\ufeff" + updated
+        result = updated.encode("utf-8")
+        if result == raw:
+            raise FileToolError("edit_no_change", "替换后内容没有变化，原文件未修改。")
         if len(result) > max_bytes:
             raise FileToolError("file_size_limit", "编辑结果超过文件写入字节上限。")
         descriptor, name = tempfile.mkstemp(prefix=".harness-edit-", suffix=".tmp", dir=path.parent)

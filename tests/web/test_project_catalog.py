@@ -187,7 +187,7 @@ def test_plain_directory_and_unborn_git_have_distinct_modes(tmp_path: Path):
             by_id = {item["id"]:item for item in options["recent_projects"]}
             assert by_id[ordinary_id]["kind"] == "workspace"
             assert by_id[unborn_id]["kind"] == "project" and by_id[unborn_id]["available"] is False
-            assert next(item for item in options["workspaces"] if item["id"] == ordinary_id)["copy_on_run"]
+            assert not next(item for item in options["workspaces"] if item["id"] == ordinary_id)["is_example"]
     asyncio.run(scenario())
 
 
@@ -274,8 +274,8 @@ def test_options_remains_consistent_during_project_registration(tmp_path: Path, 
     assert {item["id"] for item in manager.options()["recent_projects"]} == {initial, added[0]}
 
 
-def test_plain_project_copy_excludes_other_run_records(tmp_path: Path, monkeypatch):
-    """普通来源包含运行记录时，真实提交仅复制代码，不把其他会话原文带给模型。"""
+def test_plain_project_evidence_excludes_other_run_records(tmp_path: Path, monkeypatch):
+    """在指定目录直接修改代码，逐轮证据排除记录树，不复制或改写其他会话。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-open-project")
     selected = tmp_path / "source"
     selected.mkdir()
@@ -286,20 +286,21 @@ def test_plain_project_copy_excludes_other_run_records(tmp_path: Path, monkeypat
     private.write_text("private previous conversation", encoding="utf-8")
 
     async def scenario():
-        """经真实API提交和Runner写文件，核对副本不含记录树且来源字节保持。"""
+        """经真实API与Runner修改原文件，核对逐轮文件清单不包含记录树。"""
         app = create_app(configuration(tmp_path), RunConfig(tools=["write_file"]), records, model_client=EditingModel())
         manager = app.state.manager
         identifier = manager.catalog.register(selected)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", trust_env=False) as client:
-                created = await client.post("/api/runs", json={"workspace_id": identifier, "prompt": "修改value", "execution_mode": "isolated"})
+                created = await client.post("/api/runs", json={"workspace_id": identifier, "prompt": "修改value"})
                 assert created.status_code == 202, created.text
                 result = await finish(client, created.json()["run_id"])
                 copied = Path(result["workspace"])
                 assert result["result"]["execution_status"] == "completed"
                 assert (copied / "app.py").read_text(encoding="utf-8") == "value = 2\n"
-                assert not (copied / ".runs").exists()
+                assert copied == selected
+                assert all(not item['path'].startswith('.runs/') for item in result['local_changes']['files'])
                 assert private.read_text(encoding="utf-8") == "private previous conversation"
-                assert (selected / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+                assert (selected / "app.py").read_text(encoding="utf-8") == "value = 2\n"
 
     asyncio.run(scenario())

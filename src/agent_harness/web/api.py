@@ -19,7 +19,7 @@ from ..schemas import RunConfig
 from ..sessions import SessionError
 from ..store import StorageError
 from .config import WebConfig
-from .schemas import ConversationPage, ProjectTestRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
+from .schemas import ConversationPage, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
 from .project_catalog import CatalogError
 
@@ -144,9 +144,9 @@ def create_app(
         return next(item for item in options["recent_projects"] if item["id"] == identifier)
 
     @app.put("/api/projects/{project_id}/settings")
-    async def project_settings(project_id: str, body: ProjectTestRequest) -> dict:
+    async def project_settings(project_id: str, body: ProjectSettingsRequest) -> dict:
         """保存用户明确填写的项目测试设置；只检查程序入口，执行留到新任务验收阶段。"""
-        await asyncio.to_thread(manager.catalog.configure_test, project_id, body.test_command, body.test_timeout_seconds)
+        await asyncio.to_thread(manager.catalog.configure_execution, project_id, body.test_command, body.test_timeout_seconds, body.python_executable)
         options = await asyncio.to_thread(manager.options)
         return next(item for item in options["recent_projects"] if item["id"] == project_id)
 

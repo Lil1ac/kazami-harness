@@ -16,8 +16,9 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from agent_harness.processes import _child_environment, _windows_taskkill
+from agent_harness.snapshots import FileSnapshotStore
 
-from .models import ChangedFile, ProjectPreset, ProjectReview
+from .models import ChangedFile, ProjectPreset, ProjectReview, ProjectWorkspace
 
 
 class ProjectError(Exception):
@@ -44,6 +45,11 @@ class ProjectManager:
         self.runs_root = runs_root.resolve()  # Runner 正常记录的根目录。
         self.worktrees_root = worktrees_root.resolve()  # 仅管理其下 UUID 命名的任务工作树。
         self.metadata_root = self.runs_root / ".projects"  # 与 Runner 的 UUID 目录隔离，启动前可创建。
+        self.files = FileSnapshotStore(
+            self.runs_root, namespace=".project-files",
+            exclude_names=frozenset({".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".uv-cache", ".ruff_cache"}),
+            protected_roots=(self.runs_root,),
+        )  # 每轮固定历史产物；共享工作树继续变化也不替换旧文件。
         self._lock = threading.RLock()  # 串行化创建、快照、保留和丢弃，避免线程内竞争。
         self._record_lock = threading.RLock()  # 只保护短元数据读写；视图不等待后台 Git 捕获或删除。
         self._git_program = shutil.which("git")  # 使用宿主 Git；缺失时在请求执行阶段受控报错。
@@ -73,6 +79,7 @@ class ProjectManager:
                 self._git(repository, ["worktree", "add", "--detach", "--", str(worktree), commit_text])
                 owned = {
                     "run_id": str(run_id),
+                    "session_id": str(run_id),
                     "common_git_dir": str(common),
                     "common_identity": self._identity(common),
                     "source_identity": self._identity(repository),
@@ -80,59 +87,103 @@ class ProjectManager:
                     "git_file": (worktree / ".git").read_text(encoding="utf-8").strip(),
                 }
                 review = ProjectReview(
-                    run_id=run_id, project_id=preset.id, project_label=preset.label,
+                    run_id=run_id, session_id=run_id, project_id=preset.id, project_label=preset.label,
                     repository=str(repository), base_ref=base_ref, base_commit=commit_text,
                     source_dirty=dirty, worktree=str(worktree),
                 )
                 self._write_json(metadata / "ownership.json", owned)
                 self._save(review)
+                self._save_workspace(ProjectWorkspace(session_id=run_id, latest_run_id=run_id, worktree=str(worktree)))
                 (metadata / "preparing.json").unlink(missing_ok=True)
                 return review
             except (OSError, UnicodeError) as exc:
                 raise ProjectError("project_prepare_failed", "创建项目工作树后无法保存归属记录，请检查磁盘状态。") from exc
 
-    def verify_snapshot(self, run_id: UUID) -> ProjectReview:
-        """核对 run_id 工作树仍等于已保存快照，返回审阅；不重新捕获或覆盖父证据。
+    def workspace(self, run_id: UUID) -> ProjectWorkspace:
+        """读取 run_id 所属会话状态；返回只读模型，缺失或不一致时抛 ProjectError。"""
+        return self._read_workspace(self._required(run_id))
 
-        已丢弃、快照缺失、补丁损坏、归属改变或代码变化均抛 ProjectError。
-        调用方应在线程执行；校验使用现有有界 Git 和完整补丁摘要。
+    def _read_workspace(self, review: ProjectReview) -> ProjectWorkspace:
+        """按 review 已固定的会话读取生命周期，返回状态；不访问当前工作树或重新读取审阅。
+
+        故意允许已丢弃目录不存在；会话身份、路径或元数据无效时抛 ProjectError。
+        独立于 get 避免历史视图查询再次递归读取同一审阅。
+        """
+        try:
+            path = self._metadata_dir(review.session_id) / "workspace.json"
+            state = ProjectWorkspace.model_validate_json(self._read_bytes(path, self.MAX_METADATA_BYTES))
+            if state.session_id != review.session_id:
+                raise ValueError("workspace mismatch")
+            if state.worktree != review.worktree:
+                raise ProjectError("project_worktree_changed", "审阅记录的工作树与会话归属不一致。")
+            return state
+        except (OSError, ValueError, ValidationError):
+            raise ProjectError("project_workspace_invalid", "会话工作树状态无法核对，请检查本地记录。") from None
+
+    def _save_workspace(self, state: ProjectWorkspace) -> None:
+        """原子保存 state 的会话级生命周期；只写私有元数据，不修改项目代码。"""
+        self._write_json(self._metadata_dir(state.session_id) / "workspace.json", state.model_dump(mode="json"))
+
+    def verify_workspace(self, run_id: UUID) -> ProjectReview:
+        """核验 run_id 的固定补丁和会话目录归属，返回审阅；允许轮次之间手动编辑当前代码。
+
+        历史补丁完整性与目录身份必须保持；不要求当前文件与旧快照相同，不重放旧补丁。
         """
         with self._lock:
             review = self._required(run_id)
-            if review.status == "discarded":
-                raise ProjectError("project_already_decided", "前轮工作树已经丢弃，不能继续修改。")
+            state = self.workspace(run_id)
+            if state.status == "discarded":
+                raise ProjectError("project_already_decided", "会话工作树已经丢弃，不能继续修改。")
             if review.snapshot_status != "ready" or not review.patch_available:
                 raise ProjectError("project_snapshot_required", "前轮没有完整代码快照，不能继续。")
             self._verified_patch(review, force=True)
-            owned = self._owned_worktree(review)
-            if self._snapshot(review)[0] != owned.get("snapshot_tree"):
-                raise ProjectError("project_snapshot_stale", "前轮结束后代码发生变化，请核对后新建任务。")
+            self._owned_worktree(review)
             return review
 
-    def prepare_followup(self, preset: ProjectPreset, parent_id: UUID, run_id: UUID) -> ProjectReview:
-        """从父完整累计补丁派生 run_id 独立工作树，返回待审阅记录，父现场保持不变。
+    def prepare_turn(self, preset: ProjectPreset, parent_id: UUID, run_id: UUID) -> ProjectReview:
+        """为 run_id 登记新一轮证据并复用 parent_id 会话目录，返回待审阅记录。
 
-        preset 必须仍登记同一原始仓库；先核对父身份与内容，再固定原始提交应用完整
-        binary patch，最后核对父子 tree 相同。准备失败保留已登记目录供核对，不启动模型。
+        preset 必须仍指向同一来源，parent_id 必须是最新轮；不复制代码、不创建工作树，
+        不应用补丁。先保存前状态供未启动失败回退，历史补丁和产物不会被新轮覆盖。
         """
         with self._lock:
-            parent = self.verify_snapshot(parent_id)
+            parent = self.verify_workspace(parent_id)
+            state = self.workspace(parent_id)
+            if state.latest_run_id != parent_id:
+                raise ProjectError("project_stale_turn", "只能从会话最新一轮继续。")
             if preset.id != parent.project_id or preset.path.resolve() != Path(parent.repository).resolve():
-                raise ProjectError("project_source_changed", "宿主项目登记与前轮来源不一致。")
-            expected = self._ownership(parent_id)["snapshot_tree"]
-            patch = self._verified_patch(parent, force=True)
-            child = self.prepare(preset, run_id, parent.base_commit)
-            child.base_ref = parent.base_ref
-            if patch.stat().st_size:
-                # 新工作树先按索引原始字节检出，避免LF提交的CRLF检出与--index校验冲突。
-                # 仅处理本次新副本；补丁也按原字节应用，防止原提交为CRLF时被再次转换。
-                self._git(Path(child.worktree), ["-c", "core.autocrlf=false", "checkout-index", "--all", "--force", "--index"])
-                self._git(Path(child.worktree), ["-c", "core.autocrlf=false", "apply", "--index", "--binary", "--whitespace=nowarn", "--", str(patch)])
-            if self._snapshot(child)[0] != expected or self._snapshot(parent)[0] != expected:
-                raise ProjectError("project_snapshot_stale", "派生期间代码状态变化，未启动新的执行。")
+                raise ProjectError("project_source_changed", "宿主项目登记与会话来源不一致。")
+            self.inspect(preset)
+            metadata = self._metadata_dir(self._uuid(run_id))
+            if metadata.exists():
+                raise ProjectError("project_run_exists", "该轮项目记录已经存在。")
+            metadata.mkdir()
+            owned = {key: value for key, value in self._ownership(parent_id).items()
+                     if key not in {"snapshot_tree", "patch_sha256", "patch_size"}}
+            owned["run_id"] = str(run_id)
+            self._write_json(metadata / "ownership.json", owned)
+            self._write_json(metadata / "previous-workspace.json", state.model_dump(mode="json"))
+            child = parent.model_copy(update={"run_id": run_id, "status": "pending", "snapshot_status": "pending",
+                                               "files": [], "patch_available": False, "warnings": []})
             self._save(child)
+            self._save_workspace(state.model_copy(update={"latest_run_id": run_id, "status": "pending"}))
             return child
 
+    def abandon_turn(self, run_id: UUID) -> None:
+        """run_id 未启动时恢复前一轮的会话管理状态；返回 None，保留目录、代码和已有证据。
+
+        仅处理有 previous-workspace 标记的新轮；首轮没有该标记时不做删除。
+        """
+        with self._lock:
+            review = self._required(run_id)
+            path = self._metadata_dir(run_id) / "previous-workspace.json"
+            if not path.exists():
+                return
+            previous = ProjectWorkspace.model_validate_json(self._read_bytes(path, self.MAX_METADATA_BYTES))
+            current = self.workspace(run_id)
+            if current.latest_run_id == run_id and previous.session_id == review.session_id:
+                self._owned_worktree(review)
+                self._save_workspace(previous)
 
     def inspect(self, preset: ProjectPreset) -> dict[str, str | bool]:
         """只读探测 preset 的 HEAD 与源 dirty 状态；返回固定键，不创建目录或刷新索引。
@@ -183,7 +234,9 @@ class ProjectManager:
                 raise ProjectError("project_record_invalid", "项目审阅记录与运行标识不一致。")
             if review.status != "discarded":
                 try:
-                    self._owned_worktree(review, verify_git=False)
+                    state = self._read_workspace(review)
+                    if state.status != "discarded":
+                        self._owned_worktree(review, verify_git=False)
                 except ProjectError:
                     self._warn(review, "任务工作树缺失或归属发生变化，请检查后再审阅；原有审阅决定未改变。")
             if review.patch_available:
@@ -198,18 +251,28 @@ class ProjectManager:
     def capture(self, run_id: UUID) -> ProjectReview:
         """为 run_id 固化完整基线补丁；返回审阅记录，失败记录 error 并抛 ProjectError。
 
-        pending 和 kept 工作树可重新捕获且保留审阅决定；discarded 只能返回已有快照。
+        只发布最新轮尚未完成的快照；ready 记录只读核验，绝不覆盖旧轮文件或补丁。
         补丁包含非忽略新增文件和二进制数据，不改变源目录或任务工作树的真实索引。
         """
         with self._lock:
             review = self._required(run_id)
+            if review.snapshot_status == "ready":
+                self._verified_patch(review)
+                return review  # 已发布的轮次证据只读；新代码由下一轮另行固定。
+            if self.workspace(run_id).latest_run_id != run_id:
+                raise ProjectError("project_historical_snapshot", "旧轮没有完整快照，不能用当前会话代码补造历史。")
             if review.status == "discarded":
-                if review.snapshot_status == "ready":
-                    return review
                 raise ProjectError("project_already_decided", "已丢弃的工作树不能重新生成快照。")
             try:
                 owned = self._owned_worktree(review)
                 tree, patch, files = self._snapshot(review)
+                if self.files.info(run_id) is None:
+                    self.files.capture(run_id, Path(review.worktree))
+                saved_files = self.files.info(run_id)
+                if saved_files is None or saved_files.get("status") != "ready":
+                    self._warn(review, "本轮历史文件未完整保存；补丁仍可核对，缺失产物不会回退读取当前目录。")
+                if self._snapshot(review)[0] != tree:
+                    raise ProjectError("project_snapshot_changed", "保存证据期间代码发生变化，未发布不一致的补丁与产物。")
                 metadata = self._metadata_dir(review.run_id)
                 # Git 操作完成才短暂锁住记录发布，SSE 读取不等待整个捕获过程。
                 with self._record_lock:
@@ -249,6 +312,9 @@ class ProjectManager:
             if decision not in ("keep", "discard"):
                 raise ProjectError("project_decision_invalid", "审阅决定只能是保留或丢弃。")
             review = self._required(run_id)
+            state = self.workspace(run_id)
+            if state.latest_run_id != run_id:
+                raise ProjectError("project_historical_readonly", "旧轮仅供查看，请从最新一轮管理会话工作树。")
             target = "kept" if decision == "keep" else "discarded"
             if review.status == target:
                 return review
@@ -267,6 +333,7 @@ class ProjectManager:
                     raise ProjectError("project_discard_failed", "Git 未能完整移除任务工作树，审阅仍待处理。")
             review.status = target
             self._save(review)
+            self._save_workspace(state.model_copy(update={"status": target}))
             return review
 
     def patch_path(self, run_id: UUID) -> Path:
@@ -335,13 +402,15 @@ class ProjectManager:
 
     def _owned_worktree(self, review: ProjectReview, *, verify_git: bool = True) -> dict:
         """验证工作树实体归属；verify_git 默认核查 Git 注册，False 仅用于高频只读视图。"""
-        expected = self.worktrees_root / str(review.run_id)
+        expected = self.worktrees_root / str(review.session_id)
         worktree = Path(review.worktree)
         if worktree != expected or self._is_link(worktree) or worktree.resolve() != expected:
             raise ProjectError("project_worktree_changed", "任务工作树路径被替换或不属于当前运行。")
         if not worktree.is_dir():
             raise ProjectError("project_worktree_missing", "任务工作树不存在，不能推断它已被安全丢弃。")
         owned = self._ownership(review.run_id)
+        if owned.get("session_id") != str(review.session_id):
+            raise ProjectError("project_worktree_changed", "工作树会话归属无法核对。")
         try:
             common = Path(owned["common_git_dir"])
             if self._identity(worktree) != owned["worktree_identity"] or self._identity(common) != owned["common_identity"]:

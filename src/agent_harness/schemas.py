@@ -44,6 +44,7 @@ class RunLimits(DataModel):
     # 预览按字符限制；原始进程输出和文件写入按字节限制，不能混用单位。
     tool_output_preview_chars: int = Field(default=12000, gt=0)
     max_process_capture_bytes: int = Field(default=8 * 1024 * 1024, gt=0)
+    # 同时约束整文件写入、局部编辑的原文件/结果大小及读取时的指纹扫描字节数。
     max_file_write_bytes: int = Field(default=1024 * 1024, gt=0)
 
 
@@ -224,7 +225,7 @@ class ContextView(DataModel):
 
 
 # 这里只声明允许识别的名称；当前真正实现和可分发的工具由工具注册层决定。
-ToolName = Literal["read_file", "search_files", "write_file", "run_command"]
+ToolName = Literal["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
@@ -273,7 +274,7 @@ class VerifierSpec(DataModel):
     argv: list[str] = Field(min_length=1)  # 宿主固定程序和参数，启动预检后 argv[0] 为绝对可执行入口。
     cwd: Path | None = None  # 验收进程目录；清单默认取清单所在目录，程序调用 None 时取宿主当前目录。
     timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)  # 验收自身上限（秒），仍受总运行截止时间约束。
-    python_paths: list[Path] = Field(default_factory=list)  # 宿主显式登记的绝对 Python 搜索目录，必须位于 cwd 内；空列表不注入搜索路径。
+    python_paths: list[Path] = Field(default_factory=list)  # 验收程序私有依赖目录，位于验收 cwd 内；不交给模型命令，共享项目源码另由执行快照提供。
 
     @model_validator(mode="after")
     def validate_program(self) -> "VerifierSpec":
@@ -291,9 +292,33 @@ class VerifierSpec(DataModel):
 
 
 # 一次任务的输入：任务文本、绝对工作目录和可选宿主验收配置。
+class PythonExecution(DataModel):
+    """当轮工作区的 Python 执行快照；只校验路径结构，读取历史时不访问当前文件系统。"""
+
+    workspace: Path  # 该轮实际工作区，作为共享源码目录的固定边界，与命令 cwd 分开。
+    executable: Path | None  # 当轮项目配置/PATH 解析的 Python；None 表示未找到，非 Python 任务仍可执行。
+    python_paths: list[Path] = Field(min_length=1)  # 依次查找的工作区源码目录；首项必须是工作区根目录。
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> "PythonExecution":
+        """校验绝对路径、工作区归属及目录顺序；返回自身，不读取磁盘或推测旧记录环境。"""
+        if not self.workspace.is_absolute() or ".." in self.workspace.parts:
+            raise ValueError("Python 执行工作区必须是规范绝对路径")
+        if self.executable is not None and (not self.executable.is_absolute() or "\x00" in str(self.executable)):
+            raise ValueError("Python 解释器必须是绝对路径")
+        if self.python_paths[0] != self.workspace or len(set(self.python_paths)) != len(self.python_paths):
+            raise ValueError("Python 源码目录必须以工作区根目录开始且不能重复")
+        for path in self.python_paths:
+            if (not path.is_absolute() or ".." in path.parts or "\x00" in str(path)
+                    or os.pathsep in str(path) or not path.is_relative_to(self.workspace)):
+                raise ValueError("Python 源码目录必须位于该轮工作区内")
+        return self
+
+
 class TaskSpec(DataModel):
     prompt: str = Field(min_length=1)
     workspace: Path
+    python_execution: PythonExecution | None = None  # 接纳运行时固定；None 表示尚未准备，读取时不推断当前环境。
     verifier: VerifierSpec | None = None
     expected_outputs: list[str] = Field(default_factory=list)
 
@@ -304,6 +329,8 @@ class TaskSpec(DataModel):
             raise ValueError("任务描述不能为空白")
         if not self.workspace.is_absolute():
             raise ValueError("工作目录必须在启动时解析为绝对路径")
+        if self.python_execution is not None and self.python_execution.workspace != self.workspace:
+            raise ValueError("Python 执行快照必须对应任务实际工作区")
         return self
 
 
@@ -312,7 +339,7 @@ class RunOrigin(DataModel):
     kind: Literal["workspace", "project"]  # 普通文件任务或 Git 项目。
     preset_id: str = Field(min_length=1, max_length=64)  # 启动时的宿主登记编号。
     registered_path: Path  # 会话固定的来源目录；原目录执行时也等于实际工作区。
-    execution_mode: Literal["local", "isolated"] = "isolated"  # 新会话固定执行方式；旧副本记录缺省仍为隔离。
+    execution_mode: Literal["local", "isolated"]  # 创建时明确固定；isolated仅表示主动创建的工作树或示例副本。
     workspace_identity: tuple[int, int] | None = None  # 原目录的设备/对象编号，隔离模式为空；续轮拒绝目录被替换。
     verifier_id: str | None = None  # 普通任务选择的宿主验收编号；项目任务使用项目测试。
 

@@ -16,7 +16,7 @@ from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
-from agent_harness.web.config import WebConfig
+from agent_harness.web.config import WebConfig, WebWorkspace
 
 
 class LocalModel:
@@ -137,17 +137,54 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
 
 
 @pytest.mark.parametrize('kind', ['workspace', 'project'])
-def test_explicit_isolation_does_not_modify_selected_directory(tmp_path: Path, monkeypatch, kind: str):
-    """明确选择隔离时仍使用新副本/工作树，默认原目录不会吞掉用户选择的执行方式。"""
+def test_configured_directory_defaults_local_without_catalog_registration(tmp_path: Path, monkeypatch, kind: str):
+    """TOML预设与页面选择采用同一目录规则；kind区分普通/Git来源，省略模式不创建副本。"""
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
     config, selected = configuration(tmp_path, kind)
+    if kind == 'workspace':
+        config.workspaces = [WebWorkspace(id='files', label='指定文件夹', path=selected)]
+
+    async def scenario():
+        """提交未登记为最近项目的预设，返回后核对实际cwd及原目录中的修改。"""
+        model = LocalModel()
+        async with client_for(config, model) as (client, manager):
+            source = {'project_id': 'code'} if kind == 'project' else {'workspace_id': 'files'}
+            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', **source}))
+            assert first['execution_mode'] == 'local' and Path(first['workspace']) == selected
+            assert model.command_directories == [str(selected)]
+            assert 'first' in (selected / 'result.txt').read_text(encoding='utf-8')
+            assert not config.runtime_root.exists() and not manager.projects.worktrees_root.exists()
+    asyncio.run(scenario())
+
+
+def test_personal_folder_rejects_hidden_copy_execution(tmp_path: Path, monkeypatch):
+    """个人文件夹不提供副本执行；显式isolated请求应在模型与目录创建之前失败。"""
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    config, selected = configuration(tmp_path, 'workspace')
+
+    async def scenario():
+        """登记真实目录后提交隔离请求，核对原文件、执行次数及副本根目录均未变化。"""
+        model = LocalModel()
+        async with client_for(config, model) as (client, manager):
+            identifier = manager.catalog.register(selected)
+            response = await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier, 'execution_mode': 'isolated'})
+            assert response.status_code == 400 and response.json()['error']['code'] == 'workspace_copy_not_supported'
+            assert not model.command_directories and not config.runtime_root.exists()
+            assert (selected / 'result.txt').read_text(encoding='utf-8') == 'existing\n'
+    asyncio.run(scenario())
+
+
+def test_explicit_worktree_does_not_modify_selected_directory(tmp_path: Path, monkeypatch):
+    """只有明确创建Git工作树才更换执行目录；不改写所选仓库的当前文件。"""
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    config, selected = configuration(tmp_path, 'project')
     before = (selected / 'result.txt').read_bytes()
 
     async def scenario():
         """登记后显式请求isolated，核对来源及实际目录和已保存差异。"""
         async with client_for(config, LocalModel()) as (client, manager):
             identifier = manager.catalog.register(selected)
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated', 'project_id' if kind == 'project' else 'workspace_id': identifier}))
+            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated', 'project_id': identifier}))
             assert first['execution_mode'] == 'isolated' and Path(first['workspace']) != selected
             assert first['local_changes'] is None
             assert (selected / 'result.txt').read_bytes() == before

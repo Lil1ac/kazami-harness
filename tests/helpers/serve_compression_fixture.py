@@ -55,7 +55,7 @@ def main() -> None:
     os.environ["DEEPSEEK_API_KEY"] = "offline-compression-browser-key"
     config = WebConfig(
         project_dir=project, runtime_root=root / "copies", frontend_dist=project / "frontend/dist",
-        workspaces=[WebWorkspace(id="compression", label="上下文压缩联动（离线）", path=workspace, copy_on_run=True)],
+        workspaces=[WebWorkspace(id="compression", label="上下文压缩联动（离线）", path=workspace)],
         verifiers=[WebVerifier(id="compression", label="代码加法与规则验收", description="仅检查本服务的app.py。", path=toml)],
     )
     host = RunConfig(

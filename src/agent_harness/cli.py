@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--verifier", type=Path, help="宿主侧验收清单 TOML；执行完成后独立运行")
     run.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="运行记录目录")
     run.add_argument("--expected-output", action="append", default=[], help="登记工作区内预期产物的相对路径，可多次指定")
+    run.add_argument("--python-executable", help="项目 Python 解释器；相对实际工作区，省略按 PATH 查找")
     run.add_argument("--model", help="覆盖 requested_model")
     run.add_argument("--max-model-turns", type=int, help="覆盖模型轮次上限")
     run.add_argument("--prepare-only", action="store_true", help="只校验并创建记录，不调用模型或工具")
@@ -139,7 +140,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.max_model_turns is not None:
         overrides["limits"] = {"max_model_turns": args.max_model_turns}
     config = load_config(args.config, overrides)
-    task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, args.expected_output)
+    task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, args.expected_output, python_executable=args.python_executable)
     validate_output_paths(task, args.runs_dir)
     manifest = RunManifest(run_id=uuid4(), task=task, config=config)
     if args.prepare_only:

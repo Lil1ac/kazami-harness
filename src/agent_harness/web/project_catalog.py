@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError, model_validator
 from typing import Literal
 
 from ..config import ConfigurationError
+from ..execution import prepare_python_execution
 from ..processes import _child_environment
 from ..projects import ProjectPreset
 from ..schemas import DataModel, UtcDatetime
@@ -41,7 +42,8 @@ class LocalProject(DataModel):
     last_opened_at: UtcDatetime  # 用户最后明确打开时间，读取页面不更新。
     test_argv: list[str] = Field(default_factory=list)  # 空列表表示未配置独立项目测试。
     test_timeout_seconds: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)  # 测试秒级上限。
-    test_python_paths: list[str] = Field(default_factory=lambda: [".", "src"])  # 测试导入目录，相对独立工作树。
+    python_executable: str | None = Field(default=None, max_length=4096)  # 项目解释器；None 使用 PATH，随明确保存持久化。
+    python_paths: list[str] | None = None  # 共享源码目录；None 自动根/src，[] 仅根目录，按每轮实际工作区解析。
 
 
 class CatalogState(DataModel):
@@ -168,10 +170,10 @@ class ProjectCatalog:
                 if item.kind == "project":
                     projects[item.id] = ProjectPreset(**item.model_dump(exclude={"kind", "last_opened_at"}))
                 else:
-                    workspaces[item.id] = WebWorkspace(id=item.id, label=item.label, path=item.path, copy_on_run=True)
+                    workspaces[item.id] = WebWorkspace(id=item.id, label=item.label, path=item.path, python_executable=item.python_executable, python_paths=item.python_paths)
             opened = {(item.id, os.path.normcase(str(item.path))): item.last_opened_at.isoformat() for item in entries}
             recent = [
-                {"id": item.id, "label": item.label, "path": str(item.path), "kind": kind,
+                {"id": item.id, "label": item.label, "path": str(item.path), "kind": kind, "python_executable": item.python_executable,
                  "last_opened_at": opened.get((item.id, os.path.normcase(str(item.path))))}
                 for kind, values in (("project", projects.values()), ("workspace", workspaces.values()))
                 for item in values if kind == "project" or not item.is_example
@@ -184,7 +186,7 @@ class ProjectCatalog:
         return self.snapshot()[0]
 
     def workspace_presets(self) -> list[WebWorkspace]:
-        """返回同一次登记快照的普通目录预设；本机明确打开的目录默认原目录，任务可明确选择隔离副本。"""
+        """返回同一次登记快照的普通目录预设；个人目录始终原地执行，示例由专用入口选择。"""
         return self.snapshot()[1]
 
     def recent(self) -> list[dict]:
@@ -252,20 +254,34 @@ class ProjectCatalog:
             raise CatalogError("unknown_project", "该项目尚未登记，请重新选择文件夹。")
         return self.register(Path(item["path"]))
 
-    def configure_test(self, identifier: str, command: str, timeout: float) -> None:
-        """保存用户明确填写的测试 command 与秒级 timeout；空命令清空，不立即执行。"""
+    def configure_execution(
+        self, identifier: str, command: str, timeout: float, python_executable: str | None = None,
+    ) -> None:
+        """保存 identifier 的测试 command、秒级 timeout 与项目 python_executable；返回 None。
+
+        解释器 None/空白按 PATH，普通目录也可保存；项目测试仍限 Git 项目。
+        只校验入口与来源，不执行程序；无效输入抛 CatalogError，原登记不变。
+        """
         with self._lock:
             preset = next((item for item in self.project_presets() if item.id == identifier), None)
-            if preset is None:
-                raise CatalogError("project_test_unsupported", "请先打开一个 Git 项目再配置项目测试。")
+            workspace = next((item for item in self.workspace_presets() if item.id == identifier), None)
+            source = preset or workspace
+            if source is None or (workspace is not None and workspace.is_example):
+                raise CatalogError("project_settings_unsupported", "请先打开自己的项目文件夹再保存运行设置。")
             try:
+                interpreter = python_executable.strip() if python_executable and python_executable.strip() else None
+                prepare_python_execution(source.path, source.python_paths, python_executable=interpreter)
                 argv = _split_test_command(command)
-                updated = ProjectPreset(**{**preset.model_dump(), "test_argv": argv, "test_timeout_seconds": timeout})
-                updated = prepare_project_test(updated, preset.path)
-                entries = self._read()
-                record = LocalProject(**updated.model_dump(), kind="project", last_opened_at=datetime.now(UTC))
-                self._write([record, *(item for item in entries if item.id != identifier)])
+                if preset is None and argv:
+                    raise CatalogError("project_test_unsupported", "普通目录可设置 Python 解释器，项目测试请在 Git 项目中配置。")
+                values = {**source.model_dump(exclude={"is_example"}), "python_executable": interpreter,
+                          "test_argv": argv, "test_timeout_seconds": timeout}
+                if preset is not None:
+                    values = prepare_project_test(ProjectPreset(**values), preset.path).model_dump()
+                record = LocalProject(**values, kind="project" if preset is not None else "workspace",
+                                      last_opened_at=datetime.now(UTC))
+                self._write([record, *(item for item in self._read() if item.id != identifier)])
             except CatalogError:
                 raise
             except (ValueError, OSError, RuntimeError, ConfigurationError):
-                raise CatalogError("project_test_invalid", "测试命令无效，请检查程序路径、引号和超时设置。") from None
+                raise CatalogError("project_settings_invalid", "项目设置无效，请检查 Python 解释器、测试程序路径、引号和超时。") from None

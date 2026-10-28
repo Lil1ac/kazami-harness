@@ -10,15 +10,13 @@ export function ArtifactPanel({
   runId,
   artifacts,
   missing,
-  workspaceUnavailable = false,
 }: {
   runId: string;
   artifacts: ArtifactRef[];
   missing: string[];
-  workspaceUnavailable?: boolean; // 项目工作树已丢弃时，只允许读取运行目录中的证据。
 }) {
   const [selection, setSelected] = useState<ArtifactRef | null>(null); // 当前抽屉预览目标。
-  const selected = workspaceUnavailable && selection?.location === 'workspace' ? null : selection;
+  const selected = selection; // 历史文件来自固定快照，不依赖共享工作树仍然存在。
   const preview = useQuery({
     queryKey: ['artifact', runId, selected?.location, selected?.path],
     queryFn: /* 仅选中后读取有界文本。 */ () => previewArtifact(runId, selected!),
@@ -29,19 +27,11 @@ export function ArtifactPanel({
     <section aria-labelledby="artifact-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">ARTIFACTS</span>
           <h2 id="artifact-heading">
             产物与输出 <small>{artifacts.length}</small>
           </h2>
         </div>
       </div>
-      {workspaceUnavailable && (
-        <Alert
-          type="info"
-          showIcon
-          title="工作树已丢弃，工作区产物不再提供访问；运行记录、测试输出和补丁仍保留。"
-        />
-      )}
       {missing.length > 0 && (
         <Alert
           showIcon
@@ -61,7 +51,6 @@ export function ArtifactPanel({
               <div>
                 <button
                   className="text-button artifact-name"
-                  disabled={workspaceUnavailable && artifact.location === 'workspace'}
                   onClick={/* 打开预览，不执行文件。 */ () => setSelected(artifact)}
                 >
                   {artifact.path}
@@ -70,7 +59,6 @@ export function ArtifactPanel({
                   {artifact.location === 'workspace' ? '工作区' : '运行记录'} · {artifact.kind}
                 </span>
               </div>
-              {!(workspaceUnavailable && artifact.location === 'workspace') && (
                 <a
                   className="download-link"
                   href={artifactUrl(runId, artifact)}
@@ -79,7 +67,6 @@ export function ArtifactPanel({
                 >
                   <DownloadOutlined />
                 </a>
-              )}
             </li>
           ),
         )}

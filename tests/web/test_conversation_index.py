@@ -35,7 +35,7 @@ def config_for(root: Path) -> WebConfig:
     for name in ('alpha', 'beta'):
         (root / name).mkdir(parents=True, exist_ok=True)
     return WebConfig(project_dir=root, runtime_root=root / 'runtime/copies', frontend_dist=root / 'dist',
-        workspaces=[WebWorkspace(id=name,label=name.upper(),path=root/name,copy_on_run=True) for name in ('alpha','beta')])
+        workspaces=[WebWorkspace(id=name,label=name.upper(),path=root/name) for name in ('alpha','beta')])
 
 
 @asynccontextmanager

@@ -14,8 +14,9 @@ from pydantic import ValidationError
 from ..config import ConfigurationError, load_config, prepare_task
 from ..providers.base import ModelClient
 from ..runner import CancellationState, RunContext, run_task, validate_execution, validate_output_paths
+from ..execution import PythonExecutionError, prepare_python_execution, python_command
 from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec
-from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview
+from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
 from ..store import RunHistory, RunStore, StorageError
 from ..skills import SkillCatalog
 from ..local_execution import LocalChangeStore
@@ -146,12 +147,14 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     return result
 
 
-def _copy_workspace(source: WebWorkspace, destination: Path, *, protected_roots: tuple[Path, ...] = ()) -> None:
-    """复制登记 source 到全新 destination；最多1000目录项和16MiB，拒绝链接与特殊文件。
+def _copy_example(source: WebWorkspace, destination: Path, *, protected_roots: tuple[Path, ...] = ()) -> None:
+    """仅复制显式选择的样例source到新destination；最多1000项和16MiB，无返回值。
 
-    protected_roots是记录及任务副本的绝对根目录，默认空元组；遍历时跳过整棵受保护树，
-    禁止来源本身处于受保护目录内。检查与复制不跟随链接，失败抛受控服务错误。
+    protected_roots默认空元组，指定受保护的记录与副本根目录；复制时跳过其整棵树。
+    非示例来源、链接、特殊文件或超过预算时抛WebServiceError，不修改源目录。
     """
+    if not source.is_example:
+        raise WebServiceError(400, "workspace_copy_not_supported", "所选文件夹直接在原目录执行，不创建副本。")
     max_bytes, max_files = 16 * 1024 * 1024, 1000
     try:
         root = source.path.resolve(strict=True)
@@ -271,7 +274,6 @@ class WebRunManager:
                     "id": item.id,
                     "label": item.label,
                     "path": str(item.path),
-                    "copy_on_run": item.copy_on_run,
                     "is_example": item.is_example,
                 }
                 for item in workspace_presets
@@ -290,6 +292,7 @@ class WebRunManager:
             "id": preset.id, "label": preset.label, "path": str(preset.path),
             "base_ref": "HEAD", "head_commit": None, "source_dirty": False,
             "test_argv": preset.test_argv, "test_timeout_seconds": preset.test_timeout_seconds,
+            "python_executable": preset.python_executable,
             "test_command": subprocess.list2cmdline(preset.test_argv) if os.name == "nt" else shlex.join(preset.test_argv),
             "available": False, "error": None,
         }
@@ -328,7 +331,7 @@ class WebRunManager:
                 raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
             if self.busy_run_id is not None:
                 raise WebServiceError(409, "run_busy", "已有任务正在运行，请等待完成或取消。")
-            project_presets, workspace_presets, recent = self.catalog.snapshot()
+            project_presets, workspace_presets, _ = self.catalog.snapshot()
             workspace = next((item for item in workspace_presets if item.id == request.workspace_id), None)
             preset = next((item for item in project_presets if item.id == request.project_id), None)
             if request.project_id is not None and preset is None:
@@ -355,10 +358,13 @@ class WebRunManager:
                 task = prepare_task(
                     request.prompt, source, verifier_path, config.limits.verifier_timeout_seconds,
                     request.expected_outputs,
+                    python_paths=(preset or workspace).python_paths,
+                    python_executable=(preset or workspace).python_executable,
                 )
                 selected_id = preset.id if preset is not None else workspace.id
-                registered = any(item['id'] == selected_id and item['last_opened_at'] is not None for item in recent)
-                mode = request.execution_mode or ('local' if registered or (workspace is not None and not workspace.copy_on_run) else 'isolated')
+                mode = request.execution_mode
+                if mode == 'isolated' and workspace is not None and not workspace.is_example:
+                    raise WebServiceError(400, 'workspace_copy_not_supported', '所选文件夹直接在原目录执行，不创建副本。')
                 if mode == 'local' and request.base_ref != 'HEAD':
                     raise WebServiceError(400, 'local_base_ref', '原目录执行使用当前文件，不能切换Git基线；请选择隔离执行。')
                 origin = RunOrigin(kind="project" if preset is not None else "workspace", preset_id=selected_id, registered_path=source.resolve(), verifier_id=request.verifier_id, execution_mode=mode, workspace_identity=self.local_changes.identity(source.resolve()) if mode == 'local' else None)
@@ -388,7 +394,7 @@ class WebRunManager:
                     task = task.model_copy(update={"workspace": root, "verifier": verifier})
                     manifest = manifest.model_copy(update={"task": task})
                     validate_output_paths(task, self.runs_root)
-                else:  # 隔离普通目录始终建立副本，不再由隐藏配置决定本次执行位置。
+                else:  # 只有显式试用示例才创建一次副本，个人文件夹不能进入该分支。
                     parent = self.web_config.runtime_root.resolve()
                     destination = parent / str(identifier)
                     if (
@@ -396,13 +402,17 @@ class WebRunManager:
                         or workspace.path.resolve().is_relative_to(parent)
                     ):
                         raise WebServiceError(400, "invalid_workspace", "任务来源不能位于任务副本目录内。")
-                    _copy_workspace(workspace, destination, protected_roots=(
+                    _copy_example(workspace, destination, protected_roots=(
                         self.runs_root, parent, self.projects.worktrees_root,
                     ))
                     task = task.model_copy(update={"workspace": destination.resolve()})
                     manifest = manifest.model_copy(update={"task": task})
                     validate_output_paths(task, self.runs_root)
-            except (ConfigurationError, ProjectError, SnapshotError, ValidationError) as error:
+                # 必须等实际目录确定后冻结，避免把原仓库源码路径带到新工作树或示例副本。
+                execution = prepare_python_execution(task.workspace, (preset or workspace).python_paths, python_executable=(preset or workspace).python_executable)
+                task = task.model_copy(update={"python_execution": execution})
+                manifest = manifest.model_copy(update={"task": task})
+            except (ConfigurationError, ProjectError, SnapshotError, ValidationError, PythonExecutionError) as error:
                 if prepared is not None:
                     try:
                         await asyncio.to_thread(self.projects.capture, identifier)
@@ -411,7 +421,7 @@ class WebRunManager:
                         raise WebServiceError(503, "project_prepare_cleanup_failed", "任务尚未启动，项目工作树未能清理；请检查本地项目审阅记录。") from None
                 if isinstance(error, (ProjectError, SnapshotError)):
                     raise WebServiceError(400, error.code, error.message) from None
-                message = str(error) if isinstance(error, ConfigurationError) else "项目测试工作目录或导入路径无效。"
+                message = str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else "项目测试工作目录或导入路径无效。"
                 raise WebServiceError(400, "invalid_run", message) from None
             return await self._launch(manifest, api_key)
 
@@ -419,9 +429,8 @@ class WebRunManager:
     def project_verifier(preset: ProjectPreset, root: Path) -> VerifierSpec | None:
         """按preset当前测试设置为实际root构建验收；空命令返回None，不启动进程。"""
         return VerifierSpec(
-            argv=[part.replace("{workspace}", str(root)) for part in preset.test_argv],
+            argv=python_command([part.replace("{workspace}", str(root)) for part in preset.test_argv], prepare_python_execution(root, preset.python_paths, python_executable=preset.python_executable)),
             cwd=root, timeout_seconds=preset.test_timeout_seconds,
-            python_paths=[root / part for part in preset.test_python_paths],
         ) if preset.test_argv else None
 
     async def _launch(self, manifest: RunManifest, api_key: str) -> RunView:
@@ -485,7 +494,10 @@ class WebRunManager:
                     await asyncio.shield(capturing)
                     if item.startup_failed and item.context is None:
                         # Runner 尚未建立上下文即失败，进程从未执行；移除已登记副本避免不可见孤立资源。
-                        await asyncio.to_thread(self.projects.decide, item.manifest.run_id, "discard")
+                        if item.manifest.parent_run_id is None:
+                            await asyncio.to_thread(self.projects.decide, item.manifest.run_id, "discard")
+                        else:
+                            await asyncio.to_thread(self.projects.abandon_turn, item.manifest.run_id)
                 except asyncio.CancelledError:
                     try:
                         await asyncio.shield(capturing)
@@ -591,6 +603,7 @@ class WebRunManager:
             run_id=identifier,
             prompt=history.manifest.task.prompt,
             workspace=str(history.manifest.task.workspace),
+            python_execution=history.manifest.task.python_execution,
             execution_mode=history.manifest.origin.execution_mode if history.manifest.origin else None,
             source_path=str(history.manifest.origin.registered_path) if history.manifest.origin else None,
             source_kind=history.manifest.origin.kind if history.manifest.origin else None,
@@ -610,6 +623,7 @@ class WebRunManager:
             warnings=warnings,
             config=history.manifest.config,
             project=self._project_review(identifier),
+            project_workspace=self._project_workspace(identifier),
             context=context_view,
             session_id=history.manifest.session_id or identifier,
             parent_run_id=history.manifest.parent_run_id,
@@ -699,6 +713,16 @@ class WebRunManager:
                 return self.local_changes.after.saved_file(view.run_id, path)
             except SnapshotError:
                 raise WebServiceError(409, 'local_artifact_unavailable', '本轮固定产物尚未保存或已不可核对；请查看原目录，旧轮不会返回当前同名文件。') from None
+        if location == 'workspace' and view.execution_mode == 'isolated' and view.source_kind == 'project':
+            try:
+                return self.projects.files.saved_file(view.run_id, path)
+            except SnapshotError:
+                raise WebServiceError(409, 'project_artifact_unavailable', '本轮固定产物不可用，不会用共享工作树当前文件冒充历史内容。') from None
+        if location == 'workspace' and view.execution_mode == 'isolated' and view.source_kind == 'workspace':
+            try:
+                return self.conversations.files.saved_file(view.run_id, path)
+            except SnapshotError:
+                raise WebServiceError(409, 'example_artifact_unavailable', '本轮示例产物尚未保存或已不可核对。') from None
         base = self.runs_root / str(view.run_id) if location == "run" else Path(view.workspace)
         try:
             candidate = base / path
@@ -726,6 +750,16 @@ class WebRunManager:
             return self.projects.get(run_id)
         except ProjectError:
             self._warnings.setdefault(run_id, ["项目审阅元数据暂时无法读取。"])
+            return None
+
+    def _project_workspace(self, run_id: UUID) -> ProjectWorkspace | None:
+        """读取 run_id 会话共享工作树当前状态；不重建目录，损坏或非项目轮次返回 None。"""
+        if self._project_review(run_id) is None:
+            return None
+        try:
+            return self.projects.workspace(run_id)
+        except ProjectError:
+            self._warnings.setdefault(run_id, []).append("会话工作树管理状态不可用，历史证据仍按原记录读取。")
             return None
 
     async def get_review(self, run_id: UUID | str) -> ProjectReview:
@@ -770,6 +804,8 @@ class WebRunManager:
         async with self._lock:
             review = await self.get_review(run_id)
             view = self.get_run(run_id)
+            if self._active is not None and self._active.manifest.session_id == view.session_id:
+                raise WebServiceError(409, "run_active", "会话正在执行或保存证据，不能处理共享工作树。")
             if review.snapshot_status != "ready":
                 raise WebServiceError(409, "project_snapshot_unavailable", "代码快照尚未准备完成，不能处理工作树。")
             if decision == "discard" and (view.interrupted or view.result.cleanup_status not in {"not_needed", "complete"}):

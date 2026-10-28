@@ -20,9 +20,11 @@ export function ProjectReviewPanel({
   project,
   active,
   parentRunId,
+  canManage,
 }: {
   project: ProjectReview; // 宿主保存的项目、提交、文件清单与人工决定。
   active: boolean; // 后台任务仍执行或正在整理补丁时为 true。
+  canManage: boolean; // 仅会话最新轮可管理共享目录；历史轮只读取固定证据。
   parentRunId?: string | null; // 追加轮来源，用于说明累计差异并链接前轮证据。
 }) {
   const cache = useQueryClient();
@@ -31,7 +33,7 @@ export function ProjectReviewPanel({
     queryFn: /* 仅对未活动的遗留 pending 读取宿主恢复接口，不重新执行模型或项目测试。 */ ({
       signal,
     }) => getProjectReview(project.run_id, signal),
-    enabled: !active && project.snapshot_status === 'pending',
+    enabled: canManage && !active && project.snapshot_status === 'pending',
     staleTime: Infinity,
     retry: false,
   });
@@ -72,12 +74,11 @@ export function ProjectReviewPanel({
       void cache.invalidateQueries({ queryKey: ['conversation'] });
     },
   });
-  const locked = active || project.snapshot_status !== 'ready' || decision.isPending;
+  const locked = !canManage || active || project.snapshot_status !== 'ready' || decision.isPending;
   return (
     <section className="project-review" aria-labelledby="project-review-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">CODE REVIEW</span>
           <h2 id="project-review-heading">代码改动</h2>
         </div>
         <Tag color={project.status === 'pending' ? 'warning' : undefined}>
@@ -102,14 +103,14 @@ export function ProjectReviewPanel({
           </dd>
         </div>
         <div>
-          <dt>独立工作树</dt>
+          <dt>会话工作树</dt>
           <dd>{project.worktree}</dd>
         </div>
       </dl>
       <p className="muted">
         {parentRunId ? (
           <>
-            本轮继承<Link to={`/runs/${parentRunId}?tab=code`}>前轮修改</Link>
+            本轮复用会话目录，<Link to={`/runs/${parentRunId}?tab=code`}>前轮证据</Link>保持只读
             ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
           </>
         ) : (
@@ -159,14 +160,15 @@ export function ProjectReviewPanel({
           description={errorMessage(decision.error)}
         />
       )}
+      {!canManage && <Alert showIcon type="info" title="历史轮次只读，请在最新一轮管理会话工作树。" />}
       {project.status === 'discarded' ? (
         <Alert
           showIcon
           type="info"
           title="本任务工作树已丢弃。"
-          description="运行历史、测试输出和已保存补丁仍保留；工作树中的产物不再提供访问。"
+          description="运行历史、测试输出、补丁和已保存的各轮产物仍可查看。"
         />
-      ) : (
+      ) : canManage ? (
         <div className="review-actions">
           <Button
             type="primary"
@@ -177,8 +179,8 @@ export function ProjectReviewPanel({
             {project.status === 'kept' ? '已保留工作树' : '保留工作树'}
           </Button>
           <Popconfirm
-            title="丢弃本任务工作树？"
-            description="只移除当前任务的独立工作树。原仓库不受影响，运行历史与已保存补丁仍保留。"
+            title="丢弃整个会话工作树？"
+            description="移除该会话共享的工作树，之后不能继续修改。原仓库、各轮补丁和已保存历史产物保留。"
             okText="确认丢弃"
             cancelText="继续审阅"
             disabled={locked}
@@ -196,7 +198,7 @@ export function ProjectReviewPanel({
           </Popconfirm>
           <span className="muted">保留只保存工作树与补丁，不会自动提交或合并。</span>
         </div>
-      )}
+      ) : null}
       <div className="section-heading changed-files-heading">
         <h3>
           变更文件 <small>{project.files.length}</small>

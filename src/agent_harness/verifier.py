@@ -5,7 +5,8 @@ from pathlib import Path
 from uuid import UUID
 
 from .processes import ProcessRunner
-from .schemas import ArtifactRef, RunLimits, VerificationResult, VerifierSpec
+from .execution import prepare_python_execution
+from .schemas import PythonExecution, ArtifactRef, RunLimits, VerificationResult, VerifierSpec
 
 
 def _map_result(data: dict, elapsed_ms: int) -> VerificationResult:
@@ -58,12 +59,13 @@ class Verifier:
         self._process = ProcessRunner(limits, run_dir / "artifacts")  # 与模型命令同契约，但使用独立进程实例。
         self.last_result: VerificationResult | None = None  # 初始 None；一次正常/取消执行收尾后保存真实详情。
 
-    async def run(self, spec: VerifierSpec, workspace: Path, run_id: UUID) -> VerificationResult:
+    async def run(self, spec: VerifierSpec, workspace: Path, run_id: UUID, *, python_execution: PythonExecution | None = None) -> VerificationResult:
         """运行宿主固定的验收入口，返回验收状态和输出；取消仍原样向外传播。
 
         spec 包含预检后的 argv/cwd 与验收自身秒级时限；cwd=None 时取当前宿主目录。
         workspace 是任务绝对目录，run_id 是 UUID，分别通过固定 HARNESS 环境变量传入。
-        spec.python_paths 只显式加入当前 cwd 内的源码目录；空列表不注入 Python 搜索路径。
+        python_execution 为当轮共享源码快照，None 按 workspace 准备。spec.python_paths
+        仅添加验收 cwd 内的私有依赖目录，不向模型命令开放。解释器由 spec.argv 决定。
         会生成本次验收输出文件，不继承模型密钥；StorageError 向外传播以停止调度。
         """
         self.last_result = None
@@ -74,6 +76,7 @@ class Verifier:
                 spec.argv, spec.cwd if spec.cwd is not None else Path.cwd(),
                 timeout_seconds=spec.timeout_seconds, extra_env=environment,
                 python_paths=spec.python_paths,
+                python_execution=python_execution or prepare_python_execution(workspace),
             )
         except asyncio.CancelledError as error:
             data = getattr(error, "harness_process_result", None)

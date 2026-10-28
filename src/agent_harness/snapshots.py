@@ -1,4 +1,4 @@
-"""普通文件任务的有界快照与派生副本；无法核对时保持单次任务结果并拒绝追加。"""
+"""文件任务的有界逐轮证据；保存、读取和核验快照，不创建后续执行副本。"""
 
 import hashlib
 import json
@@ -48,7 +48,7 @@ class FileSnapshotStore:
     def __init__(self, runs_root: Path, *, namespace: str = '.file-snapshots', exclude_names: frozenset[str] = frozenset(), protected_roots: tuple[Path, ...] = ()) -> None:
         """绑定受保护记录根；namespace隔离不同用途，排除项仅由宿主传入，构造不写文件。
 
-        默认不排除任何内容，继续服务严格的普通副本派生；原目录差异使用独立命名空间，
+        默认不排除任何内容，用于完整核验示例副本；原目录差异使用独立命名空间，
         排除Git、依赖缓存及宿主记录目录，不把不完整快照当作可自动恢复的代码。
         """
         if '/' in namespace or '\\' in namespace or not namespace.startswith('.') or namespace in ('.', '..'):
@@ -198,11 +198,11 @@ class FileSnapshotStore:
             message = error.message if isinstance(error, SnapshotError) else '工作区无法完整保存可继续快照，请检查目录与访问权限。'
             self._write_info(directory, {'run_id': str(run_id), 'status': 'error', 'error_code': code, 'error_message': message})
 
-    def restore(self, run_id: UUID, workspace: Path, destination: Path) -> None:
-        """核对父 workspace 与 run_id 快照后创建新 destination；禁止覆盖目录，失败不执行模型。
+    def verify(self, run_id: UUID, workspace: Path) -> None:
+        """核对run_id固定快照与workspace当前内容；成功无返回值，不创建或修改工作区。
 
-        destination 由宿主从新 UUID 生成，必须与父目录及记录目录分离。文件正文从保存副本
-        读取并逐个验证摘要，最后核对派生树完整性；原工作区与快照均不修改。
+        run_id指定上一轮证据，workspace为该会话持续使用的示例副本。目录身份、文件内容
+        或快照正文无法核对时抛SnapshotError，调用方不得启动模型；不从快照恢复代码。
         """
         try:
             value = self.info(run_id)
@@ -211,34 +211,15 @@ class FileSnapshotStore:
             identity, entries, _ = self._tree(workspace)
             if value['workspace'] != str(workspace.resolve()) or list(identity) != value['identity'] or entries != value['entries']:
                 raise SnapshotError('workspace_snapshot_stale', '工作区在前轮结束后发生变化，请核对后新建任务。')
-            destination = destination.resolve()
-            if destination.is_relative_to(workspace.resolve()) or workspace.resolve().is_relative_to(destination) or destination.is_relative_to(self.runs_root):
-                raise SnapshotError('workspace_snapshot_unsafe', '派生工作区与来源或记录目录重叠。')
-            destination.mkdir(parents=True, exist_ok=False)
-            files = self._directory(run_id) / 'files'
-            if files.resolve() != files:
-                raise SnapshotError('workspace_snapshot_unreadable', '文件快照正文目录发生变化。')
             for item in entries:
-                target = destination / item['path']
-                if item['kind'] == 'directory':
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    source = files / item['path']
-                    if source.resolve() != source:
-                        raise SnapshotError('workspace_snapshot_unreadable', '文件快照正文路径发生变化。')
-                    with source.open('rb') as handle:
-                        raw = handle.read(self.MAX_BYTES + 1)
-                    if len(raw) != item['size_bytes'] or hashlib.sha256(raw).hexdigest() != item['sha256']:
-                        raise SnapshotError('workspace_snapshot_unreadable', '文件快照正文不完整，未继续执行。')
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(raw)
-                    target.chmod(item['mode'])
-            if self._tree(destination)[1] != entries or self._tree(workspace)[1] != entries:
-                raise SnapshotError('workspace_snapshot_changed', '派生工作区期间文件发生变化。')
+                if item['kind'] == 'file':
+                    self.saved_file(run_id, item['path'])
+            if self._tree(workspace)[1] != entries:
+                raise SnapshotError('workspace_snapshot_changed', '核验期间工作区发生变化。')
         except SnapshotError:
             raise
         except (OSError, ValueError, KeyError, WorkspaceError):
-            raise SnapshotError('workspace_snapshot_unreadable', '无法核对或创建后续文件工作区，尚未调用模型。') from None
+            raise SnapshotError('workspace_snapshot_unreadable', '无法核对示例工作区，尚未调用模型。') from None
 
 
     def saved_file(self, run_id: UUID, relative: str) -> Path:

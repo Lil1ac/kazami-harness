@@ -3,18 +3,19 @@
 import os
 from pathlib import Path
 import shutil
-import sys
 
 from pydantic import Field, model_validator
 
 from ..processes import ProcessRunner
+from ..schemas import PythonExecution
+from ..execution import python_command
 from ..schemas import DataModel
 from ..workspace import Workspace, WorkspaceError
 
 
 # 命令参数必须显式列出 argv；不接收自动交给 Shell 解析的命令字符串。
 class RunCommandArguments(DataModel):
-    argv: list[str] = Field(min_length=1, description="程序及参数数组。执行 Python 时可使用 python，系统会使用当前项目解释器。")
+    argv: list[str] = Field(min_length=1, description="程序及参数数组。执行 Python 时可使用 python，系统使用项目配置或 PATH 解析的本轮解释器，也可显式填写其他可执行程序路径。")
     cwd: str = Field(default=".", min_length=1, description="工作区内的相对工作目录。")
 
     @model_validator(mode="after")
@@ -28,15 +29,20 @@ class RunCommandArguments(DataModel):
 
 
 async def run_command(
-    workspace: Path, runs_root: Path, arguments: RunCommandArguments, process_runner: ProcessRunner
+    workspace: Path, runs_root: Path, arguments: RunCommandArguments, process_runner: ProcessRunner,
+    python_execution: PythonExecution,
 ) -> dict:
-    """解析受限工作目录并运行命令；解释器脚本必须由显式 argv 启动。"""
+    """在 workspace 内按 arguments.argv/cwd 运行命令，返回进程输出和结束状态。
+
+    runs_root 保持文件边界；process_runner 保存输出；python_execution 是当轮固定的
+    源码与默认解释器快照，切换子目录不改变它。非法 cwd 或快照归属抛 WorkspaceError。
+    """
     cwd = Workspace(workspace, runs_root).resolve(arguments.cwd, must_exist=True)
     if not cwd.is_dir():
         raise WorkspaceError("invalid_cwd", "命令工作目录必须是工作区内已存在的目录。")
-    argv = list(arguments.argv)
-    if argv[0] in {"python", "python3"}:
-        argv[0] = sys.executable
+    if python_execution.workspace != workspace.resolve():
+        raise WorkspaceError("python_execution_mismatch", "Python 执行快照与当前工作区不一致。")
+    argv = python_command(arguments.argv, python_execution)
     if os.name == "nt":
         candidate = Path(argv[0])
         if not candidate.is_absolute() and ("/" in argv[0] or "\\" in argv[0]):
@@ -46,4 +52,4 @@ async def run_command(
             raise WorkspaceError("command_interpreter_required", "Windows 脚本需显式指定 Python 或其他可执行解释器。")
         if found:
             argv[0] = str(Path(found).resolve())
-    return await process_runner.run(argv, cwd)
+    return await process_runner.run(argv, cwd, python_execution=python_execution)

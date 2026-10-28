@@ -7,19 +7,22 @@ from pydantic import ValidationError
 
 from ..context_archive import ContextArchive, ReadContextArguments
 from ..processes import ProcessRunner
-from ..schemas import RunConfig
+from ..execution import PythonExecutionError, prepare_python_execution, validate_python_execution
+from ..schemas import PythonExecution, RunConfig
 from ..store import StorageError
 from ..workspace import WorkspaceError
 from .command import RunCommandArguments, run_command
-from .files import ReadFileArguments, SearchFilesArguments, WriteFileArguments, read_file, search_files, write_file
+from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, WriteFileArguments,
+                    edit_file, read_file, search_files, write_file)
 
 
 _TOOL_SPECS = {
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
-    "read_file": (ReadFileArguments, "只读工作区 UTF-8 文件；offset/max_bytes 按字节计数。如 eof=false，使用 next_offset 继续读取直到完成。"),
+    "read_file": (ReadFileArguments, "只读工作区 UTF-8 文件；offset/max_bytes 按字节计数。如 eof=false，使用 next_offset 继续读取直到完成。sha256 是完整文件版本；超过文件写入预算时为 null，不可 edit_file。"),
     "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
-    "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件必须显式 overwrite=true。写入有大小上限。"),
-    "run_command": (RunCommandArguments, "用 argv 数组在工作区运行程序，不自动解析 Shell；使用 python 执行项目解释器，返回退出码、输出、超时与清理状态。"),
+    "edit_file": (EditFileArguments, "局部修改已有 UTF-8 文件：先 read_file 取得 sha256，用 expected_sha256 校验当前版本；old_text 必须包含原换行且唯一匹配，new_text 可为空。file_changed 时重新读取，禁止盲目重试或改用覆盖绕过冲突。"),
+    "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件优先使用 edit_file；整文件覆盖必须显式 overwrite=true，不具备版本冲突检查。写入有大小上限。"),
+    "run_command": (RunCommandArguments, "用 argv 数组在工作区运行程序，不自动解析 Shell；python/python3 使用项目配置或 PATH 解析的本轮解释器，并加载当轮工作区源码目录，返回退出码、输出、超时与清理状态。"),
 }
 _CLEANUP_RANK = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
 
@@ -32,17 +35,33 @@ def _error(code: str, message: str) -> dict:
 class ToolExecutor:
     """公开已启用工具，维护本次运行的产物索引与最坏清理状态。"""
 
-    def __init__(self, workspace: Path, runs_root: Path, config: RunConfig) -> None:
-        """固定工作区、记录根与配置；命令执行必须稍后绑定真实运行目录。"""
+    def __init__(self, workspace: Path, runs_root: Path, config: RunConfig, *, python_execution: PythonExecution | None = None) -> None:
+        """固定 workspace、runs_root、config 和 Python 快照；返回 None，不启动命令。
+
+        python_execution=None 时按现有根目录/src 捕获；非空时沿用宿主当轮快照。
+        命令输出必须稍后通过 bind_run 绑定，目录准备错误抛 PythonExecutionError。
+        """
         self.workspace = workspace.resolve()
         self.runs_root = runs_root.resolve()
         self.config = config
+        self.python_execution = python_execution or prepare_python_execution(self.workspace)  # 命令使用固定源码目录，不从验收规则推断。
         self.run_dir: Path | None = None
         self.process_runner: ProcessRunner | None = None
         self.cleanup_status = "not_needed"
         self.artifact_refs: list[dict] = []
         self.cancelled_result: dict | None = None
         self.context_archive: ContextArchive | None = None  # 压缩启用时绑定本轮证据归档，只开放只读引用。
+
+    def bind_python_execution(self, execution: PythonExecution) -> None:
+        """绑定宿主清单中的 execution 快照，返回 None；仅更新执行器配置，不启动命令。
+
+        工作区不一致或目录已变化时抛 PythonExecutionError；保存深副本，避免执行器
+        修改自身配置时改变已经固定的运行清单。宿主注入执行器与默认构造共用此入口。
+        """
+        if execution.workspace != self.workspace:
+            raise PythonExecutionError("工具执行器与当轮 Python 工作区不一致。")
+        validate_python_execution(execution)
+        self.python_execution = execution.model_copy(deep=True)
 
     def bind_run(self, run_dir: Path) -> None:
         """绑定已创建的运行记录目录，让命令输出仅保存在本次 artifacts 下。"""
@@ -123,15 +142,18 @@ class ToolExecutor:
             if name == "run_command":
                 if self.process_runner is None:
                     return _error("command_not_ready", "命令工具尚未绑定运行目录。")
-                data = await run_command(self.workspace, self.runs_root, arguments, self.process_runner)
+                data = await run_command(self.workspace, self.runs_root, arguments, self.process_runner, self.python_execution)
                 return self._command_result(data)
             if name == "read_file":
-                data = read_file(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars)
+                data = read_file(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars, self.config.limits.max_file_write_bytes)
                 return {"ok": True, "data": data, "error": None, "truncated": not data["eof"]}
             if name == "search_files":
                 data = search_files(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars)
                 return {"ok": True, "data": data, "error": None, "truncated": data["truncated"]}
-            data = write_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes)
+            if name == "edit_file":
+                data = edit_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes)
+            else:
+                data = write_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes)
             return self._observe({"ok": True, "data": data, "error": None, "truncated": False,
                                   "artifact_refs": [{"location": "workspace", "path": data["path"], "kind": "file"}]})
         except asyncio.CancelledError as error:
@@ -141,6 +163,8 @@ class ToolExecutor:
             raise
         except StorageError:
             raise
+        except PythonExecutionError as error:
+            return _error("python_execution_changed", str(error))
         except WorkspaceError as error:
             return _error(error.code, error.message)
         except Exception:

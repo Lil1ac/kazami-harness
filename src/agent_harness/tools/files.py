@@ -1,12 +1,14 @@
-"""工作区内的 UTF-8 分页、字面量搜索和原子写入；不允许访问运行记录。"""
+"""工作区内的 UTF-8 分页、字面量搜索、原子写入与版本核验的局部编辑。"""
 
 import codecs
 import fnmatch
+import hashlib
 import os
 import stat
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import BinaryIO
 
 from pydantic import Field, field_validator
 
@@ -66,16 +68,44 @@ def _decode_page(raw: bytes, max_bytes: int, preview_chars: int) -> tuple[str, i
     return content, len(content.encode("utf-8"))
 
 
+def _file_signature(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    """返回对象、长度、修改时间及权限；info 为 stat/fstat 结果，内容版本另用 SHA-256。
+
+    Windows 的 stat/fstat 对 ctime 的语义可能不同，不能用它比较同一文件的句柄和路径。
+    """
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode
+
+
+def _hash_open_file(stream: BinaryIO, max_bytes: int) -> str:
+    """从已打开句柄计算完整 SHA-256；最多读取 max_bytes+1 字节，超限以 file_changed 拒绝。
+
+    stream 的位置会移动到末尾；调用方负责路径、普通文件和前后状态检查。
+    """
+    stream.seek(0)
+    digest = hashlib.sha256()
+    remaining = max_bytes + 1
+    while remaining:
+        block = stream.read(min(65536, remaining))
+        if not block:
+            return digest.hexdigest()
+        digest.update(block)
+        remaining -= len(block)
+    raise FileToolError("file_changed", "文件在读取期间变大，请重新读取后编辑。")
+
+
 def read_file(
     workspace: Path,
     runs_root: Path,
     arguments: ReadFileArguments,
     preview_chars: int,
+    max_edit_bytes: int,
 ) -> dict:
-    """读取工作区普通文件的一页 UTF-8 内容，并返回字节偏移和是否到达文件末尾。
+    """读取工作区普通文件的一页 UTF-8 内容，返回分页位置、大小与完整内容指纹。
 
-    先检查路径与文件类型，再核对实际打开的句柄；读取量由 max_bytes 限制，
-    模型预览另受 preview_chars 限制。文件、编码或偏移错误统一转为 FileToolError。
+    workspace/runs_root 限定访问范围；arguments 的 offset/max_bytes 均为字节，
+    preview_chars 限制可见字符。大小不超过 max_edit_bytes 的文件额外按有界块计算
+    sha256，供 edit_file 校验；更大文件仍可分页但 sha256 为 None，不整文件加载。
+    读取前后状态变化、编码或偏移错误转为 FileToolError；本函数不修改文件。
     """
     path = _resolve_file(workspace, runs_root, arguments.path)
     try:
@@ -98,8 +128,14 @@ def read_file(
             if arguments.offset > opened.st_size:
                 raise FileToolError("invalid_offset", "offset 超过文件末尾，请使用上页的 next_offset。")
             stream.seek(arguments.offset)
-            # 额外四字节只用于辨认下一字符边界；无论文件大小如何都不会整文件加载。
+            # 分页与指纹共用句柄；指纹最多扫描编辑预算内的文件，不扩大模型可见内容。
             raw = stream.read(arguments.max_bytes + 4)
+            sha256 = _hash_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else None
+            if (_file_signature(before) != _file_signature(opened)
+                    or _file_signature(os.fstat(stream.fileno())) != _file_signature(opened)
+                    or _file_signature(path.stat()) != _file_signature(opened)
+                    or _resolve_file(workspace, runs_root, arguments.path) != path):
+                raise FileToolError("file_changed", "读取期间文件发生变化，请重新读取后编辑。")
         if raw and raw[0] & 0xC0 == 0x80 and arguments.offset == 0:
             raise FileToolError("invalid_encoding", "文件不是有效的 UTF-8 文本，请先转换编码。")
         if raw and raw[0] & 0xC0 == 0x80:
@@ -113,6 +149,8 @@ def read_file(
             "next_offset": None if eof else arguments.offset + bytes_read,
             "bytes_read": bytes_read,
             "eof": eof,
+            "size_bytes": opened.st_size,
+            "sha256": sha256,
         }
     except FileToolError:
         raise
@@ -127,7 +165,7 @@ def read_file(
 class SearchFilesArguments(DataModel):
     query: str = Field(min_length=1, max_length=4096, description="区分大小写的单行字面量文本，不使用正则。")
     directory: str = Field(default=".", min_length=1, description="工作区内的起始目录。")
-    glob: str = Field(default="*", min_length=1, max_length=512, description="相对于起始目录的文件名通配模式，例如 *.log。")
+    glob: str = Field(default="*", min_length=1, max_length=512, description="相对于起始目录的通配模式；**/ 匹配零或多级目录，例如 **/*.py 包含根目录和嵌套文件。")
     limit: int = Field(default=50, ge=1, le=200, description="最多返回的匹配行数。")
 
     @field_validator("query")
@@ -214,6 +252,28 @@ def _entry_name(entry: os.DirEntry) -> str:
     return entry.name
 
 
+def _glob_matches(relative: str, pattern: str) -> bool:
+    """匹配 relative 相对路径与 pattern；独立 ** 段匹配零或多级目录，返回布尔值。
+
+    不含独立 ** 的模式沿用 fnmatchcase，保留普通 * 跨目录及大小写行为。
+    递归模式按 POSIX 路径分段，用可达下标迭代避免深层路径或重复 ** 递归爆栈。
+    """
+    patterns = pattern.split("/")
+    if "**" not in patterns:
+        return fnmatch.fnmatchcase(relative, pattern)
+    parts = relative.split("/")
+    positions = {0}  # 已匹配的路径分段数；每次只保留当前模式可到达的下标。
+    for segment in patterns:
+        if segment == "**":
+            positions = set(range(min(positions), len(parts) + 1))
+        else:
+            positions = {index + 1 for index in positions
+                         if index < len(parts) and fnmatch.fnmatchcase(parts[index], segment)}
+        if not positions:
+            return False
+    return len(parts) in positions
+
+
 def search_files(
     workspace: Path,
     runs_root: Path,
@@ -280,7 +340,7 @@ def search_files(
                     skipped["not_regular_file"] += 1
                     continue
                 relative = path.relative_to(start).as_posix()
-                if not fnmatch.fnmatchcase(relative, arguments.glob):
+                if not _glob_matches(relative, arguments.glob):
                     continue
                 if scanned_files >= MAX_SEARCH_FILES:
                     skipped["file_count_limit"] += 1
@@ -414,4 +474,117 @@ def write_file(
                 temporary.unlink(missing_ok=True)
             except OSError:
                 # 不能用清理异常覆盖真实提交结果，且不将临时路径或系统异常暴露给模型。
+                pass
+
+
+class EditFileArguments(DataModel):
+    """已有文件的单片段精确替换；版本与匹配均通过后才允许提交。"""
+
+    path: str = Field(min_length=1, description="工作区内已存在的普通 UTF-8 文件。")
+    old_text: str = Field(min_length=1, description="区分大小写、包含原换行的完整旧片段，必须恰好匹配一处。")
+    new_text: str = Field(description="替换为此文本；空字符串表示删除旧片段，不自动格式化或转换换行。")
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", description="最近 read_file 或成功 edit_file 返回的完整文件 sha256；不可使用历史证据中的过期值。")
+
+    @field_validator("path")
+    @classmethod
+    def nonblank_path(cls, value: str) -> str:
+        """校验请求路径；空白/空字节抛 ValueError，其余原样交给工作区边界解析。"""
+        if not value.strip() or "\x00" in value:
+            raise ValueError("路径不能为空白或包含空字节")
+        return value
+
+
+def _edit_source(boundary: Workspace, requested: str, path: Path, expected: str, max_bytes: int) -> tuple[bytes, os.stat_result]:
+    """读取并核对待编辑文件，返回原字节和状态；版本不符时抛 file_changed。
+
+    boundary/requested/path 固定允许的路径；expected 为完整 SHA-256；max_bytes 是
+    原文件大小上限。句柄前后及路径对象都核对，不跟随外部链接，不创建任何文件。
+    """
+    if boundary.resolve(requested) != path:
+        raise FileToolError("file_changed", "文件路径发生变化，请重新读取后编辑。")
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise FileToolError("not_regular_file", "只能编辑已有普通文件，不能编辑目录或设备。")
+    if before.st_size > max_bytes:
+        raise FileToolError("file_size_limit", "原文件超过文件编辑字节上限，不能局部编辑。")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb", buffering=0) as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise FileToolError("not_regular_file", "只能编辑已有普通文件，不能编辑目录或设备。")
+        if _file_signature(before) != _file_signature(opened):
+            raise FileToolError("file_changed", "文件对象发生变化，请重新读取后编辑。")
+        raw = stream.read(max_bytes + 1)
+        if (len(raw) > max_bytes
+                or _file_signature(os.fstat(stream.fileno())) != _file_signature(opened)
+                or _file_signature(path.stat()) != _file_signature(opened)
+                or boundary.resolve(requested) != path
+                or hashlib.sha256(raw).hexdigest() != expected):
+            raise FileToolError("file_changed", "文件已在读取后变化，请重新 read_file，再决定如何编辑。")
+    return raw, opened
+
+
+def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, max_bytes: int) -> dict:
+    """按版本校验替换已有文件的唯一片段，返回新指纹、替换数量和文件字节数。
+
+    workspace/runs_root 固定路径边界；arguments 提供原片段、新片段及最近读取指纹。
+    max_bytes 同时约束原文件和结果大小。原字节中的 BOM、换行及未匹配内容保持；
+    不存在、歧义、版本冲突或失败提交均保留原目标。提交前再次核对版本和路径，
+    然后同目录原子替换并保留权限位；这是乐观并发检查，不是跨进程文件锁。
+    """
+    boundary = Workspace(workspace, runs_root)
+    path = boundary.resolve(arguments.path)
+    temporary: Path | None = None
+    try:
+        raw, original = _edit_source(boundary, arguments.path, path, arguments.expected_sha256, max_bytes)
+        if b"\x00" in raw or "\x00" in arguments.new_text:
+            raise FileToolError("binary_file", "局部编辑只支持不含空字节的 UTF-8 文本。")
+        try:
+            text = raw.decode("utf-8", errors="strict")
+            arguments.old_text.encode("utf-8", errors="strict")
+            arguments.new_text.encode("utf-8", errors="strict")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            raise FileToolError("invalid_encoding", "原文件和替换片段必须是有效 UTF-8 文本。") from None
+        first = text.find(arguments.old_text)
+        if first < 0:
+            raise FileToolError("edit_not_found", "没有找到原片段，请重新读取并提供精确的原文。")
+        # 从 first+1 继续检查，重复且重叠的片段也属于歧义，不能只用 str.count。
+        if text.find(arguments.old_text, first + 1) >= 0:
+            raise FileToolError("edit_ambiguous", "原片段匹配多处，请包含更多上下文使其唯一。")
+        if arguments.old_text == arguments.new_text:
+            raise FileToolError("edit_no_change", "原片段与新片段相同，没有需要提交的修改。")
+        result = (text[:first] + arguments.new_text + text[first + len(arguments.old_text):]).encode("utf-8")
+        if len(result) > max_bytes:
+            raise FileToolError("file_size_limit", "编辑结果超过文件写入字节上限。")
+        descriptor, name = tempfile.mkstemp(prefix=".harness-edit-", suffix=".tmp", dir=path.parent)
+        temporary = Path(name)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(result)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, stat.S_IMODE(original.st_mode))
+        # 临时文件落盘期间用户仍可能编辑目标；提交前重新读版本，避免使用过期原文。
+        _, current = _edit_source(boundary, arguments.path, path, arguments.expected_sha256, max_bytes)
+        if _file_signature(current) != _file_signature(original):
+            raise FileToolError("file_changed", "文件对象发生变化，请重新读取后编辑。")
+        os.replace(temporary, path)
+        return {"path": path.relative_to(boundary.workspace).as_posix(), "replacements": 1,
+                "bytes_written": len(result), "sha256": hashlib.sha256(result).hexdigest()}
+    except FileToolError:
+        raise
+    except FileNotFoundError:
+        raise FileToolError("file_not_found", "待编辑文件不存在，请重新读取确认。") from None
+    except PermissionError:
+        raise FileToolError("permission_denied", "没有编辑此文件的权限。") from None
+    except (OSError, ValueError, OverflowError):
+        raise FileToolError("file_edit_error", "文件编辑提交失败，请重新读取并检查文件状态。") from None
+    finally:
+        if temporary is not None:
+            try:
+                if temporary.exists():
+                    # Windows 不允许删除只读临时文件；只调整本次拥有的临时文件，绝不改原目标。
+                    temporary.chmod(temporary.stat().st_mode | stat.S_IWRITE)
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                # 清理错误不覆盖真实提交结果；不把临时路径回传模型。
                 pass

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from ..config import ConfigurationError, load_config, prepare_task
 from ..projects import ProjectError
 from ..runner import validate_execution, validate_output_paths
+from ..execution import PythonExecutionError, prepare_python_execution
 from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
 from ..sessions import SessionError, SessionStore, history_messages, payload_digest
 from ..snapshots import FileSnapshotStore, SnapshotError
@@ -28,19 +29,15 @@ class ConversationService:
         """绑定 manager 及其受保护存储；构造不创建目录、复制文件或调用模型。"""
         self.manager = manager  # 唯一执行调度器，负责后台任务、取消和收尾。
         self.store = SessionStore(manager.runs_root)  # 会话线性关系与请求幂等。
-        self.files = FileSnapshotStore(manager.runs_root)  # 普通工作区的受限完整副本。
+        self.files = FileSnapshotStore(manager.runs_root)  # 示例副本的逐轮证据，仅核验与读取，不派生执行目录。
         self.submission_digest: str | None = None  # 内存中尚未落盘请求的载荷摘要，用于并发幂等。
         self.submission_key: tuple[UUID, UUID] | None = None  # 正在准备的会话/请求，供同进程重复请求共享等待。
 
     def _origin(self, history: 'RunHistory') -> RunOrigin:
-        """核对 history 的宿主来源，返回固定登记项；兼容已有可核验的旧 Git 运行。"""
+        """核对history的固定宿主来源并返回；缺失或登记变化时抛SessionError，无副作用。"""
         origin = history.manifest.origin
         if origin is None:
-            review = self.manager.projects.get(history.manifest.run_id)
-            if review is not None:
-                origin = RunOrigin(kind='project', preset_id=review.project_id, registered_path=Path(review.repository))
-        if origin is None:
-            raise SessionError('continuation_source_missing', '旧记录没有可核对的工作区来源，请新建任务。')
+            raise SessionError('continuation_source_missing', '运行记录缺少明确的工作区来源。')
         presets = self.manager.catalog.project_presets() if origin.kind == 'project' else self.manager.catalog.workspace_presets()
         preset = next((item for item in presets if item.id == origin.preset_id), None)
         if preset is None or preset.path.resolve() != origin.registered_path.resolve():
@@ -69,6 +66,9 @@ class ConversationService:
             if review.status == 'discarded':
                 raise SessionError('project_already_decided', '最新一轮工作树已经丢弃，不能继续修改。')
         else:
+            preset = next(item for item in self.manager.catalog.workspace_presets() if item.id == origin.preset_id)
+            if not preset.is_example:
+                raise SessionError('workspace_copy_not_supported', '所选文件夹不支持副本执行，请在原目录新建对话。')
             info = self.files.info(history.manifest.run_id)
             if info is None and interrupted:
                 workspace = history.manifest.task.workspace
@@ -215,6 +215,8 @@ class ConversationService:
                 raise SessionError('invalid_run', str(error) if isinstance(error, ConfigurationError) else '追加任务配置无效。') from None
             self.store.begin(session_id, request.request_id, parent_id, identifier, digest, prompt)
             try:
+                sources = self.manager.catalog.project_presets() if origin.kind == 'project' else self.manager.catalog.workspace_presets()
+                current_source = next(item for item in sources if item.id == origin.preset_id)
                 if origin.execution_mode == 'local':
                     root = self.manager.local_changes.verify(origin, parent.manifest.task.workspace)
                     if origin.kind == 'project':
@@ -228,14 +230,14 @@ class ConversationService:
                             if selected is None:
                                 raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
                             verifier_path = selected.path
-                        verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected).verifier
+                        verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
                 elif origin.kind == 'project':
                     preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
                     def prepare_project():
-                        """沿用原逐轮代码副本流程；中断来源只在明确发送时捕获一次当前代码。"""
+                        """复用会话工作树；中断源仅在明确提交时固定证据，不重放旧补丁。"""
                         if interrupted:
                             self.manager.projects.capture(parent_id)
-                        return self.manager.projects.prepare_followup(preset, parent_id, identifier)
+                        return self.manager.projects.prepare_turn(preset, parent_id, identifier)
                     preparation = asyncio.create_task(asyncio.to_thread(prepare_project))
                     try:
                         review = await asyncio.shield(preparation)
@@ -245,12 +247,12 @@ class ConversationService:
                     root = Path(review.worktree)
                     verifier = self.manager.project_verifier(preset, root)
                 else:
-                    root = self.manager.web_config.runtime_root.resolve() / str(identifier)
+                    root = parent.manifest.task.workspace
                     def prepare_workspace():
-                        """为缺少收尾快照的中断目录补一次有界副本，再复用已有派生校验。"""
+                        """核验示例会话原有副本；中断时补一次证据，不创建下一轮执行目录。"""
                         if interrupted and self.files.info(parent_id) is None:
                             self.files.capture(parent_id, parent.manifest.task.workspace)
-                        self.files.restore(parent_id, parent.manifest.task.workspace, root)
+                        self.files.verify(parent_id, root)
                     preparation = asyncio.create_task(asyncio.to_thread(prepare_workspace))
                     try:
                         await asyncio.shield(preparation)
@@ -263,20 +265,20 @@ class ConversationService:
                         if preset is None:
                             raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
                         verifier_path = preset.path
-                    verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected).verifier
-                task = task.model_copy(update={'workspace': root, 'verifier': verifier})
+                    verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
+                execution = prepare_python_execution(root, current_source.python_paths, python_executable=current_source.python_executable)
+                task = task.model_copy(update={'workspace': root, 'verifier': verifier, 'python_execution': execution})
                 manifest = manifest.model_copy(update={'task': task})
                 validate_output_paths(task, self.manager.runs_root)
                 self.store.commit(session_id, request.request_id)
                 return await self.manager._launch(manifest, api_key)
-            except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, OSError) as error:
+            except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:
                 code = error.code if isinstance(error, (SessionError, SnapshotError, ProjectError)) else 'followup_prepare_failed'
-                message = error.message if isinstance(error, (SessionError, SnapshotError, ProjectError)) else '后续运行准备失败，已有父结果保持不变。'
-                self.store.fail(session_id, request.request_id, code, message)
+                message = error.message if isinstance(error, (SessionError, SnapshotError, ProjectError)) else str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else '后续运行准备失败，已有父结果保持不变。'
+                self.store.fail(session_id, request.request_id, code, message, rollback_unstarted=True)
                 if not (self.manager.runs_root / str(identifier) / 'run.json').exists() and self.manager.projects.get(identifier) is not None:
                     try:
-                        await asyncio.to_thread(self.manager.projects.capture, identifier)
-                        await asyncio.to_thread(self.manager.projects.decide, identifier, 'discard')
+                        await asyncio.to_thread(self.manager.projects.abandon_turn, identifier)
                     except (ProjectError, OSError):
                         message += ' 新建工作树保留供核对。'
                 raise SessionError(code, message) from None

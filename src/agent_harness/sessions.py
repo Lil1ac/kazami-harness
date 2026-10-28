@@ -160,10 +160,19 @@ class SessionStore:
         intent.state = 'committed'
         self._write(record)
 
-    def fail(self, session_id: UUID, request_id: UUID, code: str, message: str) -> None:
-        """把未提交意图标为准备失败；已提交意图保持原样，禁止以重试方式再次执行。"""
+    def fail(self, session_id: UUID, request_id: UUID, code: str, message: str, *, rollback_unstarted: bool = False) -> None:
+        """将准备失败的意图保存为失败，返回 None；已存在运行记录的提交绝不回退。
+
+        rollback_unstarted 默认 False；True 仅允许撤销没有 run.json 的最后一个已提交轮次，
+        表示 Runner 尚未接纳，代码与事件均未执行。请求编号仍保留失败事实，不能自动重放。
+        """
         record = self.read(session_id)
         intent = record.requests.get(str(request_id))
+        if intent is not None and rollback_unstarted and intent.state == 'committed':
+            manifest = self.runs_root / str(intent.run_id) / "run.json"
+            if not manifest.exists() and record.run_ids[-1] == intent.run_id and record.run_ids[-2] == intent.parent_run_id:
+                record.run_ids.pop()
+                intent.state = 'preparing'  # 只撤回未启动的关系，随后保留失败原因。
         if intent is not None and intent.state == 'preparing':
             intent.state, intent.error_code, intent.error_message = 'failed', code, message
             self._write(record)

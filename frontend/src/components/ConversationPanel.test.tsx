@@ -79,7 +79,7 @@ function show(run = makeRun(), review = false) {
           onInspect={onInspect}
           onConfirmed={onConfirmed}
         />
-        {review && <ProjectReviewPanel project={current.project!} active={current.active} />}
+        {review && <ProjectReviewPanel project={current.project!} active={current.active} canManage />}
       </>
     );
   }

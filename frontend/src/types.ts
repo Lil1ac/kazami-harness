@@ -1,5 +1,5 @@
 /** Python 数据模型的浏览器表示；字段名与后端持久化及 HTTP 契约保持一致。 */
-export type ToolName = 'read_file' | 'search_files' | 'write_file' | 'run_command';
+export type ToolName = 'read_file' | 'search_files' | 'write_file' | 'edit_file' | 'run_command';
 export type ExecutionStatus =
   'created' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'limit_exceeded';
 export type ValidationStatus = 'unverified' | 'passed' | 'failed' | 'error';
@@ -179,12 +179,20 @@ export interface RunResult {
   active_duration_seconds?: number; // 本次主动执行秒数；旧记录缺省不推断。
 }
 
-/** API 统一任务视图；active 与 execution_status 共同区分验收中和真实终态。 */
+/** 当轮 Python 执行快照；源码目录和解释器从持久记录读取。 */
+export interface PythonExecution {
+  workspace: string; // 当轮实际工作区，作为源码目录边界。
+  executable: string | null; // 当轮项目配置或 PATH 解析的解释器；null 表示未找到 Python。
+  python_paths: string[]; // 当轮固定的源码导入目录，工作区根目录优先。
+}
+
+/** API 统一任务视图；运行快照不随当前项目配置改变。 */
 export interface RunView {
   run_id: string; // 可用于详情路由及订阅的 UUID。
   prompt: string; // 原始任务描述。
   workspace: string; // 工具、命令和验收实际使用的绝对目录。
-  execution_mode?: 'local' | 'isolated' | null; // 旧CLI未知可为空；网页会话固定此值。
+  python_execution: PythonExecution | null; // 保存的解释器与源码目录；null 时不猜测历史执行环境。
+  execution_mode?: 'local' | 'isolated' | null; // CLI没有网页来源时可为空；网页会话明确固定此值。
   source_path?: string | null; // 用户最初选择的目录。
   source_kind?: 'project' | 'workspace' | null; // 项目测试与普通验收文案的来源。
   local_changes?: LocalChangeView | null; // 原目录的本轮前后差异，隔离任务为空。
@@ -199,6 +207,7 @@ export interface RunView {
   warnings: string[]; // 宿主给出的受控提示。
   config: RunConfig; // 本次任务的配置快照。
   context: ContextView | null; // 聚合上下文证据；旧记录或尚未准备时为 null。
+  project_workspace: ProjectWorkspace | null; // 当前会话工作树状态；旧轮无管理权限。
   project?: ProjectReview | null; // 项目任务的独立工作树与审阅证据；旧记录缺省。
   session_id?: string | null; // 线性会话根编号；旧接口可缺省。
   parent_run_id?: string | null; // 首轮为空，后续指向前轮。
@@ -218,10 +227,10 @@ export interface RunEvent {
 
 /** 服务启动时登记的工作区选项；前端不能提交任意绝对目录。 */
 export interface WorkspaceOption {
+  python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
   id: string; // 提交给 API 的受控标识。
   label: string; // 可读名称。
   path: string; // 源目录说明。
-  copy_on_run: boolean; // true 时每次运行使用独立副本。
   is_example?: boolean; // 示例只在辅助入口出现。
 }
 
@@ -232,8 +241,9 @@ export interface VerifierOption {
   description: string; // 适用范围与限制。
 }
 
-/** 宿主登记的 Git 项目；测试命令只能由宿主管理，页面不能覆盖。 */
+/** 宿主登记的 Git 项目；用户可通过明确保存修改解释器和测试设置。 */
 export interface ProjectOption {
+  python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
   id: string; // 提交给 API 的受控项目标识。
   label: string; // 项目的可读名称。
   path: string; // 原始 Git 仓库目录，只读展示。
@@ -248,8 +258,17 @@ export interface ProjectOption {
   error?: string | null; // 项目不可用时的受控说明，可用时为 null。
 }
 
-/** 一项独立 Git 任务的代码快照及人工审阅；不代表提交或合并。 */
+/** 会话级 Git 工作树生命周期；各轮代码证据单独保存。 */
+export interface ProjectWorkspace {
+  session_id: string; // 共享工作树所属会话，目录不再按轮新建。
+  latest_run_id: string; // 唯一允许管理目录的最新轮。
+  worktree: string; // 会话持续使用的实际目录。
+  status: 'pending' | 'kept' | 'discarded'; // 最新代码的保留/丢弃状态。
+}
+
+/** 每轮独立固定的项目代码证据；旧轮只读。 */
 export interface ProjectReview {
+  session_id: string; // 工作树属于该会话；run_id 只标识本轮证据。
   run_id: string; // 对应任务 UUID。
   project_id: string; // 项目登记标识。
   project_label: string; // 运行时项目名称快照。
@@ -274,6 +293,7 @@ export interface DiffResponse {
 
 /** 用户明确打开的本机目录；Git元数据仅在kind=project时存在。 */
 export interface LocalProjectOption {
+  python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
   id: string; // 后续任务只提交这个稳定编号。
   label: string; // 用户可读的文件夹名称。
   path: string; // 真实本机路径，仅作展示。
@@ -314,7 +334,7 @@ export interface ConfigOverrides {
 /** 提交任务的受控 HTTP 请求体；不支持模型密钥或任意验收命令。 */
 export type CreateRunRequest = {
   prompt: string; // 非空任务文本。
-  execution_mode?: 'local' | 'isolated'; // 默认原目录，隔离必须明确选择；续聊不允许切换。
+  execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated仅用于主动创建Git工作树或试用示例。
   expected_outputs: string[]; // 工作区相对产物路径。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
 } & (
@@ -380,7 +400,7 @@ export interface ConversationSource {
   label: string; // 可读项目名称。
   path: string; // 原目录，而非逐轮派生目录。
   registered: boolean; // 当前登记是否仍指向相同目录。
-  execution_mode?: 'local' | 'isolated'; // 同一会话中保持不变，旧副本按隔离。
+  execution_mode: 'local' | 'isolated'; // 同一会话保持明确的执行方式，不猜测缺失模式。
 }
 
 /** 最新轮的有界导航状态，不携带完整回答和工具记录。 */

@@ -12,13 +12,14 @@ from ..schemas import DataModel
 from ..projects import ProjectPreset
 
 
-# 受控工作区登记；普通目录直接使用，样例目录可在每次运行时复制。
+# 受控工作区登记；普通目录直接使用，示例仅首轮复制、续聊复用。
 class WebWorkspace(DataModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")  # 页面选择使用的稳定编号。
     label: str = Field(min_length=1, max_length=100)  # 面向用户的目录用途说明。
     path: Path  # 解析后的宿主目录；仅服务端配置能够登记。
+    python_executable: str | None = Field(default=None, max_length=4096)  # 项目解释器；None 按 PATH，目录相对实际执行工作区。
+    python_paths: list[str] | None = None  # 共享源码范围；None 自动根/src，[] 仅根目录。
     is_example: bool = False  # 示例目录仅在辅助入口展示，不充当最近打开的个人项目。
-    copy_on_run: bool = False  # True 时复制样例，为每次运行提供独立目录。
 
 
 # 宿主预置验收器索引；实际 argv 仍由既有验收 TOML 定义。
@@ -59,6 +60,8 @@ def prepare_project_test(preset: ProjectPreset, base: Path) -> ProjectPreset:
     if not preset.test_argv:
         return preset.model_copy(deep=True)
     program = preset.test_argv[0]
+    if program in {"python", "python3"}:
+        return preset.model_copy(deep=True)  # 任务接纳时与模型命令一起按实际项目解释器固定。
     if "{workspace}" in program:
         raise ConfigurationError("项目测试入口不能来自任务工作树。")
     local = base / program
@@ -95,7 +98,7 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
             if sample.is_dir():
                 workspaces.append(
                     WebWorkspace(
-                        id="logs", label="日志样例（每次独立复制）", path=sample, copy_on_run=True, is_example=True
+                        id="logs", label="日志样例（独立副本）", path=sample, is_example=True
                     )
                 )
             if verifier.is_file():

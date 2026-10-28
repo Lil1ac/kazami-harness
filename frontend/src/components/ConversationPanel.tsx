@@ -56,9 +56,6 @@ function TurnMessage({
   const interrupted = turn.interrupted ?? (selected && Boolean(run?.interrupted));
   return (
     <div className="assistant-message">
-      <span className="agent-avatar" aria-hidden="true">
-        H
-      </span>
       <div className="assistant-content">
         <div className="assistant-heading">
           <strong>Agent</strong>
@@ -183,8 +180,7 @@ export function ConversationPanel({
           {conversation.turns.map(
             /* 每条用户消息与本轮执行一一对应，稳定保留历史阅读位置。 */ (turn) => (
               <article key={turn.run_id} className="chat-turn" data-run-id={turn.run_id}>
-                <div className="user-message">
-                  <span className="message-author">你</span>
+                <div className="user-message" aria-label="你的消息">
                   <div className="user-message-body">{turn.prompt}</div>
                 </div>
                 <TurnMessage

@@ -58,3 +58,33 @@ it('只有确认活动的运行才把未配对步骤显示为执行中', () => {
   expect(activitySteps([started])[0].state).toBe('unknown');
   expect(activitySteps([started], true)[0].state).toBe('running');
 });
+
+it('局部编辑显示文件与真实替换参数，版本冲突保留失败原因', () => {
+  // 沿用相同调用配对，不因新工具名称推断编辑成功，也不把旧文本当作渲染代码。
+  const args = {
+    path: 'app.py',
+    old_text: 'a - b',
+    new_text: 'a + b',
+    expected_sha256: 'a'.repeat(64),
+  };
+  const result = { ok: false, error: { code: 'file_changed', message: '文件已变化，请重新读取' } };
+  const steps = activitySteps([
+    {
+      ...makeEvent(1),
+      type: 'tool_started',
+      payload: { call_id: 'edit', name: 'edit_file', arguments_json: JSON.stringify(args) },
+    },
+    {
+      ...makeEvent(2),
+      type: 'tool_result',
+      payload: { call_id: 'edit', name: 'edit_file', result },
+    },
+  ]);
+  expect(steps).toHaveLength(1);
+  expect(steps[0]).toMatchObject({
+    label: '局部编辑文件 · app.py',
+    state: 'failed',
+    arguments: args,
+    result,
+  });
+});

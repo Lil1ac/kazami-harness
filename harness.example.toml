@@ -1,7 +1,7 @@
-# 当前切片支持四类工具；命令只用于可信本地任务，配置会保存为运行快照。
+# 当前切片支持读、搜、写、局部编辑、命令五类工具；命令只用于可信本地任务，配置会保存为运行快照。
 provider = "deepseek"
 requested_model = "deepseek-flash"
-tools = ["read_file", "search_files", "write_file", "run_command"]
+tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
 # 宿主技能集合：相对本配置文件解析；网页只能选择名称，不能改路径。
 skill_roots = ["examples/skills"]

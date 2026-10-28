@@ -61,7 +61,7 @@ def skill_environment(tmp_path: Path, monkeypatch) -> tuple[WebConfig, Path]:
     roots.mkdir()
     config = WebConfig(
         project_dir=tmp_path, runtime_root=tmp_path / "runtime", frontend_dist=tmp_path / "dist",
-        workspaces=[WebWorkspace(id="files", label="技能验收工作区", path=workspace, copy_on_run=True)],
+        workspaces=[WebWorkspace(id="files", label="技能验收工作区", path=workspace)],
     )
     return config, roots
 
@@ -402,7 +402,9 @@ def test_missing_skill_followup_can_be_cleared_without_losing_conversation(skill
             users = [message["content"] for message in model.requests[calls] if message["role"] == "user"]
             assert users == ["first", "failed-selected", "after-clear"]
             assert (Path(cleared["workspace"]) / "result.txt").read_text(encoding="utf-8") == "NO_SKILL: after-clear\n"
-            assert (Path(failed["workspace"]) / "result.txt").read_text(encoding="utf-8") == "STYLE_ALPHA_V1: first\n"
+            assert cleared['workspace'] == first['workspace'] == failed['workspace']
+            artifact = await client.get(f'/api/runs/{first["run_id"]}/artifacts', params={'location': 'workspace', 'path': 'result.txt', 'preview': True})
+            assert artifact.status_code == 200 and artifact.json()['content'].replace('\r\n', '\n') == 'STYLE_ALPHA_V1: first\n'
             assert evidence(app.state.manager.runs_root, first["run_id"]) == first_evidence
             assert evidence(app.state.manager.runs_root, failed["run_id"]) == failed_evidence
     asyncio.run(scenario())

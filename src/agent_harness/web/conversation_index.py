@@ -1,12 +1,9 @@
 """从现有运行和会话记录构建只读导航索引，不保存第二份会话事实。"""
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from ..schemas import RunOrigin
-from ..projects import ProjectError
 from ..sessions import SessionError
 from ..store import StorageError
 from .schemas import ConversationPage, ConversationRunState, ConversationSource, ConversationSummary
@@ -34,24 +31,15 @@ class ConversationIndex:
         }
 
     def source_for(self, history: "RunHistory", registry: dict | None = None) -> ConversationSource | None:
-        """按history原始来源返回项目身份；registry=None时读取当前登记，旧CLI来源未知时返回None。"""
+        """按history明确来源返回项目身份；registry=None读取当前登记，无来源时返回None。"""
         origin = history.manifest.origin
-        label = None
-        if origin is None:
-            try:
-                review = self.manager.projects.get(history.manifest.run_id)
-            except ProjectError:
-                review = None  # 不可核对的旧来源仅在全局显示，不猜测所属项目。
-            if review is not None:
-                origin = RunOrigin(kind="project", preset_id=review.project_id, registered_path=Path(review.repository))
-                label = review.project_label
         if origin is None:
             return None
         registry = self._registry() if registry is None else registry
         key = (origin.kind, origin.preset_id, os.path.normcase(str(origin.registered_path)))
         return ConversationSource(
             id=origin.preset_id, kind=origin.kind, path=str(origin.registered_path), execution_mode=origin.execution_mode,
-            label=registry.get(key) or label or origin.registered_path.name or str(origin.registered_path),
+            label=registry.get(key) or origin.registered_path.name or str(origin.registered_path),
             registered=key in registry,
         )
 

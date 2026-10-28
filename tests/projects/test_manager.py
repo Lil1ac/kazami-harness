@@ -138,18 +138,25 @@ def test_invalid_ref_is_controlled_and_creates_no_worktree(repository: Path, tmp
     assert not service.worktrees_root.exists()
 
 
+
 def test_snapshotted_then_changed_refuses_discard(repository: Path, tmp_path: Path) -> None:
-    """完整快照之后用户增加新改动时拒绝丢弃，重新快照后才允许。"""
+    """快照后新增改动时拒绝丢弃；新一轮固定它，旧补丁保持，才允许从最新轮删除。"""
     service = manager(tmp_path)
     review = service.prepare(preset(repository), uuid4())
     service.capture(review.run_id)
+    original_patch = service.patch_path(review.run_id).read_bytes()
     (Path(review.worktree) / "late.txt").write_text("do not lose\n", encoding="utf-8")
     with pytest.raises(ProjectError) as caught:
         service.decide(review.run_id, "discard")
     assert caught.value.code == "project_snapshot_stale"
-    assert (Path(review.worktree) / "late.txt").exists()
-    service.capture(review.run_id)
-    assert service.decide(review.run_id, "discard").status == "discarded"
+    child = service.prepare_turn(preset(repository), review.run_id, uuid4())
+    assert child.worktree == review.worktree
+    assert (Path(child.worktree) / "late.txt").read_text(encoding="utf-8") == "do not lose\n"
+    service.capture(child.run_id)
+    assert service.patch_path(review.run_id).read_bytes() == original_patch
+    with pytest.raises(ProjectError, match="最新一轮"):
+        service.decide(review.run_id, "discard")
+    assert service.decide(child.run_id, "discard").status == "discarded"
 
 
 def test_replaced_directory_refuses_discard(repository: Path, tmp_path: Path) -> None:
@@ -258,7 +265,7 @@ def test_project_subdirectory_and_duplicate_run_are_rejected(repository: Path, t
 def test_python_import_paths_cannot_escape(repository: Path, python_path: str) -> None:
     """Python 导入目录不能使用绝对路径、盘符或父目录，避免宿主源目录抢占任务代码。"""
     with pytest.raises(ValidationError):
-        ProjectPreset(id="fixture", label="项目", path=repository, test_argv=["python"], test_python_paths=[python_path])
+        ProjectPreset(id="fixture", label="项目", path=repository, test_argv=["python"], python_paths=[python_path])
 
 
 def test_kept_worktree_can_later_be_discarded(repository: Path, tmp_path: Path) -> None:
@@ -272,20 +279,22 @@ def test_kept_worktree_can_later_be_discarded(repository: Path, tmp_path: Path) 
     assert service.patch_path(review.run_id).is_file()
 
 
-def test_kept_worktree_change_can_be_recaptured(repository: Path, tmp_path: Path) -> None:
-    """已保留后手动修改需先重捕快照，状态保持 kept，随后才能安全丢弃。"""
+
+def test_kept_worktree_changes_belong_to_next_turn(repository: Path, tmp_path: Path) -> None:
+    """已保留轮的证据固定；外部修改进入同目录新轮，旧轮保留决定不覆盖新轮待审阅。"""
     service = manager(tmp_path)
     review = service.prepare(preset(repository), uuid4())
     service.capture(review.run_id)
     service.decide(review.run_id, "keep")
+    before = service.patch_path(review.run_id).read_bytes()
     (Path(review.worktree) / "later.txt").write_text("later", encoding="utf-8")
-    with pytest.raises(ProjectError) as caught:
-        service.decide(review.run_id, "discard")
-    assert caught.value.code == "project_snapshot_stale"
-    captured = service.capture(review.run_id)
-    assert captured.status == "kept"
+    child = service.prepare_turn(preset(repository), review.run_id, uuid4())
+    assert child.status == "pending" and child.worktree == review.worktree
+    assert service.get(review.run_id).status == "kept"
+    captured = service.capture(child.run_id)
     assert any(item.path == "later.txt" for item in captured.files)
-    assert service.decide(review.run_id, "discard").status == "discarded"
+    assert service.patch_path(review.run_id).read_bytes() == before
+    assert service.decide(child.run_id, "discard").status == "discarded"
 
 
 def test_prepare_does_not_execute_checkout_hooks(repository: Path, tmp_path: Path) -> None:
@@ -326,7 +335,9 @@ def test_empty_patch_is_complete_and_does_not_modify_task_index(repository: Path
     git(worktree, "add", "app.txt")
     git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").decode().strip())
     before = (git_dir / "index").read_bytes()
-    captured = service.capture(review.run_id)
+    child = service.prepare_turn(preset(repository), review.run_id, uuid4())
+    captured = service.capture(child.run_id)
+    assert service.patch_path(review.run_id).read_bytes() == b""
     assert captured.files[0].path == "app.txt"
     assert (git_dir / "index").read_bytes() == before
 
@@ -399,7 +410,7 @@ def test_host_identifier_and_path_separator_limits(repository: Path) -> None:
     with pytest.raises(ValidationError):
         ProjectPreset(id="ok", label="x" * 101, path=repository, test_argv=["python"])
     with pytest.raises(ValidationError):
-        ProjectPreset(id="ok", label="项目", path=repository, test_argv=["python"], test_python_paths=[f"src{os.pathsep}outside"])
+        ProjectPreset(id="ok", label="项目", path=repository, test_argv=["python"], python_paths=[f"src{os.pathsep}outside"])
 
 
 def test_git_does_not_inherit_api_keys_or_parent_git_injection(repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,3 +473,36 @@ def test_repository_clean_smudge_filters_are_disabled(repository: Path, tmp_path
     (Path(review.worktree) / "app.txt").write_text("modified\n", encoding="utf-8")
     captured = service.capture(review.run_id)
     assert captured.patch_available and not marker.exists()
+
+
+def test_three_turns_restart_and_discard_keep_old_evidence(repository: Path, tmp_path: Path) -> None:
+    """三个轮次和一次重启只用一个工作树；旧补丁、文件及二进制在丢弃后仍按旧字节可读。"""
+    service = manager(tmp_path)
+    first = service.prepare(preset(repository), uuid4())
+    root = Path(first.worktree)
+    identity = root.stat().st_ino
+    (root / "result.txt").write_text("first", encoding="utf-8")
+    (root / "data.bin").write_bytes(b"\x00first")
+    service.capture(first.run_id)
+    patch = service.patch_path(first.run_id).read_bytes()
+    service.decide(first.run_id, "keep")
+    second = service.prepare_turn(preset(repository), first.run_id, uuid4())
+    (root / "result.txt").write_text("second", encoding="utf-8")
+    (root / "data.bin").write_bytes(b"\x00second")
+    service.capture(second.run_id)
+    restarted = manager(tmp_path)
+    third = restarted.prepare_turn(preset(repository), second.run_id, uuid4())
+    assert third.worktree == first.worktree and root.stat().st_ino == identity
+    assert len(list(service.worktrees_root.iterdir())) == 1
+    (root / "result.txt").write_text("third", encoding="utf-8")
+    restarted.capture(third.run_id)
+    assert restarted.files.saved_file(first.run_id, "result.txt").read_text(encoding="utf-8") == "first"
+    assert restarted.files.saved_file(second.run_id, "result.txt").read_text(encoding="utf-8") == "second"
+    assert restarted.patch_path(first.run_id).read_bytes() == patch
+    restarted.decide(third.run_id, "discard")
+    assert not root.exists() and repository.is_dir()
+    assert restarted.get(first.run_id).warnings == []  # 已知会话丢弃不冒充目录异常丢失。
+    assert restarted.get(second.run_id).warnings == []
+    assert restarted.files.saved_file(first.run_id, "data.bin").read_bytes() == b"\x00first"
+    assert restarted.files.saved_file(second.run_id, "data.bin").read_bytes() == b"\x00second"
+    assert restarted.patch_path(first.run_id).read_bytes() == patch

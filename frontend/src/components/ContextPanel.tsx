@@ -26,7 +26,6 @@ export function ContextPanel({
     <section className="context-panel" aria-labelledby="context-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">MODEL INPUT</span>
           <h2 id="context-heading">上下文</h2>
         </div>
         <span className="muted">UTF-8 JSON 字节数</span>

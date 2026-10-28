@@ -104,7 +104,6 @@ export function EventTrail({
     <section className="event-trail" aria-labelledby="trail-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">EXECUTION TRACE</span>
           <h2 id="trail-heading">执行轨迹</h2>
         </div>
         <span className={`connection-state ${connection}`}>

@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ..schemas import ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName
-from ..projects import ProjectReview
+from ..schemas import PythonExecution, ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName
+from ..projects import ProjectReview, ProjectWorkspace
 from ..local_execution import LocalChangeView
 
 
@@ -25,7 +25,7 @@ class CreateRunRequest(DataModel):
     prompt: str = Field(min_length=1, max_length=65536)  # 本次任务描述，空白由 TaskSpec 拒绝。
     workspace_id: str | None = Field(default=None, min_length=1, max_length=64)  # 普通任务工作区，与 project_id 二选一。
     project_id: str | None = Field(default=None, min_length=1, max_length=64)  # Git 项目任务编号。
-    execution_mode: Literal["local", "isolated"] | None = None  # None按来源默认；本机登记默认原目录，示例沿用隔离。
+    execution_mode: Literal["local", "isolated"] = "local"  # 始终默认所选目录；isolated仅用于显式Git工作树或示例副本。
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)  # 固定提交引用，默认提交时 HEAD。
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
     expected_outputs: list[str] = Field(default_factory=list, max_length=100)  # 工作区内相对产物引用。
@@ -75,7 +75,7 @@ class ConversationSource(DataModel):
     label: str  # 当前同身份登记名称；登记移除时使用原目录名称。
     path: str  # 会话来源绝对目录，与逐轮工作树分别保存。
     registered: bool  # 当前目录登记仍匹配编号、类型和规范路径。
-    execution_mode: Literal["local", "isolated"] = "isolated"  # 会话固定方式；旧副本缺省仍按隔离展示。
+    execution_mode: Literal["local", "isolated"]  # 会话固定方式；不存在从旧记录猜测模式的兼容默认值。
 
 
 class ConversationRunState(DataModel):
@@ -136,6 +136,7 @@ class RunView(DataModel):
     run_id: UUID  # 与落盘登记一致的运行编号。
     prompt: str  # 原任务描述。
     workspace: str  # 模型工具、命令和验收实际使用的绝对目录。
+    python_execution: PythonExecution | None  # 当轮已保存的默认解释器与源码目录；未准备时为 None，不用当前值填充。
     execution_mode: Literal["local", "isolated"] | None = None  # CLI未知为None；网页明确原目录或隔离。
     source_path: str | None = None  # 网页最初选择的项目目录，旧记录未知时不猜测。
     source_kind: Literal["project", "workspace"] | None = None  # 原目录Git任务仍按项目测试展示，无需伪造工作树审阅。
@@ -150,6 +151,7 @@ class RunView(DataModel):
     interrupted: bool  # 历史缺少终态且当前服务没有执行此任务。
     warnings: list[str] = Field(default_factory=list)  # 受控的读取或后台服务提示。
     config: RunConfig  # 本次配置快照，不含密钥值。
+    project_workspace: ProjectWorkspace | None = None  # 会话共享目录的当前状态；历史轮次无管理权限。
     project: ProjectReview | None = None  # 旧记录与普通任务为 None；项目审阅独立于执行状态。
     context: ContextView | None = None  # 从已落盘事件还原的指令快照与最新输入检查；旧记录为 None。
     session_id: UUID | None = None  # 旧前端可缺省；服务对旧记录返回单轮会话编号。
@@ -165,6 +167,9 @@ class EventPage(DataModel):
 
 
 # 用户明确保存的后续项目测试设置，不属于模型可修改的任务参数。
-class ProjectTestRequest(DataModel):
+class ProjectSettingsRequest(DataModel):
+    """用户明确保存的项目运行设置；保存只校验，不执行模型、测试或解释器。"""
+
+    python_executable: str | None = Field(default=None, max_length=4096)  # None/空白按 PATH；非空为项目解释器路径。
     test_command: str = Field(default="", max_length=4096)  # 空字符串清空测试；仅分词，不经 Shell。
     test_timeout_seconds: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)  # 项目测试超时，单位秒。

@@ -160,7 +160,7 @@ def main() -> None:
         project_dir=project, runtime_root=root / "worktrees", frontend_dist=project / "frontend/dist",
         workspaces=[], projects=[ProjectPreset(
             id="skills-project", label="技能代码项目（离线验收）", path=source,
-            test_argv=[sys.executable, "-m", "pytest", "-q"], test_python_paths=["src"],
+            test_argv=[sys.executable, "-m", "pytest", "-q"], python_paths=["src"],
         )],
     )
     app = create_app(

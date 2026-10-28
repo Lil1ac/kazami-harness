@@ -86,7 +86,7 @@ def main() -> None:
     os.environ['DEEPSEEK_API_KEY'] = 'offline-project-browser-key'
     config = WebConfig(
         project_dir=project, runtime_root=root / 'worktrees', frontend_dist=project / 'frontend/dist',
-        workspaces=[], projects=[ProjectPreset(id='browser-project', label='已有Python项目（离线联动验证）', path=source, test_argv=[sys.executable, '-m', 'pytest', '-q'], test_python_paths=['src', '.'])],
+        workspaces=[], projects=[ProjectPreset(id='browser-project', label='已有Python项目（离线联动验证）', path=source, test_argv=[sys.executable, '-m', 'pytest', '-q'], python_paths=['src', '.'])],
     )
     app = create_app(config, RunConfig(requested_model='offline-project-browser', tools=['read_file', 'search_files', 'write_file', 'run_command']), root / 'runs', model_client=ProjectBrowserModel())
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', workers=1, timeout_graceful_shutdown=2)

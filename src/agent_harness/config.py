@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from agent_harness.execution import PythonExecutionError, prepare_python_execution, python_command
 from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, TaskSpec, VerifierSpec
 
 
@@ -113,7 +114,7 @@ def _prepare_verifier(path: Path, timeout_seconds: float) -> VerifierSpec:
     """读取宿主验收清单，解析工作目录和程序入口，但不执行程序。
 
     相对 cwd 和程序路径以清单目录为基准；裸命令名也可通过 PATH 查找。
-    清单未指定超时时使用传入默认值，返回的 argv[0] 固定为绝对入口路径。
+    清单未指定超时时使用传入默认值；Python 别名交任务配置解析，其他入口固定为绝对路径。
     """
     raw = _read_toml(path, "验收配置文件")
     try:
@@ -136,6 +137,8 @@ def _prepare_verifier(path: Path, timeout_seconds: float) -> VerifierSpec:
         raise ConfigurationError("验收配置路径无法解析。") from None
 
     program = spec.argv[0]
+    if program in {"python", "python3"}:
+        return spec  # 与任务模型命令一起在 prepare_task 中按项目解释器固定。
     try:
         local = base / program
         is_path = Path(program).is_absolute() or "/" in program or "\\" in program
@@ -164,16 +167,25 @@ def prepare_task(
     verifier_path: Path | None = None,
     verifier_timeout: float = 30.0,
     expected_outputs: list[str] | None = None,
+    *,
+    python_paths: list[str] | None = None,
+    python_executable: str | None = None,
 ) -> TaskSpec:
     """将任务文本、已存在的工作目录和可选验收清单校验为 TaskSpec。
 
-    工作目录会规范化为绝对路径；本函数不创建运行记录，也不要求 API 密钥。
+    工作目录会规范化为绝对路径；python_paths 为宿主共享源码目录，None 自动根/src，
+    [] 仅根目录；python_executable 为项目解释器，None 按 PATH 查找；返回含执行快照的任务，不创建运行记录，也不要求 API 密钥。
     """
     resolved_workspace = _resolve_directory(workspace, "任务工作目录")
     verifier = (
         _prepare_verifier(verifier_path, verifier_timeout) if verifier_path is not None else None
     )
     try:
-        return TaskSpec(prompt=prompt, workspace=resolved_workspace, verifier=verifier, expected_outputs=expected_outputs or [])
+        execution = prepare_python_execution(resolved_workspace, python_paths, python_executable=python_executable)
+        if verifier is not None:
+            verifier = verifier.model_copy(update={"argv": python_command(verifier.argv, execution)})
+        return TaskSpec(prompt=prompt, workspace=resolved_workspace, python_execution=execution, verifier=verifier, expected_outputs=expected_outputs or [])
     except ValidationError as error:
         raise ConfigurationError(_validation_message("任务参数", error)) from None
+    except PythonExecutionError as error:
+        raise ConfigurationError(str(error)) from None

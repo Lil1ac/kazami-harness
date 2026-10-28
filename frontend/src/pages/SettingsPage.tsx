@@ -77,9 +77,9 @@ const limitFields: LimitField[] = [
   },
   {
     key: 'max_file_write_bytes',
-    label: '单次文件写入',
+    label: '文件写入与编辑',
     unit: '字节',
-    help: '写入工具每次可提交的数据上限。',
+    help: '按 UTF-8 字节限制写入、局部编辑的原文件和结果；更大文件仍可分页读取。',
   },
 ];
 /** 压缩参数按后端单位编辑；None窗口单独作为可选项。 */
@@ -103,6 +103,7 @@ const toolOptions: { value: ToolName; label: string }[] = [
   { value: 'read_file', label: 'read_file · 读取文件' },
   { value: 'search_files', label: 'search_files · 搜索内容' },
   { value: 'write_file', label: 'write_file · 写入文件' },
+  { value: 'edit_file', label: 'edit_file · 局部编辑文件' },
   { value: 'run_command', label: 'run_command · 执行命令' },
 ];
 
@@ -145,15 +146,11 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
   }
 
   return (
-    <>
+    <div className="settings-workspace">
       <header className="page-heading">
         <div>
-          <span className="eyebrow">WORKSPACE / CONFIGURATION</span>
-          <h1>
-            运行配置
-            <span className="title-dot" />
-          </h1>
-          <p className="muted">应用到本浏览器之后提交的任务，刷新后恢复宿主默认。</p>
+          <h1>运行配置</h1>
+          <p className="muted">仅用于本浏览器后续提交；刷新恢复宿主默认，已创建任务沿用原配置。</p>
         </div>
       </header>
       <div className="settings-layout">
@@ -164,7 +161,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
             initialValues={effectiveConfig(options.config, draft)}
             onFinish={apply}
             onValuesChange={/* 修改后撤去过期的已应用提示。 */ () => setApplied(false)}
-            requiredMark="optional"
+            requiredMark={false}
           >
             <section className="settings-section">
               <div className="section-heading">
@@ -378,7 +375,6 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
         </div>
         <aside className="settings-aside">
           <section>
-            <span className="eyebrow">CREDENTIAL SOURCE</span>
             <h2>模型凭据</h2>
             <p>
               <code>{options.config.api_key_env}</code>
@@ -390,20 +386,12 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
             />
             <p className="muted">密钥由启动后端的进程环境提供，网页不接收、不保存密钥值。</p>
           </section>
-          <section>
-            <h2>配置作用范围</h2>
-            <p className="muted">这份草稿用于下一次提交。正在运行的任务使用创建时的配置快照。</p>
-            <p className="muted">
-              在新任务页打开电脑中的文件夹。Git
-              项目的测试命令可在该页高级设置中保存；其他独立验收程序由宿主提供。
-            </p>
-          </section>
           <details>
             <summary>宿主系统提示词（只读）</summary>
             <pre>{options.config.system_prompt}</pre>
           </details>
         </aside>
       </div>
-    </>
+    </div>
   );
 }

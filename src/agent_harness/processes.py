@@ -9,7 +9,8 @@ import signal
 from typing import BinaryIO
 from uuid import uuid4
 
-from .schemas import RunLimits
+from .execution import python_command, validate_python_execution
+from .schemas import PythonExecution, RunLimits
 from .store import StorageError
 
 
@@ -251,13 +252,15 @@ class ProcessRunner:
     async def run(
         self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
         extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
+        python_execution: PythonExecution | None = None,
     ) -> dict:
         """执行程序并返回退出码、输出预览、原始引用和清理状态。
 
         argv 是程序及参数数组，cwd 是已校验目录；timeout_seconds 单位秒，None 时
         使用 command_timeout_seconds，必须为有限正数。extra_env 只允许宿主提供两项
-        固定验收变量，None 时不补充。python_paths 默认为 None；仅宿主验收可指定
-        cwd 内的绝对搜索目录，构成子进程 PYTHONPATH，不继承父环境的 Python 注入项。
+        固定验收变量，None 时不补充。python_execution 默认 None，非空时优先加入
+        当轮工作区源码目录，命令 cwd 可为子目录。python_paths 默认 None，只供宿主
+        验收添加 cwd 内的私有依赖，排在项目源码之后；两者均不继承父环境的 Python 注入项。
         函数会创建输出文件并启动/必要时清理进程。
         存储故障抛 StorageError；取消附带 harness_process_result 后原样重新抛出，
         返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
@@ -269,18 +272,25 @@ class ProcessRunner:
             raise ValueError("命令超时必须为有限正数")
         if os.name == "nt" and Path(argv[0]).suffix.lower() in {".bat", ".cmd", ".ps1"}:
             raise ValueError("脚本必须通过显式解释器执行")
+        if python_execution is not None:
+            argv = python_command(argv, python_execution)
         child_env = _child_environment(extra_env)
+        imports: list[str] = []  # 项目源码优先，宿主验收私有依赖随后追加且去重。
+        if python_execution is not None:
+            validate_python_execution(python_execution)
+            imports.extend(str(path) for path in python_execution.python_paths)
         if python_paths:
             # 显式路径与任意环境变量分开校验，防止测试误加载源仓库的可编辑安装代码。
             base = cwd.resolve(strict=True)
-            imports: list[str] = []
             for directory in python_paths:
                 if not isinstance(directory, Path) or not directory.is_absolute() or "\x00" in str(directory) or os.pathsep in str(directory):
                     raise ValueError("Python 搜索目录必须是绝对路径")
                 resolved = directory.resolve()
                 if not resolved.is_relative_to(base) or (resolved.exists() and not resolved.is_dir()):
                     raise ValueError("Python 搜索目录必须位于命令工作区内")
-                imports.append(str(resolved))
+                if str(resolved) not in imports:
+                    imports.append(str(resolved))
+        if imports:
             child_env["PYTHONPATH"] = os.pathsep.join(imports)
         capture = self._open_capture()
         process: asyncio.subprocess.Process | None = None

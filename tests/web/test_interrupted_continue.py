@@ -40,13 +40,13 @@ async def interrupted_run(manager, *, project_mode=True, unresolved=False):
         preset = manager.web_config.projects[0]
         review = manager.projects.prepare(preset, identifier)
         root = Path(review.worktree)
-        verifier = VerifierSpec(argv=preset.test_argv, cwd=root, timeout_seconds=preset.test_timeout_seconds, python_paths=[root / value for value in preset.test_python_paths])
-        origin = RunOrigin(kind="project", preset_id=preset.id, registered_path=preset.path)
+        verifier = manager.project_verifier(preset, root)
+        origin = RunOrigin(kind="project", preset_id=preset.id, registered_path=preset.path, execution_mode="isolated")
     else:
         preset = manager.web_config.workspaces[0]
         root = preset.path
         verifier = None
-        origin = RunOrigin(kind="workspace", preset_id=preset.id, registered_path=preset.path)
+        origin = RunOrigin(kind="workspace", preset_id=preset.id, registered_path=preset.path, execution_mode="local", workspace_identity=manager.local_changes.identity(root))
     manifest = RunManifest(run_id=identifier, session_id=identifier, task=TaskSpec(prompt="修复加法并保留已有修改", workspace=root, verifier=verifier), config=manager.run_config, origin=origin)
     store = RunStore.create(manager.runs_root, manifest)
     builder = ContextBuilder(Workspace(root, manager.runs_root), manifest.task, manifest.config)

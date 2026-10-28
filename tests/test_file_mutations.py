@@ -322,3 +322,24 @@ def test_workspace_rejects_missing_outside_before_existence_check(tmp_path: Path
     with pytest.raises(WorkspaceError) as caught:
         Workspace(workspace, runs).resolve("../missing-secret", must_exist=True)
     assert caught.value.code == "path_outside_workspace"
+
+
+@pytest.mark.parametrize(("pattern", "expected"), [
+    ("**/*.py", ["main.py", "nested/direct.py", "nested/pkg/deep.py"]),
+    ("nested/**/*.py", ["nested/direct.py", "nested/pkg/deep.py"]),
+    ("**/**/main.py", ["main.py"]),
+    ("*.py", ["main.py", "nested/direct.py", "nested/pkg/deep.py"]),
+    ("nested/*.py", ["nested/direct.py", "nested/pkg/deep.py"]),
+    ("**/d[ie]*.py", ["nested/direct.py", "nested/pkg/deep.py"]),
+    ("**/*.PY", []),
+])
+def test_recursive_glob_includes_zero_directories(tmp_path: Path, pattern: str, expected: list[str]) -> None:
+    """pattern 通过真实搜索入口核对 expected 路径；覆盖零层、多层及普通模式的既有语义。"""
+    workspace, runs = make_workspace(tmp_path)
+    for relative in ["main.py", "nested/direct.py", "nested/pkg/deep.py", "nested/skip.txt"]:
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ERROR marker\n", encoding="utf-8")
+    result = search(workspace, runs, glob=pattern)
+    assert [item["path"] for item in result["matches"]] == expected
+    assert result["truncated"] is False

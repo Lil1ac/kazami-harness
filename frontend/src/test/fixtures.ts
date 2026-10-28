@@ -37,7 +37,7 @@ export const config: RunConfig = {
 export const options: OptionsResponse = {
   config,
   key_configured: true,
-  workspaces: [{ id: 'logs', label: '日志样例', path: '/examples/logs', copy_on_run: true }],
+  workspaces: [{ id: 'logs', label: '日志样例', path: '/examples/logs', is_example: true }],
   verifiers: [
     { id: 'logs', label: '固定日志样例专用验收', description: '只检查随仓库提供的固定日志输入。' },
   ],
@@ -50,6 +50,8 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     run_id: 'run-a',
     prompt: '统计日志',
     workspace: '/workspace',
+    project_workspace: overrides.project ? { session_id: overrides.project.session_id, latest_run_id: overrides.run_id || 'run-a', worktree: overrides.project.worktree, status: overrides.project.status } : null, // 模拟真实会话当前状态。
+    python_execution: null, // 未准备执行配置的记录；测试可提供独立轮次快照。
     created_at: '2026-10-19T10:00:00Z',
     phase: 'finished',
     event_count: 0,
@@ -112,6 +114,7 @@ export const projectOption: ProjectOption = {
 export function makeProject(overrides: Partial<ProjectReview> = {}): ProjectReview {
   return {
     run_id: 'run-a',
+    session_id: 'run-a', // 首轮创建的会话，后续复用该工作树。
     project_id: projectOption.id,
     project_label: projectOption.label,
     repository: projectOption.path,

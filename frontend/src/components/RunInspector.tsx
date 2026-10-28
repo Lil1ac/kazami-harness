@@ -22,10 +22,11 @@ interface InspectorPanelsProps {
   events: RunEventView; // 对应该运行的事件窗口。
   tab: string; // overview/code/artifacts/context/trace，旧answer映射为overview。
   onTab: (value: string) => void; // 把查看分类同步到URL。
+  historical?: boolean; // 旧轮固定只读，即使缓存中仍留有曾经的最新轮状态。
 }
 
 /** 独立显示选中运行的预算、测试、代码与轨迹；所有审阅决定仍由现有后端校验。 */
-function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
+function InspectorPanels({ run, events, tab, onTab, historical = false }: InspectorPanelsProps) {
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
   const keys = [
     'overview',
@@ -80,7 +81,13 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                     {run.execution_mode && (
                       <div>
                         <dt>执行方式</dt>
-                        <dd>{run.execution_mode === 'local' ? '原目录执行' : '隔离执行'}</dd>
+                        <dd>
+                          {run.execution_mode === 'local'
+                            ? '所选目录'
+                            : run.source_kind === 'project'
+                              ? '独立 Git 工作树'
+                              : '示例副本'}
+                        </dd>
                       </div>
                     )}
                     {run.source_path && (
@@ -93,6 +100,18 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                       <dt>实际执行目录</dt>
                       <dd>{run.workspace}</dd>
                     </div>
+                    {run.python_execution && (
+                      <>
+                        <div>
+                          <dt>默认 Python</dt>
+                          <dd>{run.python_execution.executable || 'PATH 中未找到 Python'}</dd>
+                        </div>
+                        <div>
+                          <dt>源码导入目录</dt>
+                          <dd>{run.python_execution.python_paths.join(' · ')}</dd>
+                        </div>
+                      </>
+                    )}
                     <div>
                       <dt>结束原因</dt>
                       <dd>
@@ -180,6 +199,7 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                     children: (
                       <ProjectReviewPanel
                         project={run.project}
+                        canManage={!historical && run.project_workspace?.latest_run_id === run.run_id}
                         active={run.active}
                         parentRunId={run.parent_run_id}
                       />
@@ -195,7 +215,6 @@ function InspectorPanels({ run, events, tab, onTab }: InspectorPanelsProps) {
                 runId={run.run_id}
                 artifacts={run.result.artifacts}
                 missing={run.result.missing_artifacts}
-                workspaceUnavailable={run.project?.status === 'discarded'}
               />
             ),
           },
@@ -230,7 +249,7 @@ function HistoricalInspector({
   if (query.isPending) return <Skeleton active paragraph={{ rows: 8 }} />;
   if (!query.data)
     return <Alert type="error" title="无法读取本轮记录" description={errorMessage(query.error)} />;
-  return <InspectorPanels run={query.data} events={events} tab={tab} onTab={onTab} />;
+  return <InspectorPanels run={query.data} events={events} tab={tab} onTab={onTab} historical />;
 }
 
 /** 按选择轮次展示详情；最新轮共享实时事件，历史轮使用独立只读窗口。 */

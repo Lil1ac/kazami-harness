@@ -78,8 +78,8 @@ def test_session_intents_persist_and_require_latest_parent(tmp_path: Path):
     assert store.lookup(root, failed, digest).state == 'failed'
 
 
-def test_binary_readonly_and_empty_directory_survive_file_snapshot(tmp_path: Path):
-    """实际二进制、只读文件和空目录完整继承，来源与副本相互独立。"""
+def test_binary_readonly_and_empty_directory_are_verified_without_copying(tmp_path: Path):
+    """核验tmp_path内的二进制、只读文件和空目录，保存证据而不派生执行副本。"""
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     (workspace / 'empty').mkdir()
@@ -90,11 +90,10 @@ def test_binary_readonly_and_empty_directory_survive_file_snapshot(tmp_path: Pat
     identifier = uuid4()
     store.capture(identifier, workspace)
     assert store.info(identifier)['status'] == 'ready'
-    destination = tmp_path / 'child'
-    store.restore(identifier, workspace, destination)
-    assert (destination / 'binary.bin').read_bytes() == b'\0\xff\r\n'
-    assert (destination / 'empty').is_dir()
-    assert (destination / 'binary.bin').stat().st_mode == file.stat().st_mode
+    store.verify(identifier, workspace)
+    assert store.saved_file(identifier, 'binary.bin').read_bytes() == b'\0\xff\r\n'
+    assert (workspace / 'empty').is_dir()
+    assert not (tmp_path / 'child').exists()
 
 
 @pytest.mark.parametrize('damage', ['content','traversal','identity'])
@@ -122,6 +121,6 @@ def test_file_snapshot_damage_is_rejected(tmp_path: Path, damage: str):
         workspace.mkdir()
         (workspace / 'file.txt').write_bytes(b'original')
     with pytest.raises(SnapshotError):
-        store.restore(identifier, workspace, tmp_path / 'child')
+        store.verify(identifier, workspace)
     assert (workspace / 'file.txt').read_bytes() == b'original'
     assert not (tmp_path / 'outside').exists()

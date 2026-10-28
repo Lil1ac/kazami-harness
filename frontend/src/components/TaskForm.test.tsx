@@ -1,10 +1,10 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfigDraftProvider } from '../config';
-import { createRun, openProject, pickProject, saveProjectSettings } from '../api';
+import { createRun, pickProject, saveProjectSettings } from '../api';
 import { makeRun, options, projectOption } from '../test/fixtures';
 import { TaskForm } from './TaskForm';
 import type { LocalProjectOption, OptionsResponse } from '../types';
@@ -34,12 +34,6 @@ const gitProject: LocalProjectOption = {
   branch: 'main',
 }; // 可不配置测试的Git项目。
 
-/** 读取真实内存路由，核对最近项目进入会话列表而非仅改新任务来源。 */
-function LocationProbe() {
-  const location = useLocation();
-  return <span aria-label="当前页面">{location.pathname + location.search}</span>;
-}
-
 /** 在真实查询、路由和配置上下文中挂载表单；remember决定是否恢复该项目编号。 */
 function setup(extra: Partial<OptionsResponse> = {}, remember = true, busy: string | null = null) {
   const configured: OptionsResponse = { ...options, recent_projects: [folder], ...extra };
@@ -54,7 +48,6 @@ function setup(extra: Partial<OptionsResponse> = {}, remember = true, busy: stri
       <MemoryRouter>
         <ConfigDraftProvider>
           <TaskForm options={configured} busyId={busy} />
-          <LocationProbe />
         </ConfigDraftProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -87,6 +80,7 @@ it('首次无项目时以打开本机文件夹开始，不默认选择日志样�
   expect(createRun).not.toHaveBeenCalled();
   expect(screen.getByLabelText('任务描述')).toHaveValue('分析我的文件');
   expect(localStorage.getItem('harness-selected-project')).toBe('mine');
+  expect(screen.queryByLabelText('执行目录')).not.toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: '开始执行' }));
   await waitFor(
     /* 校验实际任务请求只引用登记ID。 */ () => expect(createRun).toHaveBeenCalledOnce(),
@@ -113,18 +107,26 @@ it('取消原生窗口保留当前项目和任务草稿', async () => {
   expect(createRun).not.toHaveBeenCalled();
 });
 
-it('最近项目重新核验后进入项目会话页，不改变新建来源或自动提交', async () => {
-  // 最近目录点击明确调用open，与模型运行分离。
-  vi.mocked(openProject).mockResolvedValue(gitProject);
-  const user = setup({ recent_projects: [gitProject] }, false);
-  await user.click(screen.getByRole('button', { name: /示例后端.*Git/ }));
-  expect(openProject).toHaveBeenCalledWith(projectOption.id, expect.anything());
-  await waitFor(
-    /* 核对真实路由改变且没有改写新建来源。 */ () =>
-      expect(screen.getByLabelText('当前页面')).toHaveTextContent('/projects/' + projectOption.id),
+it('恢复文字草稿时不恢复隔离方式，指定项目仍在原目录执行', async () => {
+  // 执行位置必须由本次明确动作决定，历史草稿只能恢复文字。
+  sessionStorage.setItem(
+    'harness-new-task-draft',
+    JSON.stringify({
+      prompt: '继续修改指定项目',
+      execution_mode: 'isolated',
+      base_ref: 'main',
+    }),
   );
-  expect(localStorage.getItem('harness-selected-project')).toBeNull();
-  expect(createRun).not.toHaveBeenCalled();
+  const user = setup({ recent_projects: [gitProject] });
+  await user.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(
+    /* 以实际请求确认没有被草稿改到独立目录。 */ () => expect(createRun).toHaveBeenCalledOnce(),
+  );
+  expect(vi.mocked(createRun).mock.calls[0][0]).toMatchObject({
+    project_id: gitProject.id,
+    execution_mode: 'local',
+    base_ref: 'HEAD',
+  });
 });
 
 it('空要求不提交；发送失败后仍保留任务与高级产物字段', async () => {
@@ -150,17 +152,21 @@ it('隔离Git保存测试设置仍保留执行方式，保存本身不创建任�
   vi.mocked(saveProjectSettings).mockResolvedValue({
     ...gitProject,
     test_command: 'python -m pytest -q',
+    python_executable: 'D:/project-env/python.exe',
     test_argv: ['python', '-m', 'pytest', '-q'],
   });
   const user = setup({ recent_projects: [gitProject] });
   await user.click(screen.getByText(/高级设置/));
-  await user.click(screen.getByLabelText('执行方式'));
-  await user.click(screen.getByRole('option', { name: '隔离执行' }));
+  await user.click(screen.getByLabelText('执行目录'));
+  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
   await user.click(screen.getByLabelText('项目测试命令'));
   await user.paste('python -m pytest -q');
+  await user.click(screen.getByLabelText('Python 解释器'));
+  await user.paste('D:/project-env/python.exe');
   await user.click(screen.getByRole('button', { name: '保存项目设置' }));
   expect(await screen.findByRole('status')).toHaveTextContent('项目设置已保存');
-  expect(saveProjectSettings).toHaveBeenCalledWith(gitProject.id, 'python -m pytest -q', 60);
+  expect(saveProjectSettings).toHaveBeenCalledWith(gitProject.id, 'python -m pytest -q', 60, 'D:/project-env/python.exe');
+  expect(screen.getByLabelText('Python 解释器')).toHaveValue('D:/project-env/python.exe');
   expect(createRun).not.toHaveBeenCalled();
   expect(screen.getByLabelText('提交基线')).toHaveValue('HEAD');
   expect(screen.getByText(/在独立 Git 工作树中执行/)).toBeInTheDocument();
@@ -170,8 +176,8 @@ it('隔离Git提交使用用户指定基线，执行方式与来源一并发送'
   // 基线提交与保存设置各有独立副作用，分别验证，避免一个用例串行过多操作而超时。
   const user = setup({ recent_projects: [gitProject] });
   await user.click(screen.getByText(/高级设置/));
-  await user.click(screen.getByLabelText('执行方式'));
-  await user.click(screen.getByRole('option', { name: '隔离执行' }));
+  await user.click(screen.getByLabelText('执行目录'));
+  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('修复代码');
   await user.click(screen.getByLabelText('提交基线'));
@@ -235,7 +241,6 @@ it('项目不可用、任务忙碌和缺少凭据时禁止发送，仍可编辑�
   );
   expect(screen.getByRole('button', { name: '开始执行' })).toBeDisabled();
   expect(screen.getByText('仓库没有提交')).toBeInTheDocument();
-  expect(screen.getByText('不可用')).toBeInTheDocument();
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('稍后执行');
   expect(screen.getByLabelText('任务描述')).toHaveValue('稍后执行');
@@ -274,7 +279,7 @@ it('真实接纳任务后清除新任务草稿，下一次打开不会重复填�
 it('本机Git项目默认原目录执行，不允许隐藏的旧基线切换到其他代码', async () => {
   // 本机项目发送明确local，用户当前未提交文件应参与执行。
   const user = setup({ recent_projects: [gitProject] });
-  expect(screen.getByText('直接修改上方所选目录，使用当前文件与未提交改动。')).toBeInTheDocument();
+  expect(screen.getByText('在所选目录执行，文件直接保存到该目录。')).toBeInTheDocument();
   await user.click(screen.getByText(/高级设置/));
   expect(screen.queryByLabelText('提交基线')).not.toBeInTheDocument();
   await user.click(screen.getByLabelText('任务描述'));
@@ -288,4 +293,20 @@ it('本机Git项目默认原目录执行，不允许隐藏的旧基线切换到�
     execution_mode: 'local',
     base_ref: 'HEAD',
   });
+});
+
+it('普通目录保存解释器后显示确认，保持项目和任务草稿且不执行任务', async () => {
+  // 普通目录没有 Git 测试区域，但解释器设置仍须显示保存结果。
+  const configured = { ...folder, python_executable: 'D:/plain-env/python.exe' };
+  vi.mocked(saveProjectSettings).mockResolvedValue(configured);
+  const user = setup();
+  await user.click(screen.getByText(/高级设置/));
+  await user.click(screen.getByLabelText('Python 解释器'));
+  await user.paste(configured.python_executable);
+  await user.click(screen.getByRole('button', { name: '保存项目设置' }));
+  expect(await screen.findByRole('status')).toHaveTextContent('项目设置已保存');
+  expect(screen.getByLabelText('Python 解释器')).toHaveValue(configured.python_executable);
+  expect(saveProjectSettings).toHaveBeenCalledWith(folder.id, '', 30, configured.python_executable);
+  expect(createRun).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('项目测试命令')).not.toBeInTheDocument();
 });

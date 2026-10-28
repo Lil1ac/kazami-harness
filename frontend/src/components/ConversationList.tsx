@@ -1,5 +1,4 @@
 import { Alert, Empty, Skeleton, Tag } from 'antd';
-import { ArrowRightOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import type { ConversationSummary } from '../types';
 import { dateTime } from '../format';
@@ -30,7 +29,7 @@ export function ConversationList({
       {loading && !items.length ? (
         <Skeleton active />
       ) : !items.length ? (
-        <Empty description="还没有会话，点击新建对话开始" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
         <ul className="start-run-list">
           {items.map(
@@ -45,12 +44,13 @@ export function ConversationList({
                     <strong>{item.title}</strong>
                     <small>
                       {showProject && <>{item.source?.label || '未关联项目'} · </>}
-                      {item.turn_count === null ? '轮次待核对' : item.turn_count + ' 轮对话'} ·{' '}
-                      {dateTime(item.updated_at)}
+                      {item.turn_count === null ? '轮次待核对' : item.turn_count + ' 轮对话'}
                     </small>
                   </div>
-                  <ConversationStatus item={item} />
-                  <ArrowRightOutlined />
+                  <div className="conversation-row-meta">
+                    <ConversationStatus item={item} />
+                    <time dateTime={item.updated_at}>{dateTime(item.updated_at)}</time>
+                  </div>
                 </Link>
               </li>
             ),

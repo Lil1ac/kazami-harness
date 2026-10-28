@@ -65,7 +65,7 @@ const summary: ConversationSummary = {
   turn_count: 3,
   created_at: '2026-10-24T01:00:00Z',
   updated_at: '2026-10-24T02:00:00Z',
-  source: { ...alpha, registered: true },
+  source: { ...alpha, execution_mode: 'local', registered: true },
   latest: {
     execution_status: 'completed',
     validation_status: 'unverified',
@@ -84,7 +84,7 @@ const other: ConversationSummary = {
   latest_run_id: 'b-1',
   title: '另一个项目的需求',
   turn_count: 1,
-  source: { ...beta, registered: true },
+  source: { ...beta, execution_mode: 'local', registered: true },
 }; // 不得混入Alpha列表。
 const conversation: ConversationView = {
   session_id: 'a-1',

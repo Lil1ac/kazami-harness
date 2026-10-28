@@ -85,7 +85,7 @@ def main() -> None:
     config = WebConfig(
         project_dir=project, runtime_root=project / '.runtime' / 'browser-copies',
         frontend_dist=project / 'frontend' / 'dist',
-        workspaces=[WebWorkspace(id='workspace', label='普通任务（离线浏览器验证）', path=workspace), WebWorkspace(id='logs', label='日志样例（每次独立复制）', path=project / 'examples' / 'logs', copy_on_run=True)],
+        workspaces=[WebWorkspace(id='workspace', label='普通任务（离线浏览器验证）', path=workspace), WebWorkspace(id='logs', label='日志样例（每次独立复制）', path=project / 'examples' / 'logs', is_example=True)],
         verifiers=[WebVerifier(id='logs', label='固定日志样例验收', description='仅用于仓库固定日志样例。', path=project / 'examples' / 'verifiers' / 'logs.toml')],
     )
     app = create_app(config, RunConfig(requested_model='offline-browser-fixture', tools=['read_file', 'search_files', 'write_file', 'run_command']), project / '.runtime' / 'browser-runs', model_client=BrowserFixtureModel())

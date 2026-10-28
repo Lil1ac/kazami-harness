@@ -19,7 +19,7 @@ vi.mock(
 );
 
 /** 通过真实 Query 缓存读取审阅快照，验证成功响应更新与失败保留，active 表示后台占用状态。 */
-function setup(project: ProjectReview = makeProject(), active = false) {
+function setup(project: ProjectReview = makeProject(), active = false, canManage = true) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -27,7 +27,7 @@ function setup(project: ProjectReview = makeProject(), active = false) {
   /** 订阅任务缓存；无额外 RunView 读取，由恢复或审阅响应更新当前项目事实。 */
   function ReviewHost() {
     const run = useQuery<RunView>({ queryKey: ['run', project.run_id], enabled: false }).data!;
-    return <ProjectReviewPanel project={run.project!} active={run.active} />;
+    return <ProjectReviewPanel project={run.project!} active={run.active} canManage={canManage} />;
   }
   render(
     <QueryClientProvider client={client}>
@@ -159,5 +159,15 @@ it('服务重启遗留的待捕获代码恢复后可继续审阅', async () => {
   );
   expect(getProjectReview).toHaveBeenCalledWith('run-a', expect.any(AbortSignal));
   expect(await screen.findByLabelText('代码补丁预览')).toBeInTheDocument();
+  expect(reviewRun).not.toHaveBeenCalled();
+});
+
+it('旧轮隐藏共享工作树管理操作，仍展示固定补丁下载', async () => {
+  // 即使旧轮曾是最新轮且保留待审阅状态，历史入口也不提供删除共享目录的按钮。
+  setup(makeProject(), false, false);
+  expect(screen.getByText('历史轮次只读，请在最新一轮管理会话工作树。')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '丢弃工作树' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '保留工作树' })).not.toBeInTheDocument();
+  expect(await screen.findByRole('link', { name: /下载完整补丁/ })).toBeInTheDocument();
   expect(reviewRun).not.toHaveBeenCalled();
 });

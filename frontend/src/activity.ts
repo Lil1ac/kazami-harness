@@ -12,6 +12,7 @@ const toolLabels: Record<string, string> = {
   read_file: '读取文件',
   search_files: '搜索内容',
   write_file: '写入文件',
+  edit_file: '局部编辑文件',
   run_command: '执行命令',
   read_context: '回读历史证据',
 }; // 文件、命令及只读历史工具的操作语义。

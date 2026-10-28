@@ -301,14 +301,14 @@ def test_git_project_loads_instruction_from_fixed_worktree_not_dirty_source(cont
     context_web_config.projects = [ProjectPreset(
         id="project", label="指令基线项目", path=source,
         test_argv=[sys.executable, "-c", "print('host check passed')"], test_timeout_seconds=10.0,
-        test_python_paths=["."],
+        python_paths=["."],
     )]
 
     async def scenario():
         """提交真实项目任务，核对基线规则与模型输入，再通过既有审阅接口丢弃测试工作树。"""
         model = RecordingModel()
         async with context_client(context_web_config, model) as client:
-            response = await client.post("/api/runs", json={"prompt": "只读核对项目规则", "project_id": "project"})
+            response = await client.post("/api/runs", json={"prompt": "只读核对项目规则", "project_id": "project", "execution_mode": "isolated"})
             assert response.status_code == 202, response.text
             view = await completed(client, response.json()["run_id"])
             assert view["result"]["execution_status"] == "completed"

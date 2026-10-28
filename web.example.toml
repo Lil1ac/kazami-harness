@@ -6,14 +6,12 @@ frontend_dist = "frontend/dist"
 id = "workspace"
 label = "本地任务工作区"
 path = ".runtime/workspace"
-copy_on_run = false
 is_example = true
 
 [[workspaces]]
 id = "logs"
-label = "日志样例（每次独立复制）"
+label = "日志样例（首轮独立副本）"
 path = "examples/logs"
-copy_on_run = true
 is_example = true
 
 [[verifiers]]
@@ -33,4 +31,8 @@ path = "examples/verifiers/logs.toml"
 # path = "../my-backend"
 # test_argv = ['D:/projects/my-backend/.venv/Scripts/python.exe', '-m', 'pytest', '-q']
 # test_timeout_seconds = 60.0
-# test_python_paths = [".", "src"]
+# 源码目录同时用于模型命令和宿主验收；省略自动根/已有src，[]仅根目录。
+# python_paths = [".", "src"]
+
+# python_executable = "D:/envs/my-project/Scripts/python.exe"
+# 省略按 PATH；相对路径以实际工作区为准，隔离工作树不自动复制 .venv。

@@ -12,12 +12,6 @@ export function App() {
     <div className={'app-shell' + (sessionRoute ? ' app-session' : '')}>
       <WorkspaceNavigation />
       <main className="app-main">
-        <div className="topbar">
-          <span>AGENT OPERATIONS</span>
-          <span className="topbar-status">
-            <i /> 本地工作台
-          </span>
-        </div>
         <div className="page-content">
           <Routes>
             <Route path="/runs" element={<RunsPage />} />

@@ -16,7 +16,6 @@ export function VerificationPanel({
     <section className="verification-panel" aria-labelledby="verification-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">VERIFICATION</span>
           <h2 id="verification-heading">{project ? '项目测试' : '独立验收'}</h2>
         </div>
       </div>

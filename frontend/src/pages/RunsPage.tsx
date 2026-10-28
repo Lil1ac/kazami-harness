@@ -1,11 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Skeleton } from 'antd';
-import {
-  ArrowLeftOutlined,
-  ArrowRightOutlined,
-  ReloadOutlined,
-  PlusOutlined,
-} from '@ant-design/icons';
+import { ReloadOutlined, PlusOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router';
 import { errorMessage, getOptions, getConversations } from '../api';
 import { TaskForm } from '../components/TaskForm';
@@ -30,45 +25,29 @@ export function RunsPage() {
     refetchInterval: 5000,
     enabled: !history,
   });
+  /** 刷新项目与所有可见会话；无参数和返回值，不改写输入或发起执行。 */
+  function refresh(): void {
+    void options.refetch();
+    void cache.invalidateQueries({ queryKey: ['conversations'] });
+  }
   return (
     <div className={history ? 'history-workspace' : 'start-workspace'}>
-      <header className="workspace-toolbar">
-        {history ? (
-          <Link to="/runs">
-            <ArrowLeftOutlined /> 新建对话
-          </Link>
-        ) : (
-          <span>本地工作台</span>
-        )}
-        <div>
-          {!history && (
-            <Link to="/runs?view=history">
-              全部会话 <ArrowRightOutlined />
-            </Link>
-          )}
-          <Button
-            type="text"
-            aria-label="刷新工作台"
-            icon={<ReloadOutlined />}
-            onClick={
-              /* 仅同步服务器读取结果。 */ () => {
-                void options.refetch();
-                void cache.invalidateQueries({ queryKey: ['conversations'] });
-              }
-            }
-          />
-        </div>
-      </header>
       {history ? (
         <>
           <header className="project-workspace-header">
-            <div>
-              <h1>全部会话</h1>
-              <p className="muted">找到之前的任务，继续同一段对话。</p>
+            <h1>全部会话</h1>
+            <div className="workspace-actions">
+              <Button
+                type="text"
+                aria-label="刷新工作台"
+                title="刷新"
+                icon={<ReloadOutlined />}
+                onClick={refresh}
+              />
+              <Link to="/runs?new=1" className="new-conversation-link" aria-label="新建对话">
+                <PlusOutlined /> 新建对话
+              </Link>
             </div>
-            <Link to="/runs?new=1" className="new-conversation-link" aria-label="新建对话">
-              <PlusOutlined /> 新建对话
-            </Link>
           </header>
           <ConversationHistory />
         </>
@@ -97,7 +76,17 @@ export function RunsPage() {
           >
             <div className="section-heading">
               <h2 id="recent-conversations-heading">最近会话</h2>
-              <Link to="/runs?view=history">查看全部</Link>
+              <div className="workspace-actions">
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label="刷新工作台"
+                  title="刷新"
+                  icon={<ReloadOutlined />}
+                  onClick={refresh}
+                />
+                <Link to="/runs?view=history">查看全部</Link>
+              </div>
             </div>
             <ConversationList
               items={recent.data?.items || []}

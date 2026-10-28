@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
+from .execution import PythonExecutionError, prepare_python_execution, validate_python_execution
 from .config import ConfigurationError
 from .schemas import ArtifactRef, RunManifest, RunResult, TaskSpec, VerificationResult
 from .providers.base import ModelClient, ModelError
@@ -199,9 +200,24 @@ async def run_task(
     validate_execution(manifest, api_key)
     validate_output_paths(manifest.task, runs_root)
     try:
-        tool_executor = executor or ToolExecutor(manifest.task.workspace, runs_root, manifest.config)
+        execution = manifest.task.python_execution or prepare_python_execution(manifest.task.workspace)
+        if execution.workspace != manifest.task.workspace:
+            raise PythonExecutionError("Python 执行快照与任务实际工作区不一致。")
+        validate_python_execution(execution)
+    except PythonExecutionError as error:
+        raise ConfigurationError(str(error)) from None
+    # 程序入口也在落盘前固定快照；读取历史不执行此准备流程。
+    task = manifest.task.model_copy(update={"python_execution": execution})
+    manifest = manifest.model_copy(update={"task": task})
+    try:
+        tool_executor = executor or ToolExecutor(manifest.task.workspace, runs_root, manifest.config, python_execution=execution)
     except (OSError, RuntimeError, ValueError):
         raise StorageError("运行记录目录无法解析，请检查目录和符号链接。") from None
+    if hasattr(tool_executor, "bind_python_execution"):
+        try:
+            tool_executor.bind_python_execution(execution)
+        except PythonExecutionError as error:
+            raise ConfigurationError(str(error)) from None
     store = RunStore.create(runs_root, manifest)
     if hasattr(tool_executor, "bind_run"):
         tool_executor.bind_run(store.run_dir)
@@ -231,7 +247,7 @@ async def run_task(
                 context.emit("verification_started", {"timeout_seconds": manifest.task.verifier.timeout_seconds})
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError
-                detail = await verifier.run(manifest.task.verifier, manifest.task.workspace, manifest.run_id)
+                detail = await verifier.run(manifest.task.verifier, manifest.task.workspace, manifest.run_id, python_execution=execution)
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError
                 _apply_verification(context, detail)

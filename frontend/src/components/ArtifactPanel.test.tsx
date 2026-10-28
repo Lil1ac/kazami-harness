@@ -3,14 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it } from 'vitest';
 import { ArtifactPanel } from './ArtifactPanel';
 
-it('丢弃项目工作树后禁用工作区文件，保留运行证据下载', () => {
-  // 避免页面留下会访问已移除目录的入口，宿主也会再次检查该状态。
+it('工作区历史文件与运行证据均保留快照下载入口', () => {
+  // 下载由宿主读取该轮固定快照，不依赖共享工作树仍存在。
   const client = new QueryClient();
   render(
     <QueryClientProvider client={client}>
       <ArtifactPanel
         runId="run-a"
-        workspaceUnavailable
         artifacts={[
           { path: 'app.py', location: 'workspace', kind: 'file' },
           { path: 'verification.stdout.txt', location: 'run', kind: 'stdout' },
@@ -19,7 +18,7 @@ it('丢弃项目工作树后禁用工作区文件，保留运行证据下载', (
       />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole('button', { name: 'app.py' })).toBeDisabled();
-  expect(screen.queryByRole('link', { name: '下载 app.py' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'app.py' })).toBeEnabled();
+  expect(screen.getByRole('link', { name: '下载 app.py' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '下载 verification.stdout.txt' })).toBeInTheDocument();
 });

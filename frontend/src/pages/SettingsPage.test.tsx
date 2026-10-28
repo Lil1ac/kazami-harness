@@ -43,8 +43,21 @@ async function replaceInput(
 
 /** 在相同配置上下文内挂载设置与提交两个真实页面，返回用户交互驱动器。 */
 function setup(initialPath = '/settings', configuredOptions: OptionsResponse = options) {
-  localStorage.setItem('harness-selected-project', configuredOptions.workspaces[0]?.id || '');
-  vi.mocked(getOptions).mockReset().mockResolvedValue(configuredOptions);
+  // 配置联动测试明确使用个人目录，不把固定示例伪装成用户选定的项目。
+  const projectOptions: OptionsResponse = {
+    ...configuredOptions,
+    recent_projects: [
+      {
+        id: 'settings-files',
+        label: '配置验收目录',
+        path: '/workspace',
+        kind: 'workspace',
+        available: true,
+      },
+    ],
+  };
+  localStorage.setItem('harness-selected-project', 'settings-files');
+  vi.mocked(getOptions).mockReset().mockResolvedValue(projectOptions);
   vi.mocked(createRun).mockReset().mockRejectedValue(new Error('离线检查阻止实际模型运行'));
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -56,7 +69,7 @@ function setup(initialPath = '/settings', configuredOptions: OptionsResponse = o
           <Link to="/runs">前往提交</Link>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/runs" element={<TaskForm options={configuredOptions} busyId={null} />} />
+            <Route path="/runs" element={<TaskForm options={projectOptions} busyId={null} />} />
           </Routes>
         </MemoryRouter>
       </ConfigDraftProvider>
@@ -123,19 +136,25 @@ it('上下文策略逐字段合并，旧宿主配置仅为下一次任务补充�
   });
 });
 
-it('混合压缩与预算设置随真实任务提交，非法目标比例阻止应用', async () => {
-  // 明确配置策略、摘要额度、窗口，覆盖表单到提交请求的公共契约。
+it('非法目标比例阻止应用，不生成已应用状态', async () => {
+  // 无效输入是独立用户动作，不与完整跨页面提交串成一个过长用例。
   const user = setup();
-  const strategy = await screen.findByLabelText('压缩策略');
-  await user.click(strategy);
+  await user.click(await screen.findByLabelText('压缩策略'));
   await user.click(screen.getByText('混合：规则处理后按需生成摘要'));
   await user.click(screen.getByText('压缩预算与模型窗口'));
-  const target = screen.getByLabelText('目标比例（0～1）');
-  await replaceInput(user, target, '0.9');
+  await replaceInput(user, screen.getByLabelText('目标比例（0～1）'), '0.9');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
   expect(await screen.findByText('目标比例必须小于触发比例')).toBeInTheDocument();
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
-  await replaceInput(user, target, '0.5');
+}, 20000);
+
+it('混合压缩与预算设置随真实任务提交', async () => {
+  // 保留全部预算与实际提交断言，只在本例设置有效输入，不重复非法提交步骤。
+  const user = setup();
+  await user.click(await screen.findByLabelText('压缩策略'));
+  await user.click(screen.getByText('混合：规则处理后按需生成摘要'));
+  await user.click(screen.getByText('压缩预算与模型窗口'));
+  await replaceInput(user, screen.getByLabelText('目标比例（0～1）'), '0.5');
   await replaceInput(user, screen.getByLabelText('摘要调用上限（次）'), '4');
   await replaceInput(user, screen.getByLabelText('声明模型窗口（token，可留空）'), '64000');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
@@ -185,4 +204,25 @@ it('任务页选择技能后调整模型预算，不丢失已选择的技能', a
     /* 检查跨页面编辑后的真实提交参数。 */ () => expect(createRun).toHaveBeenCalledOnce(),
   );
   expect(vi.mocked(createRun).mock.calls[0][0].config.skills).toEqual(['review-code']);
+}, 20000);
+
+it('配置页启用局部编辑后，真实任务提交包含 edit_file', async () => {
+  // 既有宿主未启用新工具时，由用户明确选择，跨页请求保留权限配置。
+  const user = setup();
+  const checkbox = await screen.findByRole('checkbox', { name: 'edit_file · 局部编辑文件' });
+  expect(checkbox).not.toBeChecked();
+  await user.click(checkbox);
+  await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
+  await screen.findByRole('status');
+  await user.click(screen.getByRole('link', { name: '前往提交' }));
+  await user.click(screen.getByLabelText('任务描述'));
+  await user.paste('只修改加法函数并运行测试');
+  await user.click(screen.getByRole('button', { name: /开始执行/ }));
+  await waitFor(
+    /* 等待真实表单校验与请求构造，不直接调用提交函数。 */ () =>
+      expect(createRun).toHaveBeenCalledOnce(),
+  );
+  expect(new Set(vi.mocked(createRun).mock.calls[0][0].config.tools)).toEqual(
+    new Set([...config.tools, 'edit_file']),
+  );
 }, 20000);

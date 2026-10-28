@@ -156,10 +156,32 @@ it('连续发送三轮保持同一输入节点与消息区域，各轮追加到�
   ).toEqual(['run-a', 'run-b']);
 });
 
+it('普通入口默认收起详情，展开和关闭检查器保留同一输入节点与草稿', async () => {
+  // 布局折叠不能重建消息或清空正在编写的后续要求，打开详情也不能发送任务。
+  const user = userEvent.setup();
+  show();
+  const input = await screen.findByLabelText('输入消息');
+  const log = screen.getByRole('log', { name: '会话消息' });
+  expect(screen.queryByRole('complementary', { name: '运行详情' })).not.toBeInTheDocument();
+  await user.type(input, '保留这条要求');
+  await user.click(screen.getByRole('button', { name: '查看详情' }));
+  expect(screen.getByRole('complementary', { name: '运行详情' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '收起详情' })).toHaveAttribute('aria-expanded', 'true');
+  await user.click(screen.getByRole('button', { name: '关闭详情' }));
+  expect(screen.queryByRole('complementary', { name: '运行详情' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('输入消息')).toBe(input);
+  expect(screen.getByRole('log', { name: '会话消息' })).toBe(log);
+  expect(input).toHaveValue('保留这条要求');
+  expect(createFollowup).not.toHaveBeenCalled();
+});
+
 it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', async () => {
   // 检查旧测试与继续最新代码可以同时进行，界面不会把旧轮变成新分支。
   const user = userEvent.setup();
+  const first = runs.get('run-a')!;
+  first.python_execution = { workspace: first.workspace, executable: '/python/first', python_paths: [first.workspace, '/workspace/first-src'] };
   const second = sessionRun('run-b', 2, '补充类型提示');
+  second.python_execution = { workspace: second.workspace, executable: '/python/latest', python_paths: [second.workspace, '/workspace/latest-src'] };
   runs.set(second.run_id, second);
   record = { ...record, latest_run_id: second.run_id, turns: [...record.turns, turn(second)] };
   show('/runs/run-a?tab=overview');
@@ -167,6 +189,9 @@ it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', asyn
   await user.type(input, '继续完善');
   await user.click(screen.getByRole('button', { name: '查看第 1 轮详情' }));
   expect(screen.getByText('第 1 轮详情')).toBeInTheDocument();
+  expect(await screen.findByText('/python/first')).toBeInTheDocument();
+  expect(screen.getByText('/workspace · /workspace/first-src')).toBeInTheDocument();
+  expect(screen.queryByText('/python/latest')).not.toBeInTheDocument();
   expect(screen.getByLabelText('输入消息')).toBe(input);
   expect(input).toHaveValue('继续完善');
   await user.click(screen.getByRole('button', { name: '发送消息' }));

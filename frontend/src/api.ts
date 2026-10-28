@@ -168,11 +168,12 @@ export function saveProjectSettings(
   id: string,
   command: string,
   seconds: number,
+  pythonExecutable = '', // 空白清除项目解释器，按 PATH 查找。
 ): Promise<LocalProjectOption> {
   return request('/api/projects/' + encodeURIComponent(id) + '/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ test_command: command, test_timeout_seconds: seconds }),
+    body: JSON.stringify({ test_command: command, test_timeout_seconds: seconds, python_executable: pythonExecutable }),
   });
 }
 

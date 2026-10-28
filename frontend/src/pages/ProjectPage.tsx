@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Skeleton } from 'antd';
-import { FolderOpenOutlined, PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router';
 import { errorMessage, getOptions } from '../api';
 import { localProjects } from '../projects';
@@ -39,10 +39,7 @@ export function ProjectPage() {
     <div className="project-workspace">
       <header className="project-workspace-header">
         <div>
-          <span className="eyebrow">PROJECT</span>
-          <h1>
-            <FolderOpenOutlined /> {project.label}
-          </h1>
+          <h1>{project.label}</h1>
           <p className="project-workspace-path">{project.path}</p>
         </div>
         {project.available === false ? (

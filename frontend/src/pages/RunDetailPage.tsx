@@ -103,10 +103,8 @@ function SessionWorkspace({
     ? requestedSelection
     : conversation.latest_run_id;
   const tab = inspectorTab(params.get('tab'));
-  const [panelOpen, setPanelOpen] = useState(
-    !narrow || ['code', 'trace', 'context', 'artifacts'].includes(params.get('tab') || ''),
-  ); // 手机普通入口收起，详情深链接直接打开抽屉。
-  const previousNarrow = useRef(narrow); // 只在真正跨断点时收起抽屉，不覆盖首屏深链接。
+  const [panelOpen, setPanelOpen] = useState(params.has('tab') || params.has('inspect')); // 普通入口优先阅读消息；显式详情深链接保留查看意图。
+  const previousNarrow = useRef(narrow); // 只在真正跨断点时收起详情，不覆盖首屏深链接。
   const query = useQuery({
     queryKey: ['run', conversation.latest_run_id],
     queryFn: /* 最新轮快照决定运行状态，查看旧轮时继续跟踪最新执行。 */ ({ signal }) =>
@@ -139,10 +137,10 @@ function SessionWorkspace({
       cache.setQueryData(['run', view.run_id], view),
   });
   useEffect(
-    /* 跨屏幕断点才调整面板，初次挂载保留URL的详情意图。 */ () => {
+    /* 跨屏幕断点收起详情，让消息优先；初次挂载保留URL的详情意图。 */ () => {
       if (previousNarrow.current === narrow) return;
       previousNarrow.current = narrow;
-      setPanelOpen(!narrow);
+      setPanelOpen(false);
     },
     [narrow],
   );
@@ -207,7 +205,13 @@ function SessionWorkspace({
           </p>
           {latest?.execution_mode && (
             <p className="session-directory" title={latest.workspace}>
-              <span>{latest.execution_mode === 'local' ? '原目录执行' : '隔离执行'}</span>
+              <span>
+                {latest.execution_mode === 'local'
+                  ? '所选目录'
+                  : latest.source_kind === 'project'
+                    ? '独立 Git 工作树'
+                    : '示例副本'}
+              </span>
               <code>{latest.workspace}</code>
             </p>
           )}
@@ -236,6 +240,8 @@ function SessionWorkspace({
           <Button
             type="text"
             aria-label={panelOpen ? '收起详情' : '查看详情'}
+            title={panelOpen ? '收起详情' : '查看详情'}
+            aria-expanded={panelOpen}
             onClick={/* 查看区域独立于会话输入与执行。 */ () => setPanelOpen(!panelOpen)}
             icon={<LayoutOutlined />}
           />

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Drawer } from 'antd';
 import {
-  DeploymentUnitOutlined,
   PlusOutlined,
   MessageOutlined,
   SettingOutlined,
@@ -97,7 +96,6 @@ function ProjectGroup({
                       title={item.error || item.title}
                       onClick={onNavigate}
                     >
-                      <MessageOutlined />
                       <span>{item.title}</span>
                       {item.latest?.active && <i className="sidebar-running" title="正在执行" />}
                     </Link>
@@ -231,20 +229,10 @@ export function WorkspaceNavigation() {
     <>
       <aside className="app-sidebar" aria-label="项目与会话导航">
         <Link to="/runs" className="brand" aria-label="Agent Harness 首页">
-          <span className="brand-mark">
-            <DeploymentUnitOutlined />
-          </span>
-          <span>
-            Agent
-            <br />
-            <strong>Harness</strong>
-          </span>
+          Agent <strong>Harness</strong>
         </Link>
         <div className="desktop-navigation">
           <NavigationContent onNavigate={close} />
-        </div>
-        <div className="sidebar-foot">
-          <span className="local-indicator" /> 本地运行环境
         </div>
         <div className="sidebar-mobile-controls">
           <Link to="/runs?new=1" aria-label="新建对话">

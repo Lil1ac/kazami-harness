@@ -339,9 +339,16 @@ class RunOrigin(DataModel):
     kind: Literal["workspace", "project"]  # 普通文件任务或 Git 项目。
     preset_id: str = Field(min_length=1, max_length=64)  # 启动时的宿主登记编号。
     registered_path: Path  # 会话固定的来源目录；原目录执行时也等于实际工作区。
-    execution_mode: Literal["local", "isolated"]  # 创建时明确固定；isolated仅表示主动创建的工作树或示例副本。
+    execution_mode: Literal["local", "isolated"]  # 创建时明确固定；isolated仅表示主动创建的Git工作树。
     workspace_identity: tuple[int, int] | None = None  # 原目录的设备/对象编号，隔离模式为空；续轮拒绝目录被替换。
     verifier_id: str | None = None  # 普通任务选择的宿主验收编号；项目任务使用项目测试。
+
+    @model_validator(mode="after")
+    def validate_execution_mode(self) -> "RunOrigin":
+        """核对来源与执行方式并返回自身；普通目录隔离记录抛 ValueError，不访问文件。"""
+        if self.execution_mode == "isolated" and self.kind != "project":
+            raise ValueError("只有Git项目可以使用独立工作树")
+        return self
 
 
 # 后续运行固定的父历史来源；实际消息由父事件重建，并在调用模型前重新核验。

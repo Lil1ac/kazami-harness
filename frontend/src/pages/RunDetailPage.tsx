@@ -32,7 +32,7 @@ function useNarrowWorkspace(): boolean {
   return narrow;
 }
 
-/** 兼容旧详情标签；对话始终保留，分类只用于右侧检查器。 */
+/** 校验详情分类；空值或未知标签回到概况，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
   return value && ['code', 'trace', 'context', 'artifacts'].includes(value) ? value : 'overview';
 }
@@ -205,13 +205,7 @@ function SessionWorkspace({
           </p>
           {latest?.execution_mode && (
             <p className="session-directory" title={latest.workspace}>
-              <span>
-                {latest.execution_mode === 'local'
-                  ? '所选目录'
-                  : latest.source_kind === 'project'
-                    ? '独立 Git 工作树'
-                    : '示例副本'}
-              </span>
+              <span>{latest.execution_mode === 'local' ? '所选目录' : '独立 Git 工作树'}</span>
               <code>{latest.workspace}</code>
             </p>
           )}

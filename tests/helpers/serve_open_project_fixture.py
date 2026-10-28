@@ -40,7 +40,7 @@ def main() -> None:
     from test_project_catalog import EditingModel
     os.environ["DEEPSEEK_API_KEY"] = "offline-open-project-browser"
     app = create_app(
-        WebConfig(project_dir=project,runtime_root=root/"copies",frontend_dist=project/"frontend"/"dist"),
+        WebConfig(project_dir=project,worktrees_root=root/"copies",frontend_dist=project/"frontend"/"dist"),
         RunConfig(tools=["read_file","write_file"],skill_roots=[project/"examples"/"skills"]),
         root/"runs",model_client=EditingModel(),
     )

@@ -1,4 +1,4 @@
-"""文件任务的有界逐轮证据；保存、读取和核验快照，不创建后续执行副本。"""
+"""任务文件的有界逐轮证据；保存、读取和核验快照，不创建执行副本。"""
 
 import hashlib
 import json
@@ -39,16 +39,16 @@ def _relative(value: str) -> str:
 
 
 class FileSnapshotStore:
-    """保存普通工作区完整文件快照，继承时同时检查原目录与保存内容。"""
+    """保存有界文件快照，历史下载只读取固定副本并核验保存内容。"""
 
-    MAX_BYTES = 16 * 1024 * 1024  # 沿用普通工作区复制上限16MiB。
+    MAX_BYTES = 16 * 1024 * 1024  # 单次快照的文件正文总上限16MiB。
     MAX_ENTRIES = 1000  # 包含文件和空目录，防止目录遍历无界增长。
     MAX_METADATA_BYTES = 2 * 1024 * 1024  # 快照清单读取上限。
 
     def __init__(self, runs_root: Path, *, namespace: str = '.file-snapshots', exclude_names: frozenset[str] = frozenset(), protected_roots: tuple[Path, ...] = ()) -> None:
         """绑定受保护记录根；namespace隔离不同用途，排除项仅由宿主传入，构造不写文件。
 
-        默认不排除任何内容，用于完整核验示例副本；原目录差异使用独立命名空间，
+        原目录差异与工作树产物使用独立命名空间及明确排除项，
         排除Git、依赖缓存及宿主记录目录，不把不完整快照当作可自动恢复的代码。
         """
         if '/' in namespace or '\\' in namespace or not namespace.startswith('.') or namespace in ('.', '..'):
@@ -81,7 +81,7 @@ class FileSnapshotStore:
             directory = stack.pop()
             for path in sorted(directory.iterdir()):
                 if path.name in self.exclude_names or any(path == protected or path.is_relative_to(protected) for protected in self.protected_roots):
-                    continue  # 原目录报告只收集项目文件；严格派生默认仍无名称排除。
+                    continue  # 按宿主指定范围采集项目文件，保护目录不进入快照。
                 if len(entries) >= self.MAX_ENTRIES:
                     raise SnapshotError('workspace_snapshot_limit', '普通工作区超过1000个目录项，无法保存可继续快照。')
                 name = _relative(path.relative_to(root).as_posix())
@@ -197,30 +197,6 @@ class FileSnapshotStore:
             code = error.code if isinstance(error, SnapshotError) else 'workspace_snapshot_unreadable'
             message = error.message if isinstance(error, SnapshotError) else '工作区无法完整保存可继续快照，请检查目录与访问权限。'
             self._write_info(directory, {'run_id': str(run_id), 'status': 'error', 'error_code': code, 'error_message': message})
-
-    def verify(self, run_id: UUID, workspace: Path) -> None:
-        """核对run_id固定快照与workspace当前内容；成功无返回值，不创建或修改工作区。
-
-        run_id指定上一轮证据，workspace为该会话持续使用的示例副本。目录身份、文件内容
-        或快照正文无法核对时抛SnapshotError，调用方不得启动模型；不从快照恢复代码。
-        """
-        try:
-            value = self.info(run_id)
-            if value is None or value['status'] != 'ready':
-                raise SnapshotError('workspace_snapshot_missing', '前轮没有完整文件快照，不能自动继续。')
-            identity, entries, _ = self._tree(workspace)
-            if value['workspace'] != str(workspace.resolve()) or list(identity) != value['identity'] or entries != value['entries']:
-                raise SnapshotError('workspace_snapshot_stale', '工作区在前轮结束后发生变化，请核对后新建任务。')
-            for item in entries:
-                if item['kind'] == 'file':
-                    self.saved_file(run_id, item['path'])
-            if self._tree(workspace)[1] != entries:
-                raise SnapshotError('workspace_snapshot_changed', '核验期间工作区发生变化。')
-        except SnapshotError:
-            raise
-        except (OSError, ValueError, KeyError, WorkspaceError):
-            raise SnapshotError('workspace_snapshot_unreadable', '无法核对示例工作区，尚未调用模型。') from None
-
 
     def saved_file(self, run_id: UUID, relative: str) -> Path:
         """返回run_id已保存的relative文件；核对路径、大小和SHA，缺失/损坏抛SnapshotError。

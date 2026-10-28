@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-from agent_harness.projects import ProjectPreset
+from agent_harness.projects import ProjectError, ProjectManager, ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
 from agent_harness.sessions import SessionStore, payload_digest
@@ -64,11 +64,11 @@ class EditingModel:
 
 @pytest.fixture
 def config(tmp_path: Path, monkeypatch) -> WebConfig:
-    """创建可明确试用的样例来源并设置离线凭据，返回真实应用使用的宿主配置。"""
+    """创建真实普通目录并设置离线凭据，返回应用配置；目录始终原地执行。"""
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-conversation-key')
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
-    return WebConfig(project_dir=tmp_path, runtime_root=tmp_path / 'runtime/copies', frontend_dist=tmp_path / 'dist', workspaces=[WebWorkspace(id='files', label='示例文件', path=workspace, is_example=True)])
+    return WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / 'runtime/copies', frontend_dist=tmp_path / 'dist', workspaces=[WebWorkspace(id='files', label='普通目录', path=workspace)])
 
 
 @asynccontextmanager
@@ -93,8 +93,8 @@ async def finished(client: httpx.AsyncClient, identifier: str) -> dict:
 
 
 async def initial(client: httpx.AsyncClient, project: bool = False) -> dict:
-    """显式创建示例副本或Git工作树并等待首轮收尾；普通原目录另有回归。"""
-    response = await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
+    """project=True显式创建Git工作树，否则原地修改普通目录；返回首轮真实终态。"""
+    response = await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated' if project else 'local', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
     assert response.status_code == 202, response.text
     return await finished(client, response.json()['run_id'])
 
@@ -113,7 +113,7 @@ def evidence(root: Path, identifier: str) -> dict[str, str]:
 
 
 def test_file_followup_inherits_history_and_code_without_rewriting_parent(config: WebConfig):
-    """同一示例副本完成两轮修改，核对历史证据固定、消息无重复及请求幂等。"""
+    """同一普通目录完成两轮修改，核对历史证据固定、消息无重复及请求幂等。"""
     async def scenario():
         """顺序提交与重复请求并比较父子结果；所有执行使用真实文件工具。"""
         model = EditingModel()
@@ -125,8 +125,8 @@ def test_file_followup_inherits_history_and_code_without_rewriting_parent(config
             assert second['parent_run_id'] == first['run_id'] and second['turn_index'] == 2
             assert second['session_id'] == first['run_id']
             assert Path(first['workspace']) == Path(second['workspace'])
-            assert len(list(config.runtime_root.iterdir())) == 1
-            assert not (config.workspaces[0].path / 'result.txt').exists()
+            assert not config.worktrees_root.exists()
+            assert Path(first['workspace']) == config.workspaces[0].path
             assert (Path(second['workspace']) / 'result.txt').read_text(encoding='utf-8') == 'first\nsecond\n'
             artifact = await client.get(f'/api/runs/{first["run_id"]}/artifacts', params={'location': 'workspace', 'path': 'result.txt', 'preview': True})
             assert artifact.status_code == 200 and artifact.json()['content'].replace('\r\n', '\n') == 'first\n'
@@ -163,27 +163,11 @@ def test_session_survives_restart_and_does_not_duplicate_inherited_history(confi
             third = await follow(client, second, 'third')
             assert third['turn_index'] == 3
             assert third['workspace'] == first['workspace'] == second['workspace']
-            assert len(list(config.runtime_root.iterdir())) == 1
+            assert not config.worktrees_root.exists()
             assert (Path(third['workspace']) / 'result.txt').read_text(encoding='utf-8') == 'first\nsecond\nthird\n'
             assert [item['content'] for item in model.requests[-1] if item['role'] == 'user'] == ['first', 'second', 'third']
             view = (await client.get(f'/api/runs/{third["run_id"]}/conversation')).json()
             assert len(view['turns']) == 3
-    asyncio.run(scenario())
-
-
-def test_changed_file_workspace_is_rejected_before_new_model(config: WebConfig):
-    """父工作区被外部修改后拒绝继承，不调用模型且不改旧运行证据。"""
-    async def scenario():
-        """更改实际父文件后提交，比较模型次数与原始日志摘要。"""
-        model = EditingModel()
-        async with client_for(config, model) as (client, app):
-            first = await initial(client)
-            before = evidence(app.state.manager.runs_root, first['run_id'])
-            (Path(first['workspace']) / 'result.txt').write_text('external')
-            count = len(model.requests)
-            response = await client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id': str(uuid4()), 'prompt': 'second'})
-            assert response.status_code == 409 and response.json()['error']['code'] == 'workspace_snapshot_stale'
-            assert len(model.requests) == count and evidence(app.state.manager.runs_root, first['run_id']) == before
     asyncio.run(scenario())
 
 
@@ -206,17 +190,18 @@ def test_followup_budget_rejects_before_model_and_preserves_files(config: WebCon
     asyncio.run(scenario())
 
 
-def test_snapshot_quota_does_not_change_completed_run(config: WebConfig, monkeypatch):
-    """普通工作区超出快照上限仍保留已完成结果，只把继续能力标为不可用。"""
+def test_snapshot_quota_preserves_completed_run_and_continuation(config: WebConfig, monkeypatch):
+    """普通目录快照超限仍保留完成结果及继续能力，不让证据采集改变执行目录。"""
     monkeypatch.setattr(FileSnapshotStore, 'MAX_BYTES', 64)
     (config.workspaces[0].path / 'large.bin').write_bytes(b'x' * 65)
     async def scenario():
-        """等待快照收尾后读取会话可继续原因，不把快照限制伪装为执行失败。"""
+        """等待差异收尾后核对错误提示与会话可继续，不把采集限制当作执行失败。"""
         async with client_for(config, EditingModel()) as (client, app):
             first = await initial(client)
             assert first['result']['execution_status'] == 'completed'
             conversation = (await client.get(f'/api/runs/{first["run_id"]}/conversation')).json()
-            assert not conversation['can_continue'] and conversation['blocked_code'] == 'workspace_snapshot_limit'
+            assert conversation['can_continue'] and conversation['blocked_code'] is None
+            assert first['local_changes']['status'] == 'error'
     asyncio.run(scenario())
 
 
@@ -326,7 +311,6 @@ def test_project_followup_isolated_with_fresh_tests_and_review(project_config: W
     asyncio.run(scenario())
 
 
-
 def test_manual_edits_continue_but_discarded_workspace_blocks(project_config: WebConfig):
     """两轮间手动新增文件保留；最新会话工作树丢弃后，新请求在模型调用前拒绝。"""
     async def scenario():
@@ -348,24 +332,25 @@ def test_manual_edits_continue_but_discarded_workspace_blocks(project_config: We
     asyncio.run(scenario())
 
 
-def test_disconnected_followup_preparation_keeps_one_background_run(config: WebConfig, monkeypatch):
+def test_disconnected_followup_preparation_keeps_one_background_run(project_config: WebConfig, monkeypatch):
     """HTTP调用方断开不取消追加准备，重连同请求仍只执行一次。"""
     import threading
     entered, release = threading.Event(), threading.Event()
-    verify = FileSnapshotStore.verify
+    config = project_config
+    prepare = ProjectManager.prepare_turn
 
-    def gated_verify(self, run_id, workspace):
-        """核验run_id的workspace前等待最多五秒；成功无返回值，不复制执行目录。"""
+    def gated_prepare(self, preset, parent_id, run_id):
+        """按preset复用parent_id工作树前等待最多五秒；返回run_id的新轮审阅记录。"""
         entered.set()
         assert release.wait(5)
-        return verify(self, run_id, workspace)
-    monkeypatch.setattr(FileSnapshotStore, 'verify', gated_verify)
+        return prepare(self, preset, parent_id, run_id)
+    monkeypatch.setattr(ProjectManager, 'prepare_turn', gated_prepare)
 
     async def scenario():
         """取消HTTP等待后释放真实准备，检查会话唯一新轮与幂等重连。"""
-        model = EditingModel()
+        model = EditingModel(project=True)
         async with client_for(config, model) as (client, app):
-            first = await initial(client)
+            first = await initial(client, project=True)
             body = {'request_id':str(uuid4()), 'prompt':'second'}
             pending = asyncio.create_task(client.post(f'/api/runs/{first["run_id"]}/followups', json=body))
             assert await asyncio.to_thread(entered.wait, 5)
@@ -379,28 +364,28 @@ def test_disconnected_followup_preparation_keeps_one_background_run(config: WebC
             again = await client.post(f'/api/runs/{first["run_id"]}/followups', json=body)
             assert again.status_code == 202 and again.json()['run_id'] == second['run_id']
             assert len(model.requests) == before
-            assert (Path(second['workspace']) / 'result.txt').read_text(encoding='utf-8') == 'first\nsecond\n'
+            assert '# second' in (Path(second['workspace']) / 'app.py').read_text(encoding='utf-8')
     asyncio.run(scenario())
 
 
-def test_shutdown_handles_failed_followup_preparation(config: WebConfig, monkeypatch):
+def test_shutdown_handles_failed_followup_preparation(project_config: WebConfig, monkeypatch):
     """服务关闭等待中的追加准备失败时仍正常收尾，不能遗留执行或抛出未处理会话异常。"""
     import threading
-    from agent_harness.snapshots import SnapshotError
+    config = project_config
     entered, release = threading.Event(), threading.Event()
 
-    def failing_verify(self, run_id, workspace):
-        """核验run_id的workspace时等待最多五秒后抛来源变化；不修改工作区。"""
+    def failing_prepare(self, preset, parent_id, run_id):
+        """为preset准备run_id前等待最多五秒并抛来源变化；不修改parent_id的工作树。"""
         entered.set()
         assert release.wait(5)
-        raise SnapshotError('workspace_snapshot_stale', '工作区发生变化。')
-    monkeypatch.setattr(FileSnapshotStore, 'verify', failing_verify)
+        raise ProjectError('project_worktree_changed', '工作树发生变化。')
+    monkeypatch.setattr(ProjectManager, 'prepare_turn', failing_prepare)
 
     async def scenario():
         """先建立可信首轮，再于准备中发起关停，确认没有后续模型调用。"""
-        model = EditingModel()
+        model = EditingModel(project=True)
         async with client_for(config, model) as (client, app):
-            first = await initial(client)
+            first = await initial(client, project=True)
             count = len(model.requests)
             pending = asyncio.create_task(client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id':str(uuid4()),'prompt':'second'}))
             assert await asyncio.to_thread(entered.wait, 5)

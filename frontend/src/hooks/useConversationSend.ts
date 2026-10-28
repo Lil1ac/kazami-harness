@@ -22,8 +22,8 @@ interface SavedDraft {
   pending: PendingSend | null; // 无待确认请求时为空。
 }
 
-/** 读取会话草稿并兼容旧版逐运行待确认请求；存储损坏返回空草稿，不触发提交。 */
-function readDraft(sessionId: string, runId: string): SavedDraft {
+/** 读取 sessionId 对应的会话草稿；存储损坏返回空草稿，不触发提交。 */
+function readDraft(sessionId: string): SavedDraft {
   try {
     const value = JSON.parse(sessionStorage.getItem(`harness-chat:${sessionId}`) || 'null');
     if (value && typeof value.text === 'string') {
@@ -39,9 +39,6 @@ function readDraft(sessionId: string, runId: string): SavedDraft {
             : null,
       };
     }
-    const legacy = JSON.parse(sessionStorage.getItem(`harness-followup:${runId}`) || 'null');
-    if (legacy && typeof legacy.prompt === 'string' && typeof legacy.request_id === 'string')
-      return { text: legacy.prompt, pending: { parentId: runId, body: legacy } };
   } catch {
     // 浏览器存储不可用时仍允许内存中的正常会话操作。
   }
@@ -59,15 +56,6 @@ function writeDraft(sessionId: string, value: SavedDraft): void {
   }
 }
 
-/** 清除旧版待确认键；仅在服务端接纳或明确拒绝后调用，存储失败不影响后台执行。 */
-function clearLegacy(parentId: string): void {
-  try {
-    sessionStorage.removeItem(`harness-followup:${parentId}`);
-  } catch {
-    /* 存储被禁用时无需清理。 */
-  }
-}
-
 /** 在稳定 sessionId 下管理输入与幂等发送；run 为最新轮，确认后回调交付真实 RunView。 */
 export function useConversationSend(
   sessionId: string,
@@ -78,8 +66,7 @@ export function useConversationSend(
   const { draft } = useConfigDraft();
   const cache = useQueryClient();
   const [initial] = useState(
-    /* 首次挂载才读取存储，切换检查轮次不重置会话草稿。 */ () =>
-      readDraft(sessionId, run?.run_id || conversation.latest_run_id),
+    /* 首次挂载才读取存储，切换检查轮次不重置会话草稿。 */ () => readDraft(sessionId),
   );
   const [text, setText] = useState(initial.text); // 同一会话内连续编辑，允许执行中预写下一条。
   const [pending, setPending] = useState<PendingSend | null>(initial.pending); // 只在明确确认后清除。
@@ -103,7 +90,6 @@ export function useConversationSend(
       view,
       submission,
     ) => {
-      clearLegacy(submission.parentId);
       setPending(null);
       setSkillChoice(
         /* 发送期间若已预写不同技能选择，将其留给下一条；否则继承已确认新轮。 */ (choice) =>
@@ -117,10 +103,7 @@ export function useConversationSend(
       );
       onConfirmed(view);
     },
-    onError: /* 确定未接纳的4xx清除待确认编号；网络/不确定结果保留原编号供明确重试。 */ (
-      error,
-      submission,
-    ) => {
+    onError: /* 确定未接纳的4xx清除待确认编号；网络/不确定结果保留原编号供明确重试。 */ (error) => {
       const detail = error as { status?: number; code?: string };
       if (
         detail.status &&
@@ -129,7 +112,6 @@ export function useConversationSend(
         detail.code !== 'request_uncertain'
       ) {
         setPending(null);
-        clearLegacy(submission.parentId);
       }
       void cache.invalidateQueries({ queryKey: ['conversation', sessionId] });
     },

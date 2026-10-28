@@ -79,7 +79,7 @@ def configuration(tmp_path: Path, kind: str) -> tuple[WebConfig, Path]:
         subprocess.run(['git', 'add', 'staged.txt'], cwd=selected, capture_output=True, check=True)
         (selected / 'result.txt').write_text('用户未提交修改\n', encoding='utf-8')
         presets = [ProjectPreset(id='code', label='原目录项目', path=selected, test_argv=[sys.executable, '-c', 'from pathlib import Path; assert Path.cwd() == Path(r"{workspace}"); assert "first" in Path("result.txt").read_text(encoding="utf-8")'])]
-    return WebConfig(project_dir=tmp_path, runtime_root=tmp_path / 'runtime/copies', frontend_dist=tmp_path / 'dist', projects=presets), selected
+    return WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / 'runtime/copies', frontend_dist=tmp_path / 'dist', projects=presets), selected
 
 
 @pytest.mark.parametrize('kind', ['workspace', 'project'])
@@ -119,7 +119,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
             assert (await client.get('/api/runs/' + first['run_id'] + '/diff')).json() == old_diff
             assert evidence == {name: hashlib.sha256((manager.runs_root / first['run_id'] / name).read_bytes()).hexdigest() for name in evidence}
             assert (await client.post('/api/runs/' + second['run_id'] + '/review', json={'decision': 'discard'})).status_code == 404
-            assert selected.exists() and not config.runtime_root.exists() and not manager.projects.worktrees_root.exists()
+            assert selected.exists() and not config.worktrees_root.exists() and not manager.projects.worktrees_root.exists()
         async with client_for(config, model) as (client, manager):
             assert (await client.get('/api/runs/' + second['run_id'] + '/conversation')).json()['can_continue']
             third = await finish(client, await client.post('/api/runs/' + second['run_id'] + '/followups', json={'prompt': 'third', 'request_id': str(uuid4())}))
@@ -153,7 +153,7 @@ def test_configured_directory_defaults_local_without_catalog_registration(tmp_pa
             assert first['execution_mode'] == 'local' and Path(first['workspace']) == selected
             assert model.command_directories == [str(selected)]
             assert 'first' in (selected / 'result.txt').read_text(encoding='utf-8')
-            assert not config.runtime_root.exists() and not manager.projects.worktrees_root.exists()
+            assert not config.worktrees_root.exists() and not manager.projects.worktrees_root.exists()
     asyncio.run(scenario())
 
 
@@ -169,7 +169,7 @@ def test_personal_folder_rejects_hidden_copy_execution(tmp_path: Path, monkeypat
             identifier = manager.catalog.register(selected)
             response = await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier, 'execution_mode': 'isolated'})
             assert response.status_code == 400 and response.json()['error']['code'] == 'workspace_copy_not_supported'
-            assert not model.command_directories and not config.runtime_root.exists()
+            assert not model.command_directories and not config.worktrees_root.exists()
             assert (selected / 'result.txt').read_text(encoding='utf-8') == 'existing\n'
     asyncio.run(scenario())
 

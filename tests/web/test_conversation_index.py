@@ -34,7 +34,7 @@ def config_for(root: Path) -> WebConfig:
     """创建两个独立普通来源，返回可重启复用的配置；记录和副本均在测试根目录内。"""
     for name in ('alpha', 'beta'):
         (root / name).mkdir(parents=True, exist_ok=True)
-    return WebConfig(project_dir=root, runtime_root=root / 'runtime/copies', frontend_dist=root / 'dist',
+    return WebConfig(project_dir=root, worktrees_root=root / 'runtime/copies', frontend_dist=root / 'dist',
         workspaces=[WebWorkspace(id=name,label=name.upper(),path=root/name) for name in ('alpha','beta')])
 
 

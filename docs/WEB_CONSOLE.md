@@ -25,11 +25,10 @@ Vite默认在127.0.0.1:5173提供页面，将/api代理到127.0.0.1:8765。前�
 
 ## 2. 操作流程
 
-- **打开项目**：首页点击“选择项目文件夹”，从 Windows 系统窗口选择本机 Git 根目录或普通文件夹；已登记项目从侧栏进入。直接修改所选目录；只有明确创建Git工作树或试用示例时才更换执行位置；取消保留输入且不执行。详细协议见 [打开本机项目](LOCAL_PROJECTS.md)。
+- **打开项目**：首页点击“选择项目文件夹”，从 Windows 系统窗口选择本机 Git 根目录或普通文件夹；已登记项目从侧栏进入。直接修改所选目录；只有明确创建 Git 工作树时才更换执行位置；取消保留输入且不执行。详细协议见 [打开本机项目](LOCAL_PROJECTS.md)。
 - **普通任务**：打开输入所在目录，填写任务、声明可选预期产物，再开始执行。任务产物可以是代码、文本、CSV等格式；不要求输出JSON。未选择验收器时最终明确显示“未验收”。
-- **日志样例**：点击“填充日志样例”，检查任务与固定验收器后提交。表单会为本浏览器启用所需四工具。后端每次复制输入到新的独立目录，Agent生成脚本和报告后，宿主运行固定日志检查器。该验收器只适用于仓库样例。
 - **运行详情**：消息区展示用户要求、Markdown回答和折叠过程；右侧或手机抽屉按轮查看测试、代码、产物、上下文、完整轨迹与预算，工具参数/输出继续按纯文本展开。产物提供64KiB以内UTF-8文本预览，二进制文件可下载。
-- **运行配置**：修改模型、四类工具和已有预算，仅影响本浏览器之后提交的任务；刷新页面恢复宿主默认。正在运行的配置不变，页面不修改服务端TOML。
+- **运行配置**：修改模型、五类工具和模型轮次、工具次数、总时限，仅影响本浏览器之后提交的任务；刷新页面恢复宿主默认。正在运行的配置不变，页面不修改服务端TOML。
 - **取消**：明确点击并确认取消后，先显示正在取消，后端清理完成后才显示终态。刷新、页面切换、关闭网页或SSE断开只清理订阅，不取消Agent。
 - **项目与会话**：侧栏进入项目会话列表，“新建对话”从当前项目开始，点击已有会话则进入完整消息区。首页最近会话与全部会话按稳定会话聚合，每段多轮工作只显示一条；手机使用项目导航抽屉。运行详情普通入口默认收起，按需展开，详情深链接保持可直接访问。
 - **历史**：重新启动服务后可读取既有记录；读取不会重放工具动作。缺少可信结束事件的记录显示中断与警告，不推断其副作用已经完成。
@@ -42,32 +41,16 @@ Vite默认在127.0.0.1:5173提供页面，将/api代理到127.0.0.1:8765。前�
 
 首次使用可直接在页面打开目录；可选 --web-config web.example.toml 采用表数组登记初始工作区、项目和验收器。相对路径以该TOML所在目录解释：
 
-```toml
-runtime_root = ".runtime/web-workspaces"
+~~~toml
+worktrees_root = ".runtime/project-worktrees"
 frontend_dist = "frontend/dist"
+~~~
 
-[[workspaces]]
-id = "workspace"
-label = "本地任务工作区"
-path = ".runtime/workspace"
-is_example = true
+默认不登记项目、工作区或验收器，也不创建演示目录。可通过 `[[workspaces]]` 登记已经存在的普通目录，通过 `[[projects]]` 登记 Git 项目，通过 `[[verifiers]]` 登记通用独立验收器；对应示例与字段见 web.example.toml 和代码任务文档。所有目录默认原地执行，只有 Git 项目显式请求 isolated 才创建工作树。
 
-[[workspaces]]
-id = "logs"
-label = "日志样例（每次独立复制）"
-path = "examples/logs"
-is_example = true
+预设编号必须唯一。任务接口只提交登记编号，不能传入任意宿主路径、验收 argv 或凭据；项目测试由独立的显式设置接口保存。普通目录差异采集排除运行记录与 Git 工作树目录。原目录和 Git 隔离的历史产物均读取对应轮的固定快照，缺失或损坏时返回409，不回退到当前同名文件。历史验收只代表当次运行。
 
-[[verifiers]]
-id = "logs"
-label = "固定日志样例验收"
-description = "仅适用于仓库固定样例。"
-path = "examples/verifiers/logs.toml"
-```
-
-默认的project/.runtime/workspace可按需创建，其余自定义普通目录必须事先存在。省略执行方式时统一使用所选目录。只有明确试用is_example=true的示例时才复制到runtime_root下的新目录，限制1000目录项和16MiB，拒绝链接与特殊文件；示例续聊复用该目录。工作区/验收编号必须唯一。任务接口只提交登记编号，不能传入任意宿主路径、验收argv或凭据；项目测试由独立的显式设置接口保存，不在任务配置覆盖中开放。普通目录副本排除运行记录与任务目录。
-
-原目录执行的历史产物从该轮固定结束快照读取，快照不可用时返回409，不回退到当前同名文件。示例副本的历史产物同样使用该轮固定快照，缺失时返回409。历史验收结论属于当次运行，不代表文件之后未变化。日志复制样例每次独立，仍不应手动修改已交付的副本。示例的有界快照用于核验与保存逐轮产物，不派生下一轮执行目录；原目录执行单独保存逐轮产物。容器隔离尚未实现。
+`harness.example.toml` 管理模型与完整运行策略。普通设置页仅开放模型、五类工具和三项任务预算；上下文、重试、单次输出及清理限制由宿主 TOML 管理。API 的受限配置覆盖仍保留，页面不发送内部参数覆盖。记录只按当前格式读取，不迁移旧字段。容器隔离尚未实现。
 
 ## 4. 模块与生命周期
 
@@ -87,7 +70,7 @@ Web 接入集中在 `src/agent_harness/web/`：
 | `project_catalog.py` | 本机目录、最近项目与可选测试的持久登记 |
 | `folder_picker.py` / `native_dialog.py` | 异步协调本机系统目录窗口、取消与超时 |
 | `schemas.py` | 受限请求与运行视图 |
-| `service.py` | 单槽后台任务、进度、取消、历史、样例复制与产物 |
+| `service.py` | 单槽后台任务、进度、取消、历史与固定产物 |
 | `conversations.py` | 会话查询、追加条件、历史与工作区继承和幂等调度 |
 | `conversation_index.py` | 从现有记录只读聚合项目会话、保守核验最新轮、筛选与分页 |
 | `api.py` | HTTP/SSE、静态资源和受限产物访问 |
@@ -123,7 +106,7 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 
 RunView包含run_id、prompt、workspace、created_at、result、phase、event_count、last_seq、active、cancelling、interrupted、warnings、本次config、可空project审阅详情及可空context上下文详情；追加session_id、可空parent_run_id及从1开始的turn_index描述用户轮次。result继续使用RunResult及可空verification；毫秒、字节、字符等单位沿用后端定义。用户消息、工具输出、日志、指令和补丁按纯文本转义，Agent最终回答按受限Markdown渲染，不启用原始HTML。
 
-config覆盖只接受requested_model、tools、skills、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，旧记录为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
+config覆盖只接受requested_model、tools、skills、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，尚未准备时为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
 
 SSE逐条发送event=run_event、id=seq、data=完整RunEvent；每10秒注释心跳。终态或无活动任务的中断历史补齐已落盘事件后发送stream_end，其中包含last_seq与interrupted。前端按run_id+seq排序去重、遇缺口补历史；重新建立连接时显式携带游标，收到终止通知后重新查询持久化快照。
 
@@ -153,6 +136,8 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_web_fixture.py
 当前为本地单用户、单任务运行控制台。CSV/目录清单样例、demo 入口及后续恢复/容器/自优化的阶段安排统一见 [项目概览](../PROJECT.md)。缓存、依赖和本地输出保留原路径，只由 `.vscode/settings.json` 在编辑器文件树隐藏；`.runs/` 与 `.runtime/` 不因整理而删除或迁移。
 
 ## 7. 已保留的验证证据
+
+以下按日期保留历史验收事实。旧记录中的演示入口、细粒度网页配置及旧执行流程不代表当前功能；当前行为以本文前六节为准。
 
 ### 2026-10-19：基础控制台验收
 
@@ -483,3 +468,25 @@ Git 隔离改为一个会话一个工作树，prepare_turn 只登记新轮证据
 证据：[最终后端](../.runtime/execution-workspace-20261027/backend-final.txt)、[最终前端](../.runtime/execution-workspace-20261027/frontend-final.txt)、[类型检查](../.runtime/execution-workspace-20261027/typecheck-final.txt)、[构建](../.runtime/execution-workspace-20261027/build-final.txt)、[页面固定事实](../.runtime/execution-workspace-20261027/browser/proof.json)、[误报警复现](../.runtime/execution-workspace-20261027/history-warning-red.txt)。截图为 [设置](../output/playwright/execution-workspace-settings.png)、[历史只读](../output/playwright/execution-workspace-history.png)、[第三轮](../output/playwright/execution-workspace-third.png)、[丢弃后预览](../output/playwright/execution-workspace-discarded-preview.png) 和 [手机预览](../output/playwright/execution-workspace-mobile.png)。本轮证明功能与执行证据一致性，不代表真实模型无人干预成功率或效率收益。
 
 验收完成后专属浏览器及18794辅助服务已关闭，来源目录、运行记录和截图保留；用户原有服务未调整。
+
+### 2026-10-28：面向个人与小团队的首批功能精简
+
+删除日志演示产品入口、默认演示目录和验收器登记、示例副本创建与续聊、CLI 准备模式，以及磁盘旧字段清洗、缺失历史前缀推断和浏览器旧草稿迁移。CLI 日志教材、测试素材与通用独立验收继续使用。Web 配置统一使用 `worktrees_root`，普通目录始终原地执行，隔离模式只接受 Git 项目。
+
+普通设置页仅开放模型、五类工具、模型轮次、工具次数和总时限；上下文、重试、输出和清理参数由宿主 TOML 管理。修改三项预算时，实际请求不携带内部参数覆盖，后端仍保存完整有效配置。本轮沿用现有压缩、逐轮快照和工作树审阅机制。
+
+验收结果：
+
+- 后端全套 **633 passed、10 skipped**，351.77秒；跳过来自 Windows 符号链接权限及 POSIX 能力。全套收集后新增的默认配置无目录副作用回归单独运行，**1 passed**。
+- 前端最终 **21个文件、99项通过**，110.51秒，使用两个工作进程；TypeScript 检查、生产构建和差异空白检查通过。首次全并发有1项现有页面测试超过5秒，保持断言及时限不变，单独复查和双工作进程全套均通过。既有 JSDOM 样式模拟和 Vite 大包提示保留。
+- 本次页面验收使用独立18806离线服务，模型不访问供应商；文件、Git、搜索、Python 命令和 unittest 真实执行。页面保存解释器及测试设置，应用8轮/8次/120秒预算后提交，核对内部限制与上下文配置保持宿主值。
+
+| 用户轮次 | 运行ID | 结果 |
+| --- | --- | --- |
+| 1 | 5017b395-76e2-4801-ae10-a3f877dd810a | 原目录修复加法，5次模型轮次、4次工具调用，项目测试通过；页面显示真实测试与代码差异 |
+| 2 | ff216279-74a9-4758-baa5-23e4af308781 | 同一会话和目录继续修改，独立测试通过，首轮记录保持 |
+| 3 | 0ce9c6d7-946d-4131-b0f5-ec2c20d480af | 重启服务、刷新原会话后继续，测试通过；3轮固定产物分别保存 ROUND=1/2/3 |
+
+共15次离线模型轮次、12次工具调用；刷新及重启读取没有额外模型调用，未创建工作树或文件执行副本。第三轮完成后首轮 run.json、events.jsonl、summary.json 的 SHA-256 全部保持，实际页面首轮文件预览仍为 ROUND=1。专属项目与记录位于 `D:/Codex/Temp/harness-pruning-browser-20261028`。
+
+证据：[页面事实核对](../output/playwright/pruning-20261028/checks.json)、[设置页](../output/playwright/pruning-20261028/settings.png)、[首轮代码](../output/playwright/pruning-20261028/first-code.png)、[重启后第三轮](../output/playwright/pruning-20261028/restarted-third.png)、[第三轮后首轮产物](../output/playwright/pruning-20261028/first-artifact-after-third.png)。本轮不用于评估真实模型成功率或效率提升。

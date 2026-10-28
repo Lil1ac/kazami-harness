@@ -12,14 +12,13 @@ from ..schemas import DataModel
 from ..projects import ProjectPreset
 
 
-# 受控工作区登记；普通目录直接使用，示例仅首轮复制、续聊复用。
+# 受控普通目录登记；每轮直接使用已登记目录。
 class WebWorkspace(DataModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")  # 页面选择使用的稳定编号。
     label: str = Field(min_length=1, max_length=100)  # 面向用户的目录用途说明。
     path: Path  # 解析后的宿主目录；仅服务端配置能够登记。
     python_executable: str | None = Field(default=None, max_length=4096)  # 项目解释器；None 按 PATH，目录相对实际执行工作区。
     python_paths: list[str] | None = None  # 共享源码范围；None 自动根/src，[] 仅根目录。
-    is_example: bool = False  # 示例目录仅在辅助入口展示，不充当最近打开的个人项目。
 
 
 # 宿主预置验收器索引；实际 argv 仍由既有验收 TOML 定义。
@@ -33,7 +32,7 @@ class WebVerifier(DataModel):
 # 本地服务的固定目录与允许页面选择的预设，不保存任何凭据。
 class WebConfig(DataModel):
     project_dir: Path  # 项目根目录，用于默认记录位置与构建提示。
-    runtime_root: Path  # 每次样例复制的受控父目录。
+    worktrees_root: Path  # 显式 Git 隔离执行创建工作树的专用父目录，普通目录不会使用它。
     frontend_dist: Path  # Vite 构建目录；未构建时服务仍可提供 API。
     workspaces: list[WebWorkspace] = Field(default_factory=list)  # 普通工作区；可由项目预设替代。
     projects: list[ProjectPreset] = Field(default_factory=list)  # 宿主 Git 项目与固定测试命令。
@@ -83,45 +82,22 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
     """读取本地预设并返回绝对路径 WebConfig；None 使用内置安全默认值。
 
     project_dir=None 取当前目录；显式 TOML 的相对路径按其父目录解释。
-    仅默认普通工作区会按需创建，自定义工作区必须已存在；不读取凭据。
+    默认不登记或创建工作区；显式普通目录必须已存在，工作树按隔离请求创建。不读取凭据。
     文件、语法、字段及目录错误统一抛不含原始配置正文的 ConfigurationError。
     """
     try:
         project = (project_dir or Path.cwd()).resolve(strict=True)
         if path is None:
-            ordinary = project / ".runtime" / "workspace"
-            ordinary.mkdir(parents=True, exist_ok=True)
-            workspaces = [WebWorkspace(id="workspace", label="本地任务工作区", path=ordinary, is_example=True)]
-            verifiers: list[WebVerifier] = []
-            sample = project / "examples" / "logs"
-            verifier = project / "examples" / "verifiers" / "logs.toml"
-            if sample.is_dir():
-                workspaces.append(
-                    WebWorkspace(
-                        id="logs", label="日志样例（独立副本）", path=sample, is_example=True
-                    )
-                )
-            if verifier.is_file():
-                verifiers.append(
-                    WebVerifier(
-                        id="logs",
-                        label="固定日志样例验收",
-                        description="仅用于仓库自带日志样例；参考次数固定，不适用于任意日志。",
-                        path=verifier,
-                    )
-                )
             return WebConfig(
                 project_dir=project,
-                runtime_root=project / ".runtime" / "web-workspaces",
+                worktrees_root=project / ".runtime" / "project-worktrees",
                 frontend_dist=project / "frontend" / "dist",
-                workspaces=workspaces,
-                verifiers=verifiers,
             )
         location = path.resolve(strict=True)
         with location.open("rb") as source:
             raw = tomllib.load(source)
         # 允许的顶层字段全部固定，凭据与任意命令不能混入 Web 配置。
-        if set(raw) - {"runtime_root", "frontend_dist", "workspaces", "verifiers", "projects"}:
+        if set(raw) - {"worktrees_root", "frontend_dist", "workspaces", "verifiers", "projects"}:
             raise ConfigurationError("Web 配置包含不支持的字段。")
         base = location.parent
         for key in ("workspaces", "verifiers", "projects"):
@@ -134,16 +110,13 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
                 entry["path"] = _absolute(base, entry.get("path"))
         config = WebConfig(
             project_dir=project,
-            runtime_root=_absolute(base, raw.get("runtime_root", ".runtime/web-workspaces")),
+            worktrees_root=_absolute(base, raw.get("worktrees_root", ".runtime/project-worktrees")),
             frontend_dist=_absolute(base, raw.get("frontend_dist", "frontend/dist")),
             workspaces=raw.get("workspaces", []),
             verifiers=raw.get("verifiers", []),
             projects=raw.get("projects", []),
         )
         for workspace in config.workspaces:
-            # 显式配置也只允许自动创建项目固定默认目录，任意登记路径不享有此权限。
-            if workspace.path == (project / ".runtime" / "workspace").resolve():
-                workspace.path.mkdir(parents=True, exist_ok=True)
             if not workspace.path.is_dir():
                 raise ConfigurationError("登记的工作区必须是已存在的目录。")
         for verifier in config.verifiers:

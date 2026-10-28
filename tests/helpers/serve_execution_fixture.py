@@ -90,12 +90,13 @@ def main() -> None:
     parser.add_argument("--port",type=int,default=18794)
     args=parser.parse_args()
     project=Path(__file__).resolve().parents[2]
-    evidence=project/".runtime/execution-workspace-20261027/browser"
-    evidence.mkdir(parents=True,exist_ok=True)
     source,executable=prepare_sources(args.root.resolve())
+    # 页面证据与代码共用本次专属根目录，避免新验收混入上一轮历史。
+    evidence=args.root.resolve()/"evidence"
+    evidence.mkdir(parents=True,exist_ok=True)
     (evidence/"fixture.json").write_text(json.dumps({"source":str(source),"python":str(executable),"port":args.port},ensure_ascii=False,indent=2),encoding="utf-8")
     os.environ["DEEPSEEK_API_KEY"]="offline-execution-browser"
-    config=WebConfig(project_dir=project,runtime_root=evidence/"examples",frontend_dist=project/"frontend/dist",
+    config=WebConfig(project_dir=project,worktrees_root=evidence/"worktrees",frontend_dist=project/"frontend/dist",
                      projects=[ProjectPreset(id="execution-project",label="执行配置验收项目",path=source)],workspaces=[])
     run_config=RunConfig(requested_model="offline-execution-browser",tools=["read_file","search_files","write_file","run_command"])
     app=create_app(config,run_config,evidence/"runs",model_client=ExecutionBrowserModel(evidence/"requests.jsonl"))

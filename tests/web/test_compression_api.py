@@ -104,7 +104,7 @@ def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypa
     (workspace / "AGENTS.md").write_bytes("保留 RULE_COMPRESSION。\n".encode("utf-8"))
     (workspace / "small.txt").write_bytes(b"source evidence\n")
     (workspace / "app.py").write_bytes(b"def add(a,b):\n    return a-b\n")
-    config = WebConfig(project_dir=tmp_path, runtime_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
+    config = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
                        workspaces=[WebWorkspace(id="code", label="压缩任务", path=workspace)])
     host = RunConfig(tools=["read_file", "write_file"], context=ContextPolicy(
         compression="hybrid", max_input_bytes=15000, keep_recent_groups=1, inline_tool_bytes=1024, max_summary_calls=4,

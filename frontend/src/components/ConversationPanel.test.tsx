@@ -79,7 +79,9 @@ function show(run = makeRun(), review = false) {
           onInspect={onInspect}
           onConfirmed={onConfirmed}
         />
-        {review && <ProjectReviewPanel project={current.project!} active={current.active} canManage />}
+        {review && (
+          <ProjectReviewPanel project={current.project!} active={current.active} canManage />
+        )}
       </>
     );
   }
@@ -154,26 +156,6 @@ it('网络失败重试固定父轮、编号与原载荷，发送期间新写的�
   );
   expect(vi.mocked(createFollowup).mock.calls[1]).toEqual(first);
   expect(screen.getByLabelText('输入消息')).toHaveValue('下一条草稿');
-});
-
-it('兼容旧版未确认请求，刷新恢复原配置且不自动提交', async () => {
-  // 旧键迁移不能生成新请求编号。
-  const user = userEvent.setup();
-  const body = {
-    request_id: '00000000-0000-4000-8000-000000000001',
-    prompt: '恢复后继续',
-    config: { limits: { max_model_turns: 7 } },
-  };
-  sessionStorage.setItem('harness-followup:run-a', JSON.stringify(body));
-  vi.mocked(createFollowup).mockResolvedValue(makeRun({ run_id: 'run-b' }));
-  show();
-  expect(await screen.findByLabelText('输入消息')).toHaveValue(body.prompt);
-  expect(createFollowup).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button', { name: '重试确认' }));
-  await waitFor(
-    /* 请求确认使用固定配置，页面默认配置不能覆盖。 */ () =>
-      expect(createFollowup).toHaveBeenCalledWith('run-a', body),
-  );
 });
 
 it('普通未发送草稿在刷新后恢复，读取不会发请求', async () => {

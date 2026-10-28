@@ -308,10 +308,6 @@ pre {
   font-size: 11px;
   padding: 0;
 }
-.inline-note {
-  font-size: 11px;
-  color: #9b7047;
-}
 .run-table-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 125px 70px;
@@ -2407,18 +2403,6 @@ pre {
 }
 .project-test-settings p {
   margin: 10px 0 0;
-}
-.task-examples {
-  font-size: 11px;
-  color: var(--muted);
-  margin: 10px 2px 0;
-}
-.task-examples > summary {
-  width: fit-content;
-  cursor: pointer;
-}
-.task-examples > p {
-  margin: 10px 0;
 }
 .task-history {
   max-width: 760px;

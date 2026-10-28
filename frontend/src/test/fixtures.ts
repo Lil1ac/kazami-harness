@@ -18,6 +18,15 @@ export const config: RunConfig = {
     load_project_instructions: true, // 默认加载根目录项目规则。
     max_input_bytes: 262144, // 整体输入 256 KiB。
     max_project_instruction_bytes: 32768, // 指令文件 32 KiB。
+    compression: 'off', // 此组离线测试默认保留完整输入。
+    trigger_ratio: 0.8, // 接近预算时触发压缩。
+    target_ratio: 0.6, // 压缩后期望占用比例。
+    inline_tool_bytes: 8192, // 大结果的外置阈值。
+    keep_recent_groups: 3, // 保留近期完整工具批次。
+    max_summary_calls: 2, // 每轮最多两次摘要调用。
+    max_summary_bytes: 8192, // 单份摘要正文上限。
+    model_context_tokens: null, // 未声明额外token窗口。
+    token_safety_margin: 2048, // 声明窗口时额外预留token。
   },
   limits: {
     max_model_turns: 20,
@@ -37,10 +46,8 @@ export const config: RunConfig = {
 export const options: OptionsResponse = {
   config,
   key_configured: true,
-  workspaces: [{ id: 'logs', label: '日志样例', path: '/examples/logs', is_example: true }],
-  verifiers: [
-    { id: 'logs', label: '固定日志样例专用验收', description: '只检查随仓库提供的固定日志输入。' },
-  ],
+  workspaces: [], // 首次启动等待用户打开真实目录。
+  verifiers: [], // 无宿主登记时不提供独立验收选择。
   busy_run_id: null,
 };
 
@@ -50,7 +57,14 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     run_id: 'run-a',
     prompt: '统计日志',
     workspace: '/workspace',
-    project_workspace: overrides.project ? { session_id: overrides.project.session_id, latest_run_id: overrides.run_id || 'run-a', worktree: overrides.project.worktree, status: overrides.project.status } : null, // 模拟真实会话当前状态。
+    project_workspace: overrides.project
+      ? {
+          session_id: overrides.project.session_id,
+          latest_run_id: overrides.run_id || 'run-a',
+          worktree: overrides.project.worktree,
+          status: overrides.project.status,
+        }
+      : null, // 模拟真实会话当前状态。
     python_execution: null, // 未准备执行配置的记录；测试可提供独立轮次快照。
     created_at: '2026-10-19T10:00:00Z',
     phase: 'finished',

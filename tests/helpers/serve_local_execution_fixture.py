@@ -41,7 +41,7 @@ def main() -> None:
                 subprocess.run(['git', *argv], cwd=source, check=True, capture_output=True, timeout=15)
         (source / 'local.txt').write_text('用户当前未提交文件保持。\n', encoding='utf-8')
     os.environ['DEEPSEEK_API_KEY'] = 'offline-local-browser'
-    config = WebConfig(project_dir=project, runtime_root=root / 'copies', frontend_dist=project / 'frontend/dist', projects=[ProjectPreset(id='local-code', label=git_root.name, path=git_root, test_argv=[sys.executable, '-m', 'pytest', '-q'])], workspaces=[WebWorkspace(id='local-files', label=files_root.name, path=files_root)])
+    config = WebConfig(project_dir=project, worktrees_root=root / 'copies', frontend_dist=project / 'frontend/dist', projects=[ProjectPreset(id='local-code', label=git_root.name, path=git_root, test_argv=[sys.executable, '-m', 'pytest', '-q'])], workspaces=[WebWorkspace(id='local-files', label=files_root.name, path=files_root)])
     app = create_app(config, RunConfig(tools=['read_file', 'write_file']), root / 'runs', model_client=NavigationModel())
     app.state.manager.catalog.register(git_root)  # 普通目录用显式测试预设；本夹具位于父Git仓库内，不冒充原生选择结果。
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', timeout_graceful_shutdown=2)

@@ -66,7 +66,7 @@ def main() -> None:
         instructions.write_text('请保留项目约定标记 CONTEXT_BROWSER_RULE。\n交付使用中文。\n', encoding='utf-8')
     os.environ['DEEPSEEK_API_KEY'] = 'offline-context-browser-key'
     config = WebConfig(
-        project_dir=project, runtime_root=root / 'copies', frontend_dist=project / 'frontend/dist',
+        project_dir=project, worktrees_root=root / 'copies', frontend_dist=project / 'frontend/dist',
         workspaces=[WebWorkspace(id='context', label='上下文联动工作区（离线）', path=workspace)],
         verifiers=[],
     )

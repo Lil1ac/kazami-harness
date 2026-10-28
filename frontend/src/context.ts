@@ -1,21 +1,3 @@
-import type { ContextPolicy } from './types';
-
-/** 缺少上下文配置的旧宿主选项用于后续提交的默认值，不代表历史任务曾采用它。 */
-export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
-  load_project_instructions: true, // 默认读取实际工作区根目录的项目规则。
-  max_input_bytes: 262144, // 整体模型输入上限 256 KiB。
-  max_project_instruction_bytes: 32768, // 单份项目指令文件上限 32 KiB。
-  compression: 'off', // 缺少新配置的旧宿主保持关闭。
-  trigger_ratio: 0.8, // 接近预算时触发。
-  target_ratio: 0.6, // 批量回收目标。
-  inline_tool_bytes: 8192, // 外置阈值。
-  keep_recent_groups: 3, // 近期完整批次。
-  max_summary_calls: 2, // 额外摘要次数上限。
-  max_summary_bytes: 8192, // 摘要正文上限。
-  model_context_tokens: null, // 未声明窗口。
-  token_safety_margin: 2048, // 额外token预留。
-};
-
 /** 已知指令加载状态文案；未知服务端状态由调用者按原始文本展示。 */
 export const instructionStatusLabels: Record<string, string> = {
   loaded: '已加载',

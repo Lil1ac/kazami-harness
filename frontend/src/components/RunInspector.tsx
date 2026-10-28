@@ -20,7 +20,7 @@ export type RunEventView = ReturnType<typeof useRunEvents>;
 interface InspectorPanelsProps {
   run: RunView; // 当前选择的实际运行。
   events: RunEventView; // 对应该运行的事件窗口。
-  tab: string; // overview/code/artifacts/context/trace，旧answer映射为overview。
+  tab: string; // overview/code/artifacts/context/trace，只选择检查器分类。
   onTab: (value: string) => void; // 把查看分类同步到URL。
   historical?: boolean; // 旧轮固定只读，即使缓存中仍留有曾经的最新轮状态。
 }
@@ -81,13 +81,7 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
                     {run.execution_mode && (
                       <div>
                         <dt>执行方式</dt>
-                        <dd>
-                          {run.execution_mode === 'local'
-                            ? '所选目录'
-                            : run.source_kind === 'project'
-                              ? '独立 Git 工作树'
-                              : '示例副本'}
-                        </dd>
+                        <dd>{run.execution_mode === 'local' ? '所选目录' : '独立 Git 工作树'}</dd>
                       </div>
                     )}
                     {run.source_path && (
@@ -199,7 +193,9 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
                     children: (
                       <ProjectReviewPanel
                         project={run.project}
-                        canManage={!historical && run.project_workspace?.latest_run_id === run.run_id}
+                        canManage={
+                          !historical && run.project_workspace?.latest_run_id === run.run_id
+                        }
                         active={run.active}
                         parentRunId={run.parent_run_id}
                       />

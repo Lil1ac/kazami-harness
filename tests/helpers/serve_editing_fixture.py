@@ -77,7 +77,7 @@ def fixture_app(root: Path, frontend_dist: Path):
                      ["-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "-qm", "baseline"]):
             subprocess.run(["git", *argv], cwd=source, capture_output=True, check=True, timeout=15)
         (source / "user-note.txt").write_bytes("用户未提交内容保持。\n".encode("utf-8"))
-    config = WebConfig(project_dir=root, runtime_root=root / "copies", frontend_dist=frontend_dist,
+    config = WebConfig(project_dir=root, worktrees_root=root / "copies", frontend_dist=frontend_dist,
                        projects=[ProjectPreset(id="editing-project", label="局部编辑项目", path=source,
                                                test_argv=[sys.executable, "-m", "pytest", "-q"], test_timeout_seconds=30.0)])
     # 宿主默认未启用局部编辑，浏览器验收必须从配置页明确启用。

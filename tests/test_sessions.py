@@ -90,15 +90,14 @@ def test_binary_readonly_and_empty_directory_are_verified_without_copying(tmp_pa
     identifier = uuid4()
     store.capture(identifier, workspace)
     assert store.info(identifier)['status'] == 'ready'
-    store.verify(identifier, workspace)
     assert store.saved_file(identifier, 'binary.bin').read_bytes() == b'\0\xff\r\n'
     assert (workspace / 'empty').is_dir()
     assert not (tmp_path / 'child').exists()
 
 
-@pytest.mark.parametrize('damage', ['content','traversal','identity'])
+@pytest.mark.parametrize('damage', ['content','traversal'])
 def test_file_snapshot_damage_is_rejected(tmp_path: Path, damage: str):
-    """正文损坏、清单越界或来源身份替换时，拒绝继承且保留原文件证据。"""
+    """damage选择正文损坏或清单越界；历史下载拒绝损坏证据，原文件保持不变。"""
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     (workspace / 'file.txt').write_bytes(b'original')
@@ -114,13 +113,7 @@ def test_file_snapshot_damage_is_rejected(tmp_path: Path, damage: str):
         info['entries'][0]['path'] = '../outside'
         info['tree_sha256'] = payload_digest(info['entries'])
         path.write_text(json.dumps(info), encoding='utf-8')
-    else:
-        moved = tmp_path / 'old-workspace'
-        assert moved.resolve().is_relative_to(tmp_path.resolve()) and workspace.resolve().is_relative_to(tmp_path.resolve())
-        workspace.rename(moved)
-        workspace.mkdir()
-        (workspace / 'file.txt').write_bytes(b'original')
     with pytest.raises(SnapshotError):
-        store.verify(identifier, workspace)
+        store.saved_file(identifier, 'file.txt')
     assert (workspace / 'file.txt').read_bytes() == b'original'
     assert not (tmp_path / 'outside').exists()

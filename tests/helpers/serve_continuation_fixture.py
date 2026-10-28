@@ -105,7 +105,7 @@ def main() -> None:
     source = root / "source"
     initialize_repository(source)
     os.environ["DEEPSEEK_API_KEY"] = "offline-continuation-browser-key"
-    config = WebConfig(project_dir=project, runtime_root=root / "worktrees", frontend_dist=project / "frontend/dist", projects=[ProjectPreset(id="continuation", label="中断后继续联动（真实Git/离线模型）", path=source, test_argv=[sys.executable, "-m", "pytest", "-q"], python_paths=["src", "."])])
+    config = WebConfig(project_dir=project, worktrees_root=root / "worktrees", frontend_dist=project / "frontend/dist", projects=[ProjectPreset(id="continuation", label="中断后继续联动（真实Git/离线模型）", path=source, test_argv=[sys.executable, "-m", "pytest", "-q"], python_paths=["src", "."])])
     host = RunConfig(requested_model="offline-continuation", tools=["read_file", "write_file", "run_command"], context=ContextPolicy(compression="masking", inline_tool_bytes=1024), limits=RunLimits(max_model_turns=16, run_timeout_seconds=300.0))
     app = create_app(config, host, root / "runs", model_client=ContinuationBrowserModel(root))
     uvicorn.run(app, host="127.0.0.1", port=args.port, loop="asyncio", workers=1, timeout_graceful_shutdown=2)

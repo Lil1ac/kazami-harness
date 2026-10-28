@@ -20,56 +20,11 @@ def invoke(*args: object, env: dict[str, str] | None = None) -> subprocess.Compl
     )
 
 
-def test_prepare_and_show_preserve_created_state_without_credentials(tmp_path: Path):
-    """验证无密钥时仍能准备和查看任务，状态保持未执行、未验收。"""
-    workspace = tmp_path / "工作区"
-    workspace.mkdir()
-    records = tmp_path / "records"
-    env = os.environ.copy()
-    env.pop("DEEPSEEK_API_KEY", None)
-    prepared = invoke(
-        "run", "--prepare-only", "--task", "统计中文日志", "--workspace", workspace,
-        "--runs-dir", records, "--json", env=env,
-    )
-    assert prepared.returncode == 0, prepared.stderr
-    data = json.loads(prepared.stdout)
-    assert data["execution_status"] == "created"
-    assert data["validation_status"] == "unverified"
-    assert data["model_turns"] == data["http_attempts"] == data["tool_calls"] == 0
-
-    shown = invoke("show", data["run_id"], "--runs-dir", records, "--json", env=env)
-    assert shown.returncode == 0, shown.stderr
-    history = json.loads(shown.stdout)
-    assert history["task"]["prompt"] == "统计中文日志"
-    assert history["execution_status"] == "created"
-    assert history["interrupted"] is False
-    assert history["event_count"] == 1
-    assert not (Path(data["run_dir"]) / "summary.json").exists()
-
-
-def test_preparation_does_not_persist_secret_value(tmp_path: Path):
-    """验证准备记录只保存密钥来源名称，不将环境变量中的凭据落盘。"""
-    env = os.environ.copy()
-    secret = "dummy-do-not-persist-credential"
-    env["DEEPSEEK_API_KEY"] = secret
-    records = tmp_path / "records"
-    prepared = invoke(
-        "run", "--prepare-only", "--task", "测试任务", "--workspace", tmp_path,
-        "--runs-dir", records, "--json", env=env,
-    )
-    assert prepared.returncode == 0, prepared.stderr
-    for path in records.rglob("*"):
-        if path.is_file():
-            assert secret not in path.read_text(encoding="utf-8")
-    manifest = json.loads(next(records.glob("*/run.json")).read_text(encoding="utf-8"))
-    assert manifest["config"]["api_key_env"] == "DEEPSEEK_API_KEY"
-
-
 def test_invalid_workspace_does_not_create_run(tmp_path: Path):
     """验证无效工作目录在创建记录之前被拒绝，并返回配置错误码。"""
     records = tmp_path / "records"
     result = invoke(
-        "run", "--prepare-only", "--task", "测试任务", "--workspace", tmp_path / "missing",
+        "run", "--task", "测试任务", "--workspace", tmp_path / "missing",
         "--runs-dir", records,
     )
     assert result.returncode == 2
@@ -95,30 +50,12 @@ def test_config_error_does_not_echo_sensitive_value(tmp_path: Path):
     config.write_text(f'api_key = "{secret}"\n', encoding="utf-8")
     records = tmp_path / "records"
     result = invoke(
-        "run", "--prepare-only", "--task", "测试", "--workspace", tmp_path,
+        "run", "--task", "测试", "--workspace", tmp_path,
         "--config", config, "--runs-dir", records,
     )
     assert result.returncode == 2
     assert secret not in result.stdout + result.stderr
     assert not records.exists()
-
-
-def test_cli_override_preserves_other_config_values(tmp_path: Path):
-    """验证 CLI 只覆盖指定限制，配置文件中的其他限制仍保留。"""
-    config = tmp_path / "harness.toml"
-    config.write_text('[limits]\nmax_model_turns = 4\nmax_tool_calls = 9\n', encoding="utf-8")
-    records = tmp_path / "records"
-    prepared = invoke(
-        "run", "--prepare-only", "--task", "测试", "--workspace", tmp_path, "--config", config,
-        "--max-model-turns", 7, "--runs-dir", records, "--json",
-    )
-    assert prepared.returncode == 0, prepared.stderr
-    run_id = json.loads(prepared.stdout)["run_id"]
-    shown = invoke("show", run_id, "--runs-dir", records, "--json")
-    assert shown.returncode == 0, shown.stderr
-    limits = json.loads(shown.stdout)["config"]["limits"]
-    assert limits["max_model_turns"] == 7
-    assert limits["max_tool_calls"] == 9
 
 
 def test_show_rejects_path_traversal(tmp_path: Path):
@@ -162,7 +99,9 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
 
     monkeypatch.setattr(cli, "run_task", offline_run)
     records = tmp_path / "records"
-    code = cli.main(["run", "--task", "统计 app.log", "--workspace", str(workspace), "--runs-dir", str(records), "--json"])
+    profile = tmp_path / "harness.toml"
+    profile.write_text("[limits]\nmax_model_turns = 4\nmax_tool_calls = 9\n", encoding="utf-8")
+    code = cli.main(["run", "--task", "统计 app.log", "--workspace", str(workspace), "--runs-dir", str(records), "--config", str(profile), "--max-model-turns", "7", "--json"])
     captured = capsys.readouterr()
     assert code == 3
     result = json.loads(captured.out)
@@ -173,7 +112,10 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
     assert len(requests) == 2
     shown = invoke("show", result["run_id"], "--runs-dir", records, "--json")
     assert shown.returncode == 0
-    assert json.loads(shown.stdout)["final_answer"] == result["final_answer"]
+    history = json.loads(shown.stdout)
+    assert history["final_answer"] == result["final_answer"]
+    assert history["config"]["limits"]["max_model_turns"] == 7
+    assert history["config"]["limits"]["max_tool_calls"] == 9
 
 
 def test_unknown_tool_fails_before_creating_run(tmp_path: Path):
@@ -204,24 +146,10 @@ def test_invalid_verifier_fails_before_creating_run(tmp_path: Path):
     assert not records.exists()
 
 
-
-def test_prepare_can_register_expected_output_without_creating_it(tmp_path: Path):
-    """CLI 可登记预期产物但不生成文件，也不在准备阶段调用真实模型。"""
-    env = os.environ.copy()
-    env.pop("DEEPSEEK_API_KEY", None)
+def test_bad_expected_output_is_rejected_before_execution(tmp_path: Path):
+    """执行入口在启动前检查预期输出边界，拒绝父路径且不创建运行目录。"""
     records = tmp_path / "records"
-    prepared = invoke("run", "--prepare-only", "--task", "生成报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "report.json", "--json", env=env)
-    assert prepared.returncode == 0, prepared.stderr
-    run_id = json.loads(prepared.stdout)["run_id"]
-    shown = invoke("show", run_id, "--runs-dir", records, "--json", env=env)
-    assert json.loads(shown.stdout)["task"]["expected_outputs"] == ["report.json"]
-    assert not (tmp_path / "report.json").exists()
-
-
-def test_bad_expected_output_is_rejected_before_preparation(tmp_path: Path):
-    """准备入口也检查预期输出边界，拒绝父路径且不创建运行目录。"""
-    records = tmp_path / "records"
-    result = invoke("run", "--prepare-only", "--task", "报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "../outside.json")
+    result = invoke("run", "--task", "报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "../outside.json")
     assert result.returncode == 2
     assert "预期输出" in result.stderr
     assert not records.exists()
@@ -277,24 +205,6 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     assert readable.returncode == 0
     assert "验收原因：" in readable.stdout
     assert result["verification"]["reason"] in readable.stdout
-
-
-def test_prepare_with_verifier_does_not_execute_it(tmp_path: Path):
-    """准备模式可登记宿主验收入口，但不创建marker或请求密钥；返回 None。"""
-    verifier = tmp_path / "verifier.toml"
-    source = "from pathlib import Path;Path('marker').write_text('bad')"
-    verifier.write_text("argv = " + json.dumps([sys.executable, "-c", source]) + "\n", encoding="utf-8")
-    environment = os.environ.copy()
-    environment.pop("DEEPSEEK_API_KEY", None)
-    result = invoke(
-        "run", "--prepare-only", "--task", "准备", "--workspace", tmp_path,
-        "--verifier", verifier, "--runs-dir", tmp_path / "records", "--json", env=environment,
-    )
-    assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-    assert data["execution_status"] == "created"
-    assert data["verification"] is None
-    assert not (tmp_path / "marker").exists()
 
 
 def test_serve_help_describes_local_console_without_starting_service():

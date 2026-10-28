@@ -33,7 +33,7 @@ def project(tmp_path: Path, monkeypatch) -> WebConfig:
     (root / "local.txt").write_text("保留源目录未提交内容", encoding="utf-8")
     workspace = tmp_path / "ordinary"
     workspace.mkdir()
-    return WebConfig(project_dir=tmp_path, runtime_root=tmp_path / "runtime/copies", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id="ordinary", label="普通", path=workspace)], projects=[ProjectPreset(id="code", label="普通接续测试", path=root, test_argv=[sys.executable, "check.py"], test_timeout_seconds=10)])
+    return WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "runtime/copies", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id="ordinary", label="普通", path=workspace)], projects=[ProjectPreset(id="code", label="普通接续测试", path=root, test_argv=[sys.executable, "check.py"], test_timeout_seconds=10)])
 
 
 async def idle(client: httpx.AsyncClient, run_id: str) -> dict:

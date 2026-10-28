@@ -22,7 +22,7 @@ from ..skills import SkillCatalog
 from ..local_execution import LocalChangeStore
 from ..snapshots import SnapshotError
 from ..sessions import SessionError
-from .config import WebConfig, WebWorkspace
+from .config import WebConfig
 from .conversations import ConversationService
 from .conversation_index import ConversationIndex
 from .project_catalog import ProjectCatalog
@@ -147,70 +147,6 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     return result
 
 
-def _copy_example(source: WebWorkspace, destination: Path, *, protected_roots: tuple[Path, ...] = ()) -> None:
-    """仅复制显式选择的样例source到新destination；最多1000项和16MiB，无返回值。
-
-    protected_roots默认空元组，指定受保护的记录与副本根目录；复制时跳过其整棵树。
-    非示例来源、链接、特殊文件或超过预算时抛WebServiceError，不修改源目录。
-    """
-    if not source.is_example:
-        raise WebServiceError(400, "workspace_copy_not_supported", "所选文件夹直接在原目录执行，不创建副本。")
-    max_bytes, max_files = 16 * 1024 * 1024, 1000
-    try:
-        root = source.path.resolve(strict=True)
-        protected = tuple(path.resolve() for path in protected_roots)
-        if any(root.is_relative_to(path) for path in protected):
-            raise WebServiceError(400, "invalid_workspace", "任务来源不能位于运行记录或任务副本目录内。")
-        if source.path.is_symlink() or source.path.is_junction():
-            raise WebServiceError(400, "invalid_workspace", "文件夹不能是链接目录。")
-        entries: list[tuple[Path, Path]] = []
-        directories: list[Path] = []
-        size = 0
-        total_entries = 0
-        stack = [root]
-        while stack:
-            directory = stack.pop()
-            for item in directory.iterdir():
-                # 排除整个保护目录后再计数，历史会话数量不会占用本次来源复制预算。
-                if any(item.is_relative_to(path) for path in protected):
-                    continue
-                total_entries += 1
-                if total_entries > max_files:
-                    raise WebServiceError(400, "workspace_limit", "文件夹超过1000个目录项的复制上限。")
-                if item.is_symlink() or item.is_junction():
-                    raise WebServiceError(400, "invalid_workspace", "文件夹包含链接，已拒绝复制。")
-                if item.is_dir():
-                    directories.append(item.relative_to(root))
-                    stack.append(item)
-                elif item.is_file():
-                    size += item.stat().st_size
-                    entries.append((item, item.relative_to(root)))
-                    if size > max_bytes or len(entries) > max_files:
-                        raise WebServiceError(400, "workspace_limit", "文件夹超过16MiB或1000个文件的复制上限。")
-                else:
-                    raise WebServiceError(400, "invalid_workspace", "文件夹包含不支持的文件类型。")
-        destination.mkdir(parents=True, exist_ok=False)
-        for relative in directories:
-            (destination / relative).mkdir(parents=True, exist_ok=True)
-        copied = 0
-        for origin, relative in entries:
-            # 再次检查，避免遍历后链接替换让普通复制跟随到宿主其他位置。
-            if origin.is_symlink() or origin.is_junction() or not origin.resolve(strict=True).is_relative_to(root):
-                raise WebServiceError(400, "invalid_workspace", "文件路径在复制期间发生变化。")
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with origin.open("rb") as reader, target.open("xb") as writer:
-                while chunk := reader.read(65536):
-                    copied += len(chunk)
-                    if copied > max_bytes:
-                        raise WebServiceError(400, "workspace_limit", "文件在复制期间超过16MiB大小上限。")
-                    writer.write(chunk)
-    except WebServiceError:
-        raise
-    except (OSError, RuntimeError, ValueError):
-        raise WebServiceError(400, "workspace_copy_failed", "无法创建独立文件夹副本。") from None
-
-
 class WebRunManager:
     """管理本地单个执行槽、受限提交、取消和只读历史，不因页面断开而取消。"""
 
@@ -239,8 +175,8 @@ class WebRunManager:
         self._active: ActiveRun | None = None  # 只有仍执行的任务持有槽位。
         self._warnings: dict[UUID, list[str]] = {}  # 服务异常安全提示，不写伪造 run_finished。
         self._history_cache: dict[UUID, tuple[tuple[object, ...], RunHistory, int]] = {}  # 最近8条/32MiB记录；活动任务可单独保留。
-        self.projects = ProjectManager(self.runs_root, web_config.runtime_root.parent / "project-worktrees")  # 独立 Git 归属与审阅事实。
-        self.local_changes = LocalChangeStore(self.runs_root, (web_config.runtime_root, self.projects.worktrees_root))  # 原目录仅保存差异，不派生执行目录。
+        self.projects = ProjectManager(self.runs_root, web_config.worktrees_root)  # 独立 Git 归属与审阅事实。
+        self.local_changes = LocalChangeStore(self.runs_root, (self.projects.worktrees_root,))  # 原目录仅保存差异，不派生执行目录。
         self._recovery_tasks: dict[UUID, asyncio.Task[ProjectReview]] = {}  # 并发页面共享一次恢复，全部等待同一完成结果。
         self._recovered: set[UUID] = set()  # 每个中断任务最多恢复捕获一次，避免 GET 重跑 Git。
         self._closing = False  # 关停后永久拒绝新提交。
@@ -274,7 +210,6 @@ class WebRunManager:
                     "id": item.id,
                     "label": item.label,
                     "path": str(item.path),
-                    "is_example": item.is_example,
                 }
                 for item in workspace_presets
             ],
@@ -363,7 +298,7 @@ class WebRunManager:
                 )
                 selected_id = preset.id if preset is not None else workspace.id
                 mode = request.execution_mode
-                if mode == 'isolated' and workspace is not None and not workspace.is_example:
+                if mode == 'isolated' and workspace is not None:
                     raise WebServiceError(400, 'workspace_copy_not_supported', '所选文件夹直接在原目录执行，不创建副本。')
                 if mode == 'local' and request.base_ref != 'HEAD':
                     raise WebServiceError(400, 'local_base_ref', '原目录执行使用当前文件，不能切换Git基线；请选择隔离执行。')
@@ -378,7 +313,7 @@ class WebRunManager:
                         await asyncio.to_thread(self.projects.inspect, preset)  # 只读核对Git来源，不检出、不写索引。
                         task = task.model_copy(update={"verifier": self.project_verifier(preset, root)})
                         manifest = manifest.model_copy(update={"task": task})
-                elif preset is not None:
+                else:  # 隔离模式已经限定为 Git 项目。
                     preparation = asyncio.create_task(asyncio.to_thread(
                         self.projects.prepare, preset, identifier, request.base_ref
                     ))
@@ -394,21 +329,7 @@ class WebRunManager:
                     task = task.model_copy(update={"workspace": root, "verifier": verifier})
                     manifest = manifest.model_copy(update={"task": task})
                     validate_output_paths(task, self.runs_root)
-                else:  # 只有显式试用示例才创建一次副本，个人文件夹不能进入该分支。
-                    parent = self.web_config.runtime_root.resolve()
-                    destination = parent / str(identifier)
-                    if (
-                        destination.resolve().parent != parent
-                        or workspace.path.resolve().is_relative_to(parent)
-                    ):
-                        raise WebServiceError(400, "invalid_workspace", "任务来源不能位于任务副本目录内。")
-                    _copy_example(workspace, destination, protected_roots=(
-                        self.runs_root, parent, self.projects.worktrees_root,
-                    ))
-                    task = task.model_copy(update={"workspace": destination.resolve()})
-                    manifest = manifest.model_copy(update={"task": task})
-                    validate_output_paths(task, self.runs_root)
-                # 必须等实际目录确定后冻结，避免把原仓库源码路径带到新工作树或示例副本。
+                # 必须等实际目录确定后冻结，避免把原仓库源码路径带到新工作树。
                 execution = prepare_python_execution(task.workspace, (preset or workspace).python_paths, python_executable=(preset or workspace).python_executable)
                 task = task.model_copy(update={"python_execution": execution})
                 manifest = manifest.model_copy(update={"task": task})
@@ -513,14 +434,6 @@ class WebRunManager:
                     await asyncio.shield(capturing_local)
                 except Exception:
                     self._warnings.setdefault(item.manifest.run_id, []).append("本轮原目录差异记录未完整保存，实际修改仍位于所选目录。")
-            elif item.manifest.origin is not None and item.manifest.origin.kind == "workspace" and item.context is not None:
-                capturing_files = asyncio.create_task(asyncio.to_thread(self.conversations.files.capture, item.manifest.run_id, item.manifest.task.workspace))
-                try:
-                    await asyncio.shield(capturing_files)
-                except asyncio.CancelledError:
-                    await asyncio.shield(capturing_files)
-                except Exception:
-                    self._warnings.setdefault(item.manifest.run_id, []).append("普通工作区的可继续快照未能保存；本轮执行结果仍按原记录显示。")
             if self._active is item:
                 self._active = None
             # 超预算快照只为活动订阅保留；任务结束后立即释放这个特例。
@@ -718,11 +631,6 @@ class WebRunManager:
                 return self.projects.files.saved_file(view.run_id, path)
             except SnapshotError:
                 raise WebServiceError(409, 'project_artifact_unavailable', '本轮固定产物不可用，不会用共享工作树当前文件冒充历史内容。') from None
-        if location == 'workspace' and view.execution_mode == 'isolated' and view.source_kind == 'workspace':
-            try:
-                return self.conversations.files.saved_file(view.run_id, path)
-            except SnapshotError:
-                raise WebServiceError(409, 'example_artifact_unavailable', '本轮示例产物尚未保存或已不可核对。') from None
         base = self.runs_root / str(view.run_id) if location == "run" else Path(view.workspace)
         try:
             candidate = base / path

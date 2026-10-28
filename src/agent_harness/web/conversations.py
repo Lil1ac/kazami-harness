@@ -13,7 +13,7 @@ from ..runner import validate_execution, validate_output_paths
 from ..execution import PythonExecutionError, prepare_python_execution
 from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
 from ..sessions import SessionError, SessionStore, history_messages, payload_digest
-from ..snapshots import FileSnapshotStore, SnapshotError
+from ..snapshots import SnapshotError
 from ..store import StorageError
 from .schemas import ConversationTurn, ConversationView, FollowupRequest
 
@@ -29,7 +29,6 @@ class ConversationService:
         """绑定 manager 及其受保护存储；构造不创建目录、复制文件或调用模型。"""
         self.manager = manager  # 唯一执行调度器，负责后台任务、取消和收尾。
         self.store = SessionStore(manager.runs_root)  # 会话线性关系与请求幂等。
-        self.files = FileSnapshotStore(manager.runs_root)  # 示例副本的逐轮证据，仅核验与读取，不派生执行目录。
         self.submission_digest: str | None = None  # 内存中尚未落盘请求的载荷摘要，用于并发幂等。
         self.submission_key: tuple[UUID, UUID] | None = None  # 正在准备的会话/请求，供同进程重复请求共享等待。
 
@@ -65,20 +64,6 @@ class ConversationService:
                 raise SessionError('project_snapshot_required', '前轮代码快照尚未完整可用，不能继续。')
             if review.status == 'discarded':
                 raise SessionError('project_already_decided', '最新一轮工作树已经丢弃，不能继续修改。')
-        else:
-            preset = next(item for item in self.manager.catalog.workspace_presets() if item.id == origin.preset_id)
-            if not preset.is_example:
-                raise SessionError('workspace_copy_not_supported', '所选文件夹不支持副本执行，请在原目录新建对话。')
-            info = self.files.info(history.manifest.run_id)
-            if info is None and interrupted:
-                workspace = history.manifest.task.workspace
-                if not workspace.is_dir() or workspace.is_symlink() or workspace.is_junction() or workspace.resolve() != workspace:
-                    raise SessionError('workspace_source_changed', '中断工作区缺失或身份无法核对。')
-                return origin
-            if info is None:
-                raise SessionError('workspace_snapshot_missing', '前轮没有可继续的文件快照，请新建任务。')
-            if info['status'] != 'ready':
-                raise SessionError(info.get('error_code', 'workspace_snapshot_missing'), info.get('error_message', '前轮文件快照无法核对。'))
         return origin
 
     def view(self, run_id: UUID) -> ConversationView:
@@ -177,7 +162,7 @@ class ConversationService:
         return await asyncio.shield(task)
 
     async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str):
-        """持有全局单槽核验父状态、派生新工作区并启动 Runner；失败不修改父证据。"""
+        """持有全局单槽核验父状态、复用会话目录并启动 Runner；失败不修改父证据。"""
         async with self.manager._lock:
             if self.manager._closing:
                 raise SessionError('service_closing', '本地服务正在关闭。')
@@ -231,7 +216,7 @@ class ConversationService:
                                 raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
                             verifier_path = selected.path
                         verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
-                elif origin.kind == 'project':
+                else:  # 来源模型保证隔离执行只能属于 Git 项目。
                     preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
                     def prepare_project():
                         """复用会话工作树；中断源仅在明确提交时固定证据，不重放旧补丁。"""
@@ -246,26 +231,6 @@ class ConversationService:
                         raise
                     root = Path(review.worktree)
                     verifier = self.manager.project_verifier(preset, root)
-                else:
-                    root = parent.manifest.task.workspace
-                    def prepare_workspace():
-                        """核验示例会话原有副本；中断时补一次证据，不创建下一轮执行目录。"""
-                        if interrupted and self.files.info(parent_id) is None:
-                            self.files.capture(parent_id, parent.manifest.task.workspace)
-                        self.files.verify(parent_id, root)
-                    preparation = asyncio.create_task(asyncio.to_thread(prepare_workspace))
-                    try:
-                        await asyncio.shield(preparation)
-                    except asyncio.CancelledError:
-                        await asyncio.shield(preparation)
-                        raise
-                    verifier_path = None
-                    if origin.verifier_id is not None:
-                        preset = next((item for item in self.manager.web_config.verifiers if item.id == origin.verifier_id), None)
-                        if preset is None:
-                            raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
-                        verifier_path = preset.path
-                    verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
                 execution = prepare_python_execution(root, current_source.python_paths, python_executable=current_source.python_executable)
                 task = task.model_copy(update={'workspace': root, 'verifier': verifier, 'python_execution': execution})
                 manifest = manifest.model_copy(update={'task': task})

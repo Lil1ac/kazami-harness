@@ -54,7 +54,7 @@ def main() -> None:
         toml.write_text('argv = ["python", "verify.py"]\ncwd = "."\ntimeout_seconds = 10.0\n', encoding="utf-8")
     os.environ["DEEPSEEK_API_KEY"] = "offline-compression-browser-key"
     config = WebConfig(
-        project_dir=project, runtime_root=root / "copies", frontend_dist=project / "frontend/dist",
+        project_dir=project, worktrees_root=root / "copies", frontend_dist=project / "frontend/dist",
         workspaces=[WebWorkspace(id="compression", label="上下文压缩联动（离线）", path=workspace)],
         verifiers=[WebVerifier(id="compression", label="代码加法与规则验收", description="仅检查本服务的app.py。", path=toml)],
     )

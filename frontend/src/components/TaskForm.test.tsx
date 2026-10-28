@@ -68,7 +68,7 @@ beforeEach(
   },
 );
 
-it('首次无项目时以打开本机文件夹开始，不默认选择日志样例', async () => {
+it('首次无项目时只提供打开本机文件夹入口', async () => {
   // 实际打开接口返回后采用真实目录，打开本身不提交任务。
   vi.mocked(pickProject).mockResolvedValue({ cancelled: false, project: folder });
   const user = setup({ recent_projects: [] }, false);
@@ -165,7 +165,12 @@ it('隔离Git保存测试设置仍保留执行方式，保存本身不创建任�
   await user.paste('D:/project-env/python.exe');
   await user.click(screen.getByRole('button', { name: '保存项目设置' }));
   expect(await screen.findByRole('status')).toHaveTextContent('项目设置已保存');
-  expect(saveProjectSettings).toHaveBeenCalledWith(gitProject.id, 'python -m pytest -q', 60, 'D:/project-env/python.exe');
+  expect(saveProjectSettings).toHaveBeenCalledWith(
+    gitProject.id,
+    'python -m pytest -q',
+    60,
+    'D:/project-env/python.exe',
+  );
   expect(screen.getByLabelText('Python 解释器')).toHaveValue('D:/project-env/python.exe');
   expect(createRun).not.toHaveBeenCalled();
   expect(screen.getByLabelText('提交基线')).toHaveValue('HEAD');
@@ -220,16 +225,6 @@ it('技能收在高级设置，明确选择与清空仍随实际任务请求提�
   await user.click(screen.getByRole('button', { name: '开始执行' }));
   await waitFor(/* 清空提交明确的空数组。 */ () => expect(createRun).toHaveBeenCalledTimes(2));
   expect(vi.mocked(createRun).mock.calls[1][0].config.skills).toEqual([]);
-});
-
-it('样例只在辅助入口出现，填充后仍等待用户发送', async () => {
-  // 示例用于试用，不再占用初始项目选择。
-  const user = setup({ recent_projects: [] }, false);
-  expect(screen.getByText('试用示例').closest('details')).not.toHaveAttribute('open');
-  await user.click(screen.getByText('试用示例'));
-  await user.click(screen.getByRole('button', { name: '填充日志样例' }));
-  expect((screen.getByLabelText('任务描述') as HTMLTextAreaElement).value).toContain('app.log');
-  expect(createRun).not.toHaveBeenCalled();
 });
 
 it('项目不可用、任务忙碌和缺少凭据时禁止发送，仍可编辑要求', async () => {

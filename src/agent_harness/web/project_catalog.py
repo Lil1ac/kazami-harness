@@ -176,7 +176,7 @@ class ProjectCatalog:
                 {"id": item.id, "label": item.label, "path": str(item.path), "kind": kind, "python_executable": item.python_executable,
                  "last_opened_at": opened.get((item.id, os.path.normcase(str(item.path))))}
                 for kind, values in (("project", projects.values()), ("workspace", workspaces.values()))
-                for item in values if kind == "project" or not item.is_example
+                for item in values
             ]
             recent.sort(key=lambda item: item["last_opened_at"] or "", reverse=True)
             return list(projects.values()), list(workspaces.values()), recent
@@ -186,7 +186,7 @@ class ProjectCatalog:
         return self.snapshot()[0]
 
     def workspace_presets(self) -> list[WebWorkspace]:
-        """返回同一次登记快照的普通目录预设；个人目录始终原地执行，示例由专用入口选择。"""
+        """返回同一次登记快照的普通目录预设；所有普通目录始终原地执行。"""
         return self.snapshot()[1]
 
     def recent(self) -> list[dict]:
@@ -266,7 +266,7 @@ class ProjectCatalog:
             preset = next((item for item in self.project_presets() if item.id == identifier), None)
             workspace = next((item for item in self.workspace_presets() if item.id == identifier), None)
             source = preset or workspace
-            if source is None or (workspace is not None and workspace.is_example):
+            if source is None:
                 raise CatalogError("project_settings_unsupported", "请先打开自己的项目文件夹再保存运行设置。")
             try:
                 interpreter = python_executable.strip() if python_executable and python_executable.strip() else None
@@ -274,7 +274,7 @@ class ProjectCatalog:
                 argv = _split_test_command(command)
                 if preset is None and argv:
                     raise CatalogError("project_test_unsupported", "普通目录可设置 Python 解释器，项目测试请在 Git 项目中配置。")
-                values = {**source.model_dump(exclude={"is_example"}), "python_executable": interpreter,
+                values = {**source.model_dump(), "python_executable": interpreter,
                           "test_argv": argv, "test_timeout_seconds": timeout}
                 if preset is not None:
                     values = prepare_project_test(ProjectPreset(**values), preset.path).model_dump()

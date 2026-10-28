@@ -25,7 +25,7 @@ class CreateRunRequest(DataModel):
     prompt: str = Field(min_length=1, max_length=65536)  # 本次任务描述，空白由 TaskSpec 拒绝。
     workspace_id: str | None = Field(default=None, min_length=1, max_length=64)  # 普通任务工作区，与 project_id 二选一。
     project_id: str | None = Field(default=None, min_length=1, max_length=64)  # Git 项目任务编号。
-    execution_mode: Literal["local", "isolated"] = "local"  # 始终默认所选目录；isolated仅用于显式Git工作树或示例副本。
+    execution_mode: Literal["local", "isolated"] = "local"  # 默认所选目录；isolated仅用于显式创建Git工作树。
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)  # 固定提交引用，默认提交时 HEAD。
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
     expected_outputs: list[str] = Field(default_factory=list, max_length=100)  # 工作区内相对产物引用。

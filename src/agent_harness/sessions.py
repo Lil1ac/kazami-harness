@@ -69,28 +69,7 @@ class SessionStore:
                 raw = source.read(self.MAX_BYTES + 1)
             if len(raw) > self.MAX_BYTES:
                 raise ValueError('metadata limit')
-            payload = json.loads(raw)
-            # 普通请求旧元数据只读核对后移除；真实旧恢复意图和不一致轮次仍拒绝。
-            requests = payload.get("requests") if isinstance(payload, dict) else None
-            run_ids = payload.get("run_ids", []) if isinstance(payload, dict) else []
-            if isinstance(requests, dict) and isinstance(run_ids, list):
-                for item in requests.values():
-                    if not isinstance(item, dict) or item.get("kind", "followup") != "followup":
-                        continue
-                    parent = item.get("parent_run_id")
-                    ordinal = run_ids.index(parent) + 2 if parent in run_ids else None
-                    defaults = {"kind": "followup", "checkpoint_id": None}
-                    for key, default in defaults.items():
-                        if key in item and type(item[key]) is type(default) and item[key] == default:
-                            del item[key]
-                    # 曾保存的冗余轮次必须与线性父关系一致；不能把同轮其他执行洗成新要求。
-                    for key, expected in (("turn_index", ordinal), ("attempt_index", 1)):
-                        if key in item and (
-                            item[key] is None
-                            or (expected is not None and type(item[key]) is int and item[key] == expected)
-                        ):
-                            del item[key]
-            record = SessionRecord.model_validate_json(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+            record = SessionRecord.model_validate_json(raw)
             if record.session_id != session_id or record.run_ids[0] != session_id or len(set(record.run_ids)) != len(record.run_ids):
                 raise ValueError('invalid relation')
             for key in record.requests:
@@ -199,8 +178,7 @@ def history_messages(history: RunHistory, *, allow_interrupted: bool = False) ->
         raise SessionError('history_unverified', '前轮没有完整模型输入记录，不能继承历史。')
     payload = starts[0].payload
     initial = payload.get('messages')
-    loaded = any(event.type == 'context_prepared' and isinstance(event.payload.get('instruction'), dict) and event.payload['instruction'].get('status') == 'loaded' for event in history.events)
-    offset = payload.get('conversation_start', 2 if loaded else 1)
+    offset = payload.get('conversation_start')
     if not isinstance(initial, list) or type(offset) is not int or offset not in (1, 2) or len(initial) <= offset:
         raise SessionError('history_unverified', '前轮模型输入格式无法核对。')
     messages = deepcopy(initial[offset:])

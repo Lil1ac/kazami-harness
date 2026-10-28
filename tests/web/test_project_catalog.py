@@ -32,7 +32,7 @@ def repository(path: Path, *, commit: bool = True) -> Path:
 
 def configuration(path: Path) -> WebConfig:
     """构造无预设的首次启动配置；返回模型，不创建目录或执行程序。"""
-    return WebConfig(project_dir=path, runtime_root=path / "copies", frontend_dist=path / "dist")
+    return WebConfig(project_dir=path, worktrees_root=path / "copies", frontend_dist=path / "dist")
 
 
 class EditingModel:
@@ -174,7 +174,7 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
 
 
 def test_plain_directory_and_unborn_git_have_distinct_modes(tmp_path: Path):
-    """普通目录采用独立副本；无提交Git仍标记Git但不可执行，不静默改为普通模式。"""
+    """普通目录原地执行；无提交Git仍标记Git但不可执行，不静默改为普通模式。"""
     async def scenario():
         """打开两种目录并只读核对能力；返回None，不请求模型。"""
         ordinary = tmp_path / "文件目录"
@@ -187,7 +187,7 @@ def test_plain_directory_and_unborn_git_have_distinct_modes(tmp_path: Path):
             by_id = {item["id"]:item for item in options["recent_projects"]}
             assert by_id[ordinary_id]["kind"] == "workspace"
             assert by_id[unborn_id]["kind"] == "project" and by_id[unborn_id]["available"] is False
-            assert not next(item for item in options["workspaces"] if item["id"] == ordinary_id)["is_example"]
+            assert next(item for item in options["workspaces"] if item["id"] == ordinary_id)["path"] == str(ordinary)
     asyncio.run(scenario())
 
 

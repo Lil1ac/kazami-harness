@@ -109,7 +109,7 @@ tests/
 
 ## 3. CLI、配置与输入
 
-当前 CLI 提供 run、run --prepare-only、show 与 serve：普通 run 支持按配置启用的文件与命令工具任务，完成未验收返回 3；prepare-only 只创建 created/unverified 记录，不读取密钥或执行模型、工具、验收，返回 0 仅表示准备操作完成。普通 run 支持 --verifier，启动前校验固定入口；未知工具或无效验收入口会提前拒绝。demo 待后续实现。
+当前 CLI 提供 run、show 与 serve：run 按配置调用文件与命令工具，完成未验收返回 3；支持 --verifier，启动前校验固定入口，未知工具或无效验收入口提前拒绝。show 只读取记录，serve 提供本地网页服务。
 
 | 入口 | 行为 |
 | --- | --- |
@@ -140,7 +140,7 @@ tests/
 
 启动前验证工作目录、配置范围、工具声明、模型密钥、验收入口及存储可写性；任意失败时不发模型请求、不创建半启动运行。创建运行目录失败作为启动错误返回。
 
-CLI 退出码：0 为 prepare-only 准备成功，或真实执行完成、验收通过且清理可确认；1 为执行失败、达到调用上限、验收未通过/异常或清理状态为 incomplete/unknown；2 为启动参数/配置错误；3 为执行完成但未验收；124 为运行超时；130 为用户/上游取消或服务关闭。取消和超时保留各自退出码，同时在摘要展示清理状态；show 的 0 仅表示读取成功，不代表原任务成功。
+CLI 退出码：0 为真实执行完成、验收通过且清理可确认；1 为执行失败、达到调用上限、验收未通过/异常或清理状态为 incomplete/unknown；2 为启动参数/配置错误；3 为执行完成但未验收；124 为运行超时；130 为用户/上游取消或服务关闭。取消和超时保留各自退出码，同时在摘要展示清理状态；show 的 0 仅表示读取成功，不代表原任务成功。
 
 ## 4. 核心数据契约
 
@@ -258,7 +258,7 @@ events 包含运行开始、模型请求开始/失败/完成、assistant 消息�
 
 ## 9. 独立验收协议与状态收尾
 
-本节后端实现在 verifier.py、runner.py 和 schemas.py，日志参考入口为 examples/verifiers/verify_logs.py。验收仅在模型执行正常完成后启动，不占用模型轮次或工具调用数。--prepare-only 只预检入口，不启动程序。
+本节后端实现在 verifier.py、runner.py 和 schemas.py，日志参考入口为 examples/verifiers/verify_logs.py。验收仅在模型执行正常完成后启动，不占用模型轮次或工具调用数。启动预检不会运行验收程序。
 
 VerifierSpec 由宿主启动时读取的 TOML 声明，包含 argv、可选 cwd 和 timeout_seconds，例如：
 
@@ -359,7 +359,7 @@ Uvicorn单worker不启reload，Windows使用支持子进程的asyncio循环；HT
 
 `projects/models.py` 定义宿主项目与审阅契约，`projects/manager.py` 负责固定基线、detached worktree、身份核验、包含未跟踪文件的完整 Git 补丁和独立审阅元数据。WebRunManager 在唯一执行槽中组合工作树准备、现有 Runner、宿主项目测试和最终代码快照；快照结束后才释放槽，SSE 不将 run_finished 与审阅是否准备好混淆。
 
-VerifierSpec 增加宿主可选 `python_paths`，默认空列表兼容旧任务。非空时要求显式 cwd，路径必须绝对且位于 cwd 内；TOML 输入相对验收 cwd 解析。ProcessRunner 对该专用参数单独校验后构造子进程 PYTHONPATH，继续拒绝经 extra_env 注入任意环境变量，不继承模型密钥或宿主 Python 路径。项目测试 cwd 为本次工作树，避免可编辑安装误测源代码。
+VerifierSpec 增加宿主可选 `python_paths`，默认空列表表示不额外设置源码搜索目录。非空时要求显式 cwd，路径必须绝对且位于 cwd 内；TOML 输入相对验收 cwd 解析。ProcessRunner 对该专用参数单独校验后构造子进程 PYTHONPATH，继续拒绝经 extra_env 注入任意环境变量，不继承模型密钥或宿主 Python 路径。项目测试 cwd 为本次工作树，避免可编辑安装误测源代码。
 
 执行 JSONL 保持唯一写入者；审阅元数据与完整补丁另存运行根目录 `.projects/<uuid>/`。运行、测试、审阅状态相互独立，取消后仍尝试保存已有改动。服务重启只恢复读取和审阅，不自动恢复模型或重放工具。保留不改源分支，丢弃前核验登记目录、Git注册和当前快照，记录/补丁继续保留。完整使用和HTTP契约见 [代码任务与审阅](PROJECT_TASKS.md)。
 

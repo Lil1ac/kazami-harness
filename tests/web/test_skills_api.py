@@ -60,7 +60,7 @@ def skill_environment(tmp_path: Path, monkeypatch) -> tuple[WebConfig, Path]:
     roots = tmp_path / "skills"
     roots.mkdir()
     config = WebConfig(
-        project_dir=tmp_path, runtime_root=tmp_path / "runtime", frontend_dist=tmp_path / "dist",
+        project_dir=tmp_path, worktrees_root=tmp_path / "runtime", frontend_dist=tmp_path / "dist",
         workspaces=[WebWorkspace(id="files", label="技能验收工作区", path=workspace)],
     )
     return config, roots

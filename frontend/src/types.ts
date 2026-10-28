@@ -26,15 +26,15 @@ export interface ContextPolicy {
   load_project_instructions: boolean; // true 时加载实际工作区根目录的 AGENTS.md。
   max_input_bytes: number; // 消息和工具定义序列化后的整体输入字节上限。
   max_project_instruction_bytes: number; // 项目指令文件原始 UTF-8 字节上限，超限不截断。
-  compression?: 'off' | 'masking' | 'hybrid'; // 旧宿主缺省关闭。
-  trigger_ratio?: number; // 触发使用率，0至1。
-  target_ratio?: number; // 目标使用率，必须小于触发比例。
-  inline_tool_bytes?: number; // 成功工具正文外置阈值，UTF-8字节。
-  keep_recent_groups?: number; // 原文保留的近期完整批次数。
-  max_summary_calls?: number; // 摘要调用上限，同时占总模型轮次。
-  max_summary_bytes?: number; // 摘要最大UTF-8字节数。
-  model_context_tokens?: number | null; // 宿主声明窗口；null关闭token限制。
-  token_safety_margin?: number; // 除输出外额外预留的token。
+  compression: 'off' | 'masking' | 'hybrid'; // 宿主选择的压缩策略。
+  trigger_ratio: number; // 触发使用率，0至1。
+  target_ratio: number; // 目标使用率，必须小于触发比例。
+  inline_tool_bytes: number; // 成功工具正文外置阈值，UTF-8字节。
+  keep_recent_groups: number; // 原文保留的近期完整批次数。
+  max_summary_calls: number; // 摘要调用上限，同时占总模型轮次。
+  max_summary_bytes: number; // 摘要最大UTF-8字节数。
+  model_context_tokens: number | null; // 宿主声明窗口；null关闭token限制。
+  token_safety_margin: number; // 除输出外额外预留的token。
 }
 
 /** 建立运行时固定的项目指令快照；不存在或读取失败时不伪造内容与大小。 */
@@ -231,7 +231,6 @@ export interface WorkspaceOption {
   id: string; // 提交给 API 的受控标识。
   label: string; // 可读名称。
   path: string; // 源目录说明。
-  is_example?: boolean; // 示例只在辅助入口出现。
 }
 
 /** 宿主预设验收器；固定样例在名称与说明中标明适用范围。 */
@@ -334,7 +333,7 @@ export interface ConfigOverrides {
 /** 提交任务的受控 HTTP 请求体；不支持模型密钥或任意验收命令。 */
 export type CreateRunRequest = {
   prompt: string; // 非空任务文本。
-  execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated仅用于主动创建Git工作树或试用示例。
+  execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated 仅用于主动创建 Git 工作树。
   expected_outputs: string[]; // 工作区相对产物路径。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
 } & (

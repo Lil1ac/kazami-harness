@@ -49,7 +49,7 @@ def context_web_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WebCo
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     return WebConfig(
-        project_dir=tmp_path, runtime_root=tmp_path / "runtime" / "samples",
+        project_dir=tmp_path, worktrees_root=tmp_path / "runtime" / "samples",
         frontend_dist=tmp_path / "dist",
         workspaces=[WebWorkspace(id="sample", label="上下文工作区", path=workspace)],
     )

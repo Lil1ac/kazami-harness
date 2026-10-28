@@ -81,11 +81,14 @@ def main() -> None:
     project = Path(__file__).resolve().parents[2]
     workspace = project / '.runtime' / 'browser-workspace'
     workspace.mkdir(parents=True, exist_ok=True)
+    logs = workspace / 'logs'
+    logs.mkdir(exist_ok=True)
+    (logs / 'app.log').write_bytes((project / 'examples/logs/app.log').read_bytes())
     os.environ['DEEPSEEK_API_KEY'] = 'offline-browser-key'
     config = WebConfig(
-        project_dir=project, runtime_root=project / '.runtime' / 'browser-copies',
+        project_dir=project, worktrees_root=project / '.runtime' / 'browser-copies',
         frontend_dist=project / 'frontend' / 'dist',
-        workspaces=[WebWorkspace(id='workspace', label='普通任务（离线浏览器验证）', path=workspace), WebWorkspace(id='logs', label='日志样例（每次独立复制）', path=project / 'examples' / 'logs', is_example=True)],
+        workspaces=[WebWorkspace(id='workspace', label='普通任务（离线浏览器验证）', path=workspace), WebWorkspace(id='logs', label='日志测试目录', path=workspace / 'logs')],
         verifiers=[WebVerifier(id='logs', label='固定日志样例验收', description='仅用于仓库固定日志样例。', path=project / 'examples' / 'verifiers' / 'logs.toml')],
     )
     app = create_app(config, RunConfig(requested_model='offline-browser-fixture', tools=['read_file', 'search_files', 'write_file', 'run_command']), project / '.runtime' / 'browser-runs', model_client=BrowserFixtureModel())

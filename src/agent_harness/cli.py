@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    run = commands.add_parser("run", help="执行 DeepSeek 文件与命令任务，或仅准备记录")
+    run = commands.add_parser("run", help="执行 DeepSeek 文件与命令任务")
     task = run.add_mutually_exclusive_group(required=True)
     task.add_argument("--task", help="任务描述，建议写明工作区内文件名")
     task.add_argument("--task-file", type=Path, help="UTF-8 任务描述文件")
@@ -35,7 +35,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--python-executable", help="项目 Python 解释器；相对实际工作区，省略按 PATH 查找")
     run.add_argument("--model", help="覆盖 requested_model")
     run.add_argument("--max-model-turns", type=int, help="覆盖模型轮次上限")
-    run.add_argument("--prepare-only", action="store_true", help="只校验并创建记录，不调用模型或工具")
     run.add_argument("--json", action="store_true", help="输出 JSON，便于脚本读取")
 
     show = commands.add_parser("show", help="只读查看历史运行")
@@ -61,17 +60,14 @@ def _prompt(args: argparse.Namespace) -> str:
         raise ConfigurationError("任务文件必须是可读取的 UTF-8 文件") from exc
 
 
-def _print_result(data: dict, *, as_json: bool, prepared: bool = False) -> None:
+def _print_result(data: dict, *, as_json: bool) -> None:
     """向标准输出展示 data 运行摘要，返回 None，不修改记录。
 
     as_json=True 输出完整JSON；False 输出中文状态、产物和可选验收预览。
-    prepared 默认False；True 说明只完成准备，不把准备成功描述成执行成功。
     """
     if as_json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return
-    if prepared:
-        print("准备完成：尚未调用模型、执行工具或验收任务。")
     print(f"运行 ID：{data['run_id']}")
     print(f"执行状态：{data['execution_status']}")
     print(f"验收状态：{data['validation_status']}")
@@ -129,10 +125,9 @@ async def _execute_with_signals(manifest: RunManifest, runs_dir: Path, api_key: 
 
 
 def _run(args: argparse.Namespace) -> int:
-    """校验输入并创建运行清单，再按参数选择仅准备或执行任务。
+    """校验 args 的任务、配置与目录后执行 Runner，返回真实执行退出码。
 
-    准备模式不读取密钥；执行模式把模型与工具循环交给异步 Runner。
-    返回准备操作或真实执行的退出码，执行结束但未验收时返回 3。
+    启动预检失败时不创建记录；执行结束但未验收时返回 3。
     """
     overrides: dict = {}
     if args.model is not None:
@@ -143,24 +138,17 @@ def _run(args: argparse.Namespace) -> int:
     task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, args.expected_output, python_executable=args.python_executable)
     validate_output_paths(task, args.runs_dir)
     manifest = RunManifest(run_id=uuid4(), task=task, config=config)
-    if args.prepare_only:
-        store = RunStore.create(args.runs_dir, manifest)
-        result = RunResult(run_id=manifest.run_id)
-        run_dir, event_count = store.run_dir, 1
-    else:
-        # 密钥值只交给请求适配器；配置快照与事件中仅记录环境变量名称。
-        api_key = os.environ.get(config.api_key_env, "")
-        outcome = asyncio.run(_execute_with_signals(manifest, args.runs_dir, api_key))
-        result = outcome.result
-        run_dir, event_count = outcome.run_dir, outcome.event_count
+    # 密钥值只交给请求适配器；配置快照与事件中仅记录环境变量名称。
+    api_key = os.environ.get(config.api_key_env, "")
+    outcome = asyncio.run(_execute_with_signals(manifest, args.runs_dir, api_key))
+    result = outcome.result
+    run_dir, event_count = outcome.run_dir, outcome.event_count
     _print_result(
         result.model_dump(mode="json")
         | {"run_dir": str(run_dir), "event_count": event_count, "interrupted": False, "warnings": []},
         as_json=args.json,
-        prepared=args.prepare_only,
     )
-    # 准备流程的 0 只表示准备成功；真实执行未验收时返回 3。
-    return 0 if args.prepare_only else exit_code(result)
+    return exit_code(result)
 
 
 def _show(args: argparse.Namespace) -> int:
@@ -186,13 +174,12 @@ def _show(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def _serve(args: argparse.Namespace) -> int:
     """按 args 启动本机单进程控制台，服务正常关闭时返回0。
 
     args 包含可选web_config/config、runs_dir和1至65535的port；配置路径默认None
     时由对应加载器使用默认值。只绑定127.0.0.1，不读取或打印密钥值；密钥在提交
-    任务时由后端环境读取。会创建受控工作目录、监听端口并托管后台任务，关闭时
+    任务时由后端环境读取。会使用受控运行记录目录、监听端口并托管后台任务，关闭时
     等待任务取消收尾。配置错误抛ConfigurationError，服务内部错误沿用Uvicorn行为。
     """
     if not 1 <= args.port <= 65535:

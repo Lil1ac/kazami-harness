@@ -76,7 +76,6 @@ export function TaskForm({
   const [initialDraft] = useState(() => taskDraft(draftKey)); // 调整配置后返回或刷新时恢复本标签页文字。
   const [selectedId, setSelectedId] = useState(() => initialProjectId || lastProject()); // 持久化的编号只用于定位当前可访问登记。
   const [opened, setOpened] = useState<LocalProjectOption | null>(null); // 目录POST返回后立即可用，等待选项刷新。
-  const [demoNotice, setDemoNotice] = useState(false); // 仅明确填充样例时展示适用范围。
   const [pythonExecutable, setPythonExecutable] = useState(''); // 未保存的项目解释器路径；空白按 PATH。
   const [command, setCommand] = useState(''); // 未保存的测试命令。
   const [testSeconds, setTestSeconds] = useState(30); // 项目测试秒级超时。
@@ -89,13 +88,6 @@ export function TaskForm({
   const selected =
     choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === selectedId) ||
     (opened?.id === selectedId ? opened : undefined);
-  const logWorkspace = options.workspaces.find(
-    /* 只允许宿主明确标注的日志示例进入副本入口。 */ (item) =>
-      item.is_example && item.id.includes('logs'),
-  );
-  const logVerifier = options.verifiers.find(
-    /* 不把固定答案验收器用于个人项目。 */ (item) => item.id.includes('logs'),
-  );
   const mutation = useMutation({
     mutationFn: createRun,
     onSuccess: /* 真实接纳后进入已有持续会话。 */ (run) => {
@@ -118,7 +110,6 @@ export function TaskForm({
     setSelectedId(project.id);
     if (resetMode) setCreateWorktree(false); // 打开新目录回到原目录执行，保存测试设置不切换位置。
     saveTaskDraft(form.getFieldsValue(), draftKey);
-    setDemoNotice(false);
     setSettingsSaved(false);
     try {
       localStorage.setItem('harness-selected-project', project.id);
@@ -161,30 +152,12 @@ export function TaskForm({
     [selected?.id, selected?.test_command, selected?.python_executable],
   );
 
-  /** 明确填充示例后才使用示例目录，不发起任务；保留可修改的普通提交链路。 */
-  function fillDemo(): void {
-    if (!logWorkspace) return;
-    setSelectedId(logWorkspace.id);
-    setOpened({ ...logWorkspace, kind: 'workspace' });
-    setCreateWorktree(false);
-    form.setFieldsValue({
-      prompt:
-        '读取工作区 app.log，统计 ERROR 错误类型。编写 analyze_logs.py，运行生成包含 counts 和 total_errors 的 report.json，并核对结果。',
-      outputs: 'analyze_logs.py\nreport.json',
-      verifier_id: logVerifier?.id,
-    });
-    saveTaskDraft(form.getFieldsValue(), draftKey);
-    setDraft({ ...draft, tools: ['read_file', 'search_files', 'write_file', 'run_command'] });
-    mutation.reset();
-    setDemoNotice(true);
-  }
-
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
     if (!selected) return;
     mutation.mutate({
       prompt: values.prompt.trim(),
-      execution_mode: createWorktree || demoNotice ? 'isolated' : 'local',
+      execution_mode: createWorktree ? 'isolated' : 'local',
       ...(selected.kind === 'project'
         ? {
             project_id: selected.id,
@@ -309,11 +282,9 @@ export function TaskForm({
         )}
         {selected && (
           <p className="project-mode-note">
-            {demoNotice
-              ? '日志示例使用独立副本，同一对话持续使用该副本。'
-              : createWorktree
-                ? '在独立 Git 工作树中执行，原目录的未提交改动不会带入，修改不会写回原目录。'
-                : '在所选目录执行，文件直接保存到该目录。'}
+            {createWorktree
+              ? '在独立 Git 工作树中执行，原目录的未提交改动不会带入，修改不会写回原目录。'
+              : '在所选目录执行，文件直接保存到该目录。'}
           </p>
         )}
         <details className="task-advanced">
@@ -365,19 +336,28 @@ export function TaskForm({
               selected={config.skills || []}
               onChange={/* 选名仍由宿主映射正文。 */ (skills) => setDraft({ ...draft, skills })}
             />
-            {selected && !demoNotice && (
-              <Form.Item label="Python 解释器" extra="留空按 PATH 查找；相对路径以实际执行目录为准。保存不会执行程序。">
+            {selected && (
+              <Form.Item
+                label="Python 解释器"
+                extra="留空按 PATH 查找；相对路径以实际执行目录为准。保存不会执行程序。"
+              >
                 <Input
                   aria-label="Python 解释器"
                   value={pythonExecutable}
                   placeholder="例如 .venv/Scripts/python.exe"
-                  onChange={/* 仅编辑草稿，明确保存后才影响下一轮。 */ (event) => {
-                    setPythonExecutable(event.target.value);
-                    setSettingsSaved(false);
-                  }}
+                  onChange={
+                    /* 仅编辑草稿，明确保存后才影响下一轮。 */ (event) => {
+                      setPythonExecutable(event.target.value);
+                      setSettingsSaved(false);
+                    }
+                  }
                 />
                 {selected.kind === 'workspace' && (
-                  <Button size="small" loading={settings.isPending} onClick={/* 保存普通目录的解释器配置。 */ () => settings.mutate()}>
+                  <Button
+                    size="small"
+                    loading={settings.isPending}
+                    onClick={/* 保存普通目录的解释器配置。 */ () => settings.mutate()}
+                  >
                     保存项目设置
                   </Button>
                 )}
@@ -456,19 +436,6 @@ export function TaskForm({
           </div>
         </details>
       </Form>
-      {logWorkspace && (
-        <details className="task-examples">
-          <summary>试用示例</summary>
-          <Button size="small" onClick={fillDemo}>
-            填充日志样例
-          </Button>
-          {demoNotice && (
-            <p className="inline-note">
-              样例已启用读取、搜索、写入、命令四类工具。固定日志验收仅适用于这份输入。
-            </p>
-          )}
-        </details>
-      )}
     </section>
   );
 }

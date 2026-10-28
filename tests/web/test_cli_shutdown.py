@@ -135,7 +135,7 @@ def test_cli_sigint_with_open_sse_cleans_command_and_persists_shutdown(tmp_path:
     workspace.mkdir()
     (tmp_path / "server_helper.py").write_text(SERVER_SCRIPT, encoding="utf-8")
     (tmp_path / "web.toml").write_text(
-        'runtime_root="runtime"\nfrontend_dist="dist"\n'
+        'worktrees_root="runtime"\nfrontend_dist="dist"\n'
         '[[workspaces]]\nid="workspace"\nlabel="离线停服测试"\npath="workspace"\n',
         encoding="utf-8",
     )

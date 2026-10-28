@@ -77,7 +77,7 @@ def configuration(tmp_path: Path, *, verified: bool = True, kind: str = "project
         "assert 'DEEPSEEK_API_KEY' not in os.environ; print(agent_harness.__file__)"
     )
     return WebConfig(
-        project_dir=tmp_path, runtime_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
+        project_dir=tmp_path, worktrees_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
         projects=[ProjectPreset(id="code", label="导入路径项目", path=selected,
                                 test_argv=[sys.executable, "-c", check] if verified else [])] if kind == "project" else [],
         workspaces=[WebWorkspace(id="folder", label="普通目录", path=selected)] if kind == "workspace" else [],

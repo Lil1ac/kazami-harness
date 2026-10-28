@@ -157,7 +157,7 @@ def main() -> None:
     # 只在本辅助进程设置占位值以通过预检；离线模型不读取真实凭据或访问供应商。
     os.environ["DEEPSEEK_API_KEY"] = "offline-skills-browser-key"
     config = WebConfig(
-        project_dir=project, runtime_root=root / "worktrees", frontend_dist=project / "frontend/dist",
+        project_dir=project, worktrees_root=root / "worktrees", frontend_dist=project / "frontend/dist",
         workspaces=[], projects=[ProjectPreset(
             id="skills-project", label="技能代码项目（离线验收）", path=source,
             test_argv=[sys.executable, "-m", "pytest", "-q"], python_paths=["src"],

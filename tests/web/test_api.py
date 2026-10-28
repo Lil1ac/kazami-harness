@@ -72,7 +72,7 @@ def web_config(tmp_path: Path) -> WebConfig:
     (frontend / "index.html").write_text("<!doctype html><title>test-console</title>", encoding="utf-8")
     (frontend / "assets" / "app.js").write_text("console.log('console')", encoding="utf-8")
     return WebConfig(
-        project_dir=tmp_path, runtime_root=tmp_path / "runtime", frontend_dist=frontend,
+        project_dir=tmp_path, worktrees_root=tmp_path / "runtime", frontend_dist=frontend,
         workspaces=[WebWorkspace(id="sample", label="隔离工作区", path=workspace)],
         verifiers=[],
     )
@@ -482,31 +482,14 @@ def test_shutdown_cancels_and_persists_active_run(web_config: WebConfig, monkeyp
     asyncio.run(scenario())
 
 
-def test_copied_workspace_isolated_per_submission(web_config: WebConfig, monkeypatch):
-    """复制型工作区每次得到独立目录，API返回实际副本且修改副本不污染源样例；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
-    web_config.workspaces[0].is_example = True
-    source = web_config.workspaces[0].path
-    (source / "input.txt").write_text("原始输入", encoding="utf-8")
-
-    async def scenario():
-        """连续提交并修改首个副本，第二次仍从源目录复制原始输入。"""
-        async with api_client(web_config) as (client, app):
-            first = await submit(client, execution_mode='isolated')
-            first_view = await finished(client, first["run_id"])
-            first_workspace = Path(first_view["workspace"])
-            assert first_workspace != source
-            assert first_workspace.is_relative_to(web_config.runtime_root)
-            assert (first_workspace / "input.txt").read_text(encoding="utf-8") == "原始输入"
-            (first_workspace / "input.txt").write_text("已修改", encoding="utf-8")
-            second = await submit(client, execution_mode='isolated')
-            second_view = await finished(client, second["run_id"])
-            second_workspace = Path(second_view["workspace"])
-            assert second_workspace != first_workspace
-            assert (second_workspace / "input.txt").read_text(encoding="utf-8") == "原始输入"
-            assert (source / "input.txt").read_text(encoding="utf-8") == "原始输入"
-
-    asyncio.run(scenario())
+def test_default_web_config_has_no_implicit_workspace(tmp_path: Path):
+    """以 tmp_path 作为项目根加载默认配置；返回 None，核对空目录不被自动建成演示工作区。"""
+    config = load_web_config(project_dir=tmp_path)
+    assert config.workspaces == []
+    assert config.projects == []
+    assert config.verifiers == []
+    assert config.worktrees_root == tmp_path / ".runtime" / "project-worktrees"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_load_web_config_resolves_profile_relative_paths(tmp_path: Path):
@@ -517,18 +500,17 @@ def test_load_web_config_resolves_profile_relative_paths(tmp_path: Path):
     (profile / "checker.toml").write_text('argv = ["python"]\n', encoding="utf-8")
     path = profile / "web.toml"
     path.write_text(
-        'runtime_root = "runtime"\nfrontend_dist = "dist"\n'
-        '[[workspaces]]\nid = "data"\nlabel = "输入"\npath = "input"\nis_example = true\n'
+        'worktrees_root = "runtime"\nfrontend_dist = "dist"\n'
+        '[[workspaces]]\nid = "data"\nlabel = "输入"\npath = "input"\n'
         '[[verifiers]]\nid = "check"\nlabel = "检查"\npath = "checker.toml"\n',
         encoding="utf-8",
     )
     config = load_web_config(path, project_dir=tmp_path)
-    assert config.runtime_root == profile / "runtime"
+    assert config.worktrees_root == profile / "runtime"
     assert config.frontend_dist == profile / "dist"
     assert config.workspaces[0].path == profile / "input"
-    assert config.workspaces[0].is_example is True
     assert config.verifiers[0].path == profile / "checker.toml"
-    assert not config.runtime_root.exists()
+    assert not config.worktrees_root.exists()
 
 
 @pytest.mark.parametrize("content", [

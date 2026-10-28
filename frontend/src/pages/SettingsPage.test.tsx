@@ -5,7 +5,6 @@ import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { createRun, getOptions } from '../api';
 import { ConfigDraftProvider, effectiveConfig } from '../config';
-import { DEFAULT_CONTEXT_POLICY } from '../context';
 import { config, options } from '../test/fixtures';
 import { TaskForm } from '../components/TaskForm';
 import { SettingsPage } from './SettingsPage';
@@ -27,6 +26,7 @@ vi.mock(
 beforeEach(
   /* 新任务草稿属于各测试自身，不把上一例用户文字带入下一例。 */ () => {
     sessionStorage.clear();
+    localStorage.clear();
   },
 );
 
@@ -43,7 +43,7 @@ async function replaceInput(
 
 /** 在相同配置上下文内挂载设置与提交两个真实页面，返回用户交互驱动器。 */
 function setup(initialPath = '/settings', configuredOptions: OptionsResponse = options) {
-  // 配置联动测试明确使用个人目录，不把固定示例伪装成用户选定的项目。
+  // 配置与提交页共享真实目录编号，配置修改不会改变项目选择。
   const projectOptions: OptionsResponse = {
     ...configuredOptions,
     recent_projects: [
@@ -80,100 +80,83 @@ function setup(initialPath = '/settings', configuredOptions: OptionsResponse = o
   return userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
 }
 
-it('上下文设置按 KiB 编辑并按字节随真实任务表单提交，关闭加载也会保留', async () => {
-  // 使用两个页面共享的真实草稿，验证输入控件到 API 请求体的换算与传递。
-  const user = setup();
-  const input = await screen.findByLabelText('整体输入上限（KiB）');
-  expect(input).toHaveValue('256');
-  expect(screen.getByLabelText('项目指令文件上限（KiB）')).toHaveValue('32');
-  expect(screen.getByText(/不等于模型 token 数/)).toBeInTheDocument();
-  await replaceInput(user, input, '512');
-  await replaceInput(user, screen.getByLabelText('项目指令文件上限（KiB）'), '16.5');
-  await user.click(screen.getByRole('switch', { name: '自动加载项目指令' }));
-  await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
-  expect(await screen.findByRole('status')).toHaveTextContent('已应用到本浏览器');
-  await user.click(screen.getByRole('link', { name: '前往提交' }));
-  await user.click(await screen.findByText(/高级设置/));
-  expect(await screen.findByText('输入上限 512 KiB')).toBeInTheDocument();
-  await user.click(screen.getByLabelText('任务描述'));
-  await user.paste('检查项目指令加载配置');
-  await user.click(screen.getByRole('button', { name: /开始执行/ }));
-  await waitFor(
-    /* 表单通过校验后才读取发送的数据。 */ () => expect(createRun).toHaveBeenCalledOnce(),
-  );
-  expect(vi.mocked(createRun).mock.calls[0][0].config.context).toEqual({
-    ...DEFAULT_CONTEXT_POLICY,
-    load_project_instructions: false,
-    max_input_bytes: 524288,
-    max_project_instruction_bytes: 16896,
-  });
-  expect(config.context.max_input_bytes).toBe(262144);
-}, 20000);
-
-it('恢复宿主默认会恢复上下文输入和开关', async () => {
-  // 恢复同时清除浏览器草稿与表单字段，避免 UI 值和后续请求不一致。
-  const user = setup();
-  const input = await screen.findByLabelText('整体输入上限（KiB）');
-  await replaceInput(user, input, '64');
-  await user.click(screen.getByRole('switch', { name: '自动加载项目指令' }));
-  await user.click(screen.getByRole('button', { name: /恢复宿主默认/ }));
-  expect(input).toHaveValue('256');
-  expect(screen.getByRole('switch', { name: '自动加载项目指令' })).toBeChecked();
-}, 10000);
-
-it('上下文策略逐字段合并，旧宿主配置仅为下一次任务补充默认值', () => {
-  // 局部覆盖不丢失指令上限；旧任务的 RunView.context 仍由后端事实决定。
-  expect(effectiveConfig(config, { context: { max_input_bytes: 8192 } }).context).toEqual({
-    ...DEFAULT_CONTEXT_POLICY,
-    ...config.context,
-    max_input_bytes: 8192,
-  });
-  const legacy = { ...config };
-  Reflect.deleteProperty(legacy, 'context');
-  expect(effectiveConfig(legacy, {}).context).toEqual({
-    ...DEFAULT_CONTEXT_POLICY,
-    ...config.context,
-  });
+it('设置页只公开模型、工具和三项总体预算', async () => {
+  // 删除的是调参入口，后端完整策略仍由 options 返回并用于执行。
+  setup();
+  await screen.findByLabelText('模型名称');
+  expect(screen.getAllByRole('spinbutton')).toHaveLength(3);
+  expect(screen.getByLabelText('模型轮次（轮）')).toBeInTheDocument();
+  expect(screen.getByLabelText('工具调用（次）')).toBeInTheDocument();
+  expect(screen.getByLabelText('整个任务超时（秒）')).toBeInTheDocument();
+  expect(screen.queryByLabelText('压缩策略')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('整体输入上限（KiB）')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('每轮 HTTP 尝试（次）')).not.toBeInTheDocument();
 });
 
-it('非法目标比例阻止应用，不生成已应用状态', async () => {
-  // 无效输入是独立用户动作，不与完整跨页面提交串成一个过长用例。
-  const user = setup();
-  await user.click(await screen.findByLabelText('压缩策略'));
-  await user.click(screen.getByText('混合：规则处理后按需生成摘要'));
-  await user.click(screen.getByText('压缩预算与模型窗口'));
-  await replaceInput(user, screen.getByLabelText('目标比例（0～1）'), '0.9');
+it('可编辑预算随真实任务提交，内部限制沿用宿主配置', async () => {
+  // 用非常规宿主阈值证明设置页没有把隐藏字段重置成浏览器默认值。
+  const configured: OptionsResponse = {
+    ...options,
+    config: {
+      ...config,
+      limits: { ...config.limits, max_http_attempts_per_turn: 6, cleanup_grace_seconds: 12 },
+      context: { ...config.context, compression: 'hybrid', inline_tool_bytes: 16384 },
+    },
+  };
+  const user = setup('/settings', configured);
+  await replaceInput(user, await screen.findByLabelText('模型名称'), 'offline-custom');
+  await replaceInput(user, screen.getByLabelText('模型轮次（轮）'), '7');
+  await replaceInput(user, screen.getByLabelText('工具调用（次）'), '30');
+  await replaceInput(user, screen.getByLabelText('整个任务超时（秒）'), '120');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
-  expect(await screen.findByText('目标比例必须小于触发比例')).toBeInTheDocument();
-  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  await screen.findByRole('status');
+  await user.click(screen.getByRole('link', { name: '前往提交' }));
+  await user.click(screen.getByLabelText('任务描述'));
+  await user.paste('按新的总体预算执行');
+  await user.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(/* 表单校验后检查实际 API 请求。 */ () => expect(createRun).toHaveBeenCalledOnce());
+  const request = vi.mocked(createRun).mock.calls[0][0];
+  expect(request.config).toMatchObject({
+    requested_model: 'offline-custom',
+    limits: { max_model_turns: 7, max_tool_calls: 30, run_timeout_seconds: 120 },
+  });
+  expect(request.config?.context).toBeUndefined();
+  expect(Object.keys(request.config?.limits || {}).sort()).toEqual(
+    ['max_model_turns', 'max_tool_calls', 'run_timeout_seconds'].sort(),
+  );
+  expect(configured.config.limits.max_http_attempts_per_turn).toBe(6);
+  expect(configured.config.limits.cleanup_grace_seconds).toBe(12);
+  expect(configured.config.context.inline_tool_bytes).toBe(16384);
 }, 20000);
 
-it('混合压缩与预算设置随真实任务提交', async () => {
-  // 保留全部预算与实际提交断言，只在本例设置有效输入，不重复非法提交步骤。
+it('恢复宿主默认会清除已应用的总体预算', async () => {
+  // 恢复同步更新表单与浏览器草稿，不改变活动运行。
   const user = setup();
-  await user.click(await screen.findByLabelText('压缩策略'));
-  await user.click(screen.getByText('混合：规则处理后按需生成摘要'));
-  await user.click(screen.getByText('压缩预算与模型窗口'));
-  await replaceInput(user, screen.getByLabelText('目标比例（0～1）'), '0.5');
-  await replaceInput(user, screen.getByLabelText('摘要调用上限（次）'), '4');
-  await replaceInput(user, screen.getByLabelText('声明模型窗口（token，可留空）'), '64000');
+  const input = await screen.findByLabelText('模型轮次（轮）');
+  await replaceInput(user, input, '7');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
-  expect(await screen.findByRole('status')).toHaveTextContent('已应用到本浏览器');
-  await user.click(screen.getByRole('link', { name: '前往提交' }));
-  await user.click(await screen.findByText(/高级设置/));
-  await user.click(await screen.findByLabelText('任务描述'));
-  await user.paste('保留兼容接口并测试');
-  await user.click(screen.getByRole('button', { name: /开始执行/ }));
-  await waitFor(
-    /* 等待实际任务表单完成校验并构造请求。 */ () => expect(createRun).toHaveBeenCalledOnce(),
-  );
-  expect(vi.mocked(createRun).mock.calls[0][0].config.context).toMatchObject({
-    compression: 'hybrid',
-    target_ratio: 0.5,
-    max_summary_calls: 4,
-    model_context_tokens: 64000,
-  });
-}, 20000);
+  await screen.findByRole('status');
+  await user.click(screen.getByRole('button', { name: /恢复宿主默认/ }));
+  expect(input).toHaveValue('20');
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+}, 10000);
+
+it('必填预算为空时不能应用', async () => {
+  // 用户清空预算后必须得到校验提示，不能生成已应用状态。
+  const user = setup();
+  const input = await screen.findByLabelText('模型轮次（轮）');
+  await user.clear(input);
+  await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
+  expect(await screen.findByText('请填写大于零的预算')).toBeInTheDocument();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+}, 10000);
+
+it('局部配置覆盖沿用完整宿主策略，不补造另一份默认值', () => {
+  // 同一份宿主策略由后端维护；局部覆盖不丢失其他阈值，也不修改原对象。
+  const merged = effectiveConfig(config, { context: { max_input_bytes: 8192 } });
+  expect(merged.context).toEqual({ ...config.context, max_input_bytes: 8192 });
+  expect(config.context.max_input_bytes).toBe(262144);
+});
 
 it('任务页选择技能后调整模型预算，不丢失已选择的技能', async () => {
   // 设置表单不编辑技能，其应用动作必须保留任务页此前的明确选择。
@@ -191,7 +174,7 @@ it('任务页选择技能后调整模型预算，不丢失已选择的技能', a
   await user.click(await screen.findByText(/高级设置/));
   await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
   await user.click(screen.getByRole('button', { name: '调整配置' }));
-  await screen.findByLabelText('整体输入上限（KiB）');
+  await screen.findByLabelText('模型名称');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
   await screen.findByRole('status');
   await user.click(screen.getByRole('link', { name: '前往提交' }));

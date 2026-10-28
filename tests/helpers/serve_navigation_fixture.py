@@ -64,7 +64,7 @@ def main() -> None:
             (source/'local.txt').write_text('用户未提交文件保持。\n',encoding='utf-8')
         presets.append(ProjectPreset(id='nav-'+name,label=label,path=source,test_argv=[sys.executable,'-m','pytest','-q'],test_timeout_seconds=30))
     os.environ['DEEPSEEK_API_KEY']='offline-navigation-browser'
-    app=create_app(WebConfig(project_dir=project,runtime_root=root/'copies',frontend_dist=project/'frontend/dist',projects=presets),RunConfig(tools=['read_file','write_file']),root/'runs',model_client=NavigationModel())
+    app=create_app(WebConfig(project_dir=project,worktrees_root=root/'copies',frontend_dist=project/'frontend/dist',projects=presets),RunConfig(tools=['read_file','write_file']),root/'runs',model_client=NavigationModel())
     uvicorn.run(app,host='127.0.0.1',port=args.port,loop='asyncio',timeout_graceful_shutdown=2)
 
 

@@ -42,7 +42,7 @@ def main() -> None:
             subprocess.run(argv, cwd=source, check=True, capture_output=True, timeout=10)
         (source / 'local.txt').write_text('源目录未提交内容保持原样。', encoding='utf-8')
     os.environ['DEEPSEEK_API_KEY'] = 'offline-conversation-browser-key'
-    config = WebConfig(project_dir=project, runtime_root=root / 'copies', frontend_dist=project / 'frontend/dist', workspaces=[WebWorkspace(id='files',label='普通文件（离线验收）',path=workspace)], projects=[ProjectPreset(id='code',label='代码项目（离线验收）',path=source,test_argv=[sys.executable,'check.py'])])
+    config = WebConfig(project_dir=project, worktrees_root=root / 'copies', frontend_dist=project / 'frontend/dist', workspaces=[WebWorkspace(id='files',label='普通文件（离线验收）',path=workspace)], projects=[ProjectPreset(id='code',label='代码项目（离线验收）',path=source,test_argv=[sys.executable,'check.py'])])
     app = create_app(config, RunConfig(requested_model='offline-conversation', tools=['read_file','write_file']), root / 'runs', model_client=EditingModel(project=True))
     uvicorn.run(app, host='127.0.0.1', port=args.port, workers=1, loop='asyncio', timeout_graceful_shutdown=2)
 

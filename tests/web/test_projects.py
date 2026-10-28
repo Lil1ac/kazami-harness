@@ -81,7 +81,7 @@ def project_config(tmp_path: Path) -> WebConfig:
     (repository / "src" / "app.py").write_text("def add(a, b):\n    return 999\n", encoding="utf-8")
     (repository / "untracked.txt").write_text("源目录尚未提交的文件", encoding="utf-8")
     return WebConfig(
-        project_dir=tmp_path, runtime_root=tmp_path / "runtime" / "samples", frontend_dist=tmp_path / "dist",
+        project_dir=tmp_path, worktrees_root=tmp_path / "runtime" / "samples", frontend_dist=tmp_path / "dist",
         workspaces=[], projects=[ProjectPreset(
             id="backend", label="临时后端", path=repository,
             test_argv=[sys.executable, "tests/check.py"], test_timeout_seconds=10.0,

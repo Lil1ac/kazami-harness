@@ -155,17 +155,6 @@ def create_app(
         """按 request 创建独立后台任务并返回初始视图；不等待模型完成，忙时 409。"""
         return await manager.submit(request)
 
-    @app.get("/api/runs")
-    async def runs(
-        offset: int = Query(default=0, ge=0),
-        limit: int = Query(default=30, ge=1, le=100),
-        status: Literal[
-            "created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"
-        ] | None = None,
-    ) -> dict:
-        """按零起始 offset 和 1..100 的 limit 分页；status=None 不按执行状态筛选。"""
-        return manager.list_runs(offset, limit, status)
-
     @app.get("/api/conversations", response_model=ConversationPage)
     async def conversations(
         offset: int = Query(default=0, ge=0),
@@ -343,8 +332,6 @@ def create_app(
     @app.get("/")
     @app.get("/runs")
     @app.get("/runs/{run_id}")
-    @app.get("/tasks")
-    @app.get("/tasks/{run_id}")
     @app.get("/settings")
     @app.get("/projects/{project_id}")
     async def frontend_page() -> Response:

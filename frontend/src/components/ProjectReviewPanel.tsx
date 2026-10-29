@@ -1,19 +1,11 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router';
-import { Alert, Button, Empty, Popconfirm, Spin, Tag } from 'antd';
-import { DownloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Popconfirm, Tag } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { errorMessage, getDiff, getProjectReview, patchUrl, reviewRun } from '../api';
+import { errorMessage, getProjectReview, reviewRun } from '../api';
 import type { ProjectReview, RunView } from '../types';
 import { reviewLabels } from '../format';
-
-/** Git 文件状态的中文说明；路径和补丁均作为普通文本展示。 */
-const fileLabels: Record<ProjectReview['files'][number]['status'], string> = {
-  added: '新增',
-  modified: '修改',
-  deleted: '删除',
-  renamed: '重命名',
-};
+import { FileChangesPanel } from './FileChangesPanel';
 
 /** 审阅已保存的代码证据；active=true 或快照未完成时禁止改变工作树，失败保留已知状态。 */
 export function ProjectReviewPanel({
@@ -45,19 +37,12 @@ export function ProjectReviewPanel({
         /* 恢复只替换项目证据，不能把中断执行改为已完成。 */ (current) =>
           current ? { ...current, project: snapshotQuery.data } : current,
       );
-      void cache.invalidateQueries({ queryKey: ['runs'] });
+
       // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
       void cache.invalidateQueries({ queryKey: ['conversation'] });
     },
     [cache, project.run_id, snapshotQuery.data],
   );
-  const diff = useQuery({
-    queryKey: ['diff', project.run_id],
-    queryFn: /* 仅读取运行记录内的快照，不访问任意宿主目录。 */ ({ signal }) =>
-      getDiff(project.run_id, signal),
-    enabled: project.snapshot_status === 'ready' && project.patch_available,
-    retry: false,
-  });
   const decision = useMutation({
     mutationFn: /* 人工操作才发送决定，后端仍独立检查活动状态与工作树归属。 */ (
       value: 'keep' | 'discard',
@@ -69,7 +54,7 @@ export function ProjectReviewPanel({
           current ? { ...current, project: review } : current,
       );
       void cache.invalidateQueries({ queryKey: ['run', project.run_id] });
-      void cache.invalidateQueries({ queryKey: ['runs'] });
+
       // 快照恢复与审阅决定都会改变可继续条件，同步刷新会话中的追加入口。
       void cache.invalidateQueries({ queryKey: ['conversation'] });
     },
@@ -110,7 +95,7 @@ export function ProjectReviewPanel({
       <p className="muted">
         {parentRunId ? (
           <>
-            本轮复用会话目录，<Link to={`/runs/${parentRunId}?tab=code`}>前轮证据</Link>保持只读
+            本轮复用会话目录，<Link to={`/runs/${parentRunId}?tab=files`}>前轮证据</Link>保持只读
             ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
           </>
         ) : (
@@ -160,7 +145,9 @@ export function ProjectReviewPanel({
           description={errorMessage(decision.error)}
         />
       )}
-      {!canManage && <Alert showIcon type="info" title="历史轮次只读，请在最新一轮管理会话工作树。" />}
+      {!canManage && (
+        <Alert showIcon type="info" title="历史轮次只读，请在最新一轮管理会话工作树。" />
+      )}
       {project.status === 'discarded' ? (
         <Alert
           showIcon
@@ -199,53 +186,16 @@ export function ProjectReviewPanel({
           <span className="muted">保留只保存工作树与补丁，不会自动提交或合并。</span>
         </div>
       ) : null}
-      <div className="section-heading changed-files-heading">
-        <h3>
-          变更文件 <small>{project.files.length}</small>
-        </h3>
-        {project.patch_available && (
-          <Button href={patchUrl(project.run_id)} icon={<DownloadOutlined />} download>
-            下载完整补丁
-          </Button>
-        )}
-      </div>
-      {project.snapshot_status === 'ready' && project.files.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="相对基线没有代码改动" />
-      ) : (
-        <ul className="changed-files">
-          {project.files.map(
-            /* 列表包含新文件和二进制文件，不能只用文本补丁推断改动数量。 */ (file) => (
-              <li key={`${file.status}:${file.path}`}>
-                <Tag>{fileLabels[file.status]}</Tag>
-                <code>{file.path}</code>
-                {file.binary && <span className="muted">二进制文件</span>}
-              </li>
-            ),
-          )}
-        </ul>
-      )}
-      {diff.isFetching && <Spin description="读取代码补丁" />}
-      {diff.error && (
-        <Alert
-          type="error"
-          showIcon
-          title="无法读取补丁预览"
-          description={errorMessage(diff.error)}
-        />
-      )}
-      {diff.data && (
-        <>
-          <p className="muted">保存的补丁 · {diff.data.size_bytes.toLocaleString()} 字节</p>
-          {diff.data.truncated && (
-            <Alert type="warning" showIcon title="补丁预览已截断，请下载完整补丁查看全部改动。" />
-          )}
-          {diff.data.content && (
-            <pre className="diff-preview" aria-label="代码补丁预览">
-              {diff.data.content}
-            </pre>
-          )}
-        </>
-      )}
+      <FileChangesPanel
+        runId={project.run_id}
+        files={project.files}
+        ready={project.snapshot_status === 'ready'}
+        patchAvailable={project.patch_available}
+        active={active}
+        label="代码补丁预览"
+        downloadLabel="下载完整补丁"
+        emptyLabel="相对基线没有代码改动"
+      />
     </section>
   );
 }

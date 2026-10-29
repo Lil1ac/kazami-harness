@@ -85,7 +85,12 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
     } else if (event.type === 'verification_started') {
       verification = {
         id: `verification-${event.seq}`,
-        label: '宿主独立验收',
+        label:
+          Number(payload.repair_attempt) > 0
+            ? `第 ${String(payload.repair_attempt)} 次修复后检查`
+            : payload.kind === 'project_tests'
+              ? '项目测试'
+              : '宿主独立验收',
         state: 'running',
         arguments: null,
         result: null,

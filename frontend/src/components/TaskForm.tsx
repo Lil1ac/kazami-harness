@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Form, Input, InputNumber, Select } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, Select } from 'antd';
 import {
   ArrowUpOutlined,
   FolderOpenOutlined,
@@ -7,11 +7,9 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router';
-import { createRun, errorMessage, pickProject, saveProjectSettings } from '../api';
+import { Link, useNavigate } from 'react-router';
+import { createRun, errorMessage, pickProject } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
-import { formatContextBytes } from '../context';
-import { localProjects } from '../projects';
 import type { LocalProjectOption, OptionsResponse } from '../types';
 import { SkillSelector } from './SkillSelector';
 
@@ -20,7 +18,6 @@ interface TaskValues {
   prompt: string; // 本轮要求，提交时去首尾空白。
   base_ref?: string; // 仅隔离Git执行使用，空白沿用HEAD。
   verifier_id?: string; // 普通目录可选宿主验收器编号。
-  outputs?: string; // 每行一个预期产物相对路径。
 }
 
 /** 当前标签页的新任务草稿键；不保存密钥、宿主路径或模型执行状态。 */
@@ -33,7 +30,7 @@ function taskDraft(key = TASK_DRAFT_KEY): Partial<TaskValues> {
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
     const values = saved as Record<string, unknown>;
     const restored: Partial<TaskValues> = {};
-    for (const key of ['prompt', 'verifier_id', 'outputs'] as const) {
+    for (const key of ['prompt', 'verifier_id'] as const) {
       if (typeof values[key] === 'string') restored[key] = values[key].slice(0, 20000);
     }
     return restored;
@@ -76,18 +73,20 @@ export function TaskForm({
   const [initialDraft] = useState(() => taskDraft(draftKey)); // 调整配置后返回或刷新时恢复本标签页文字。
   const [selectedId, setSelectedId] = useState(() => initialProjectId || lastProject()); // 持久化的编号只用于定位当前可访问登记。
   const [opened, setOpened] = useState<LocalProjectOption | null>(null); // 目录POST返回后立即可用，等待选项刷新。
-  const [pythonExecutable, setPythonExecutable] = useState(''); // 未保存的项目解释器路径；空白按 PATH。
-  const [command, setCommand] = useState(''); // 未保存的测试命令。
-  const [testSeconds, setTestSeconds] = useState(30); // 项目测试秒级超时。
-  const [settingsSaved, setSettingsSaved] = useState(false); // 保存确认，不等于测试执行通过。
+  const [autoRepair, setAutoRepair] = useState(false); // 本次明确开启，不从其他项目或文字草稿恢复。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const choices = localProjects(options);
+  const choices = options.recent_projects;
   const selected =
     choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === selectedId) ||
     (opened?.id === selectedId ? opened : undefined);
+  const repairAvailable = selected?.kind === 'project' && Boolean(selected.test_argv?.length); // 只使用已保存的公开测试，不取未保存的命令草稿。
+  useEffect(
+    /* 换项目必须重新选择，避免把旧项目的自动修复授权带到其他目录。 */ () => setAutoRepair(false),
+    [selected?.id],
+  );
   const mutation = useMutation({
     mutationFn: createRun,
     onSuccess: /* 真实接纳后进入已有持续会话。 */ (run) => {
@@ -97,7 +96,6 @@ export function TaskForm({
         /* 成功运行不依赖浏览器存储。 */
       }
       cache.setQueryData(['run', run.run_id], run);
-      void cache.invalidateQueries({ queryKey: ['runs'] });
       void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
       navigate('/runs/' + run.run_id);
@@ -110,7 +108,6 @@ export function TaskForm({
     setSelectedId(project.id);
     if (resetMode) setCreateWorktree(false); // 打开新目录回到原目录执行，保存测试设置不切换位置。
     saveTaskDraft(form.getFieldsValue(), draftKey);
-    setSettingsSaved(false);
     try {
       localStorage.setItem('harness-selected-project', project.id);
     } catch {
@@ -124,34 +121,6 @@ export function TaskForm({
       if (value.project) acceptProject(value.project, true);
     },
   });
-  const settings = useMutation({
-    mutationFn: /* 仅保存公开设置；执行由任务结束后的独立验收承担。 */ () =>
-      saveProjectSettings(selected!.id, command, testSeconds, pythonExecutable),
-    onSuccess: /* 回写真实服务器配置并提示已保存。 */ (value) => {
-      acceptProject(value);
-      cache.setQueryData<OptionsResponse>(['options'], (current) =>
-        current
-          ? {
-              ...current,
-              recent_projects: [
-                value,
-                ...(current.recent_projects || []).filter((item) => item.id !== value.id),
-              ],
-            }
-          : current,
-      );
-      setSettingsSaved(true);
-    },
-  });
-  useEffect(
-    /* 切换项目时加载该项目测试草稿，不执行命令。 */ () => {
-      setCommand(selected?.test_command || selected?.test_argv?.join(' ') || '');
-      setTestSeconds(selected?.test_timeout_seconds || 30);
-      setPythonExecutable(selected?.python_executable || '');
-    },
-    [selected?.id, selected?.test_command, selected?.python_executable],
-  );
-
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
     if (!selected) return;
@@ -164,19 +133,11 @@ export function TaskForm({
             base_ref: createWorktree ? values.base_ref?.trim() || 'HEAD' : 'HEAD',
           }
         : { workspace_id: selected.id, verifier_id: values.verifier_id || null }),
-      expected_outputs: [
-        ...new Set(
-          (values.outputs || '')
-            .split(/\r?\n/)
-            .map(/* 去除空白而保留路径文字。 */ (line) => line.trim())
-            .filter(Boolean),
-        ),
-      ],
-      config: draft,
+      config: { ...draft, auto_repair: repairAvailable && autoRepair },
     });
   }
-  const projectBusy = picker.isPending || settings.isPending; // 打开目录期间防止误发给前一个项目。
-  const error = picker.error || settings.error || mutation.error;
+  const projectBusy = picker.isPending; // 打开目录期间防止误发给前一个项目。
+  const error = picker.error || mutation.error;
   return (
     <section className="task-start" aria-labelledby="new-task-heading">
       <div className="task-start-heading">
@@ -239,7 +200,6 @@ export function TaskForm({
               icon={<FolderOpenOutlined />}
               onClick={/* 只有明确点击才显示系统选择框。 */ () => picker.mutate()}
               loading={picker.isPending}
-              disabled={settings.isPending}
             >
               {selected?.label || '选择项目文件夹'}
             </Button>
@@ -269,6 +229,12 @@ export function TaskForm({
               <span className="selected-project-path" title={selected.path}>
                 {selected.path}
               </span>
+              <Link
+                className="project-settings-link"
+                to={'/projects/' + encodeURIComponent(selected.id) + '?settings=1'}
+              >
+                项目设置
+              </Link>
             </div>
           )}
         </div>
@@ -321,118 +287,51 @@ export function TaskForm({
               </Form.Item>
             )}
             <div className="composer-config">
-              <span>{config.tools.length} 类工具</span>
-              <span>输入上限 {formatContextBytes(config.context.max_input_bytes)}</span>
-              <Button
-                type="link"
-                size="small"
-                onClick={/* 设置只影响后续任务。 */ () => navigate('/settings')}
-              >
-                调整配置
-              </Button>
+              <span>{config.requested_model}</span>
+              <Link to="/settings">调整模型与预算</Link>
             </div>
-            <SkillSelector
-              options={options.skills || []}
-              selected={config.skills || []}
-              onChange={/* 选名仍由宿主映射正文。 */ (skills) => setDraft({ ...draft, skills })}
-            />
-            {selected && (
+            {((options.skills?.length || 0) > 0 || (config.skills?.length || 0) > 0) && (
+              <SkillSelector
+                options={options.skills || []}
+                selected={config.skills || []}
+                onChange={/* 选名仍由宿主映射正文。 */ (skills) => setDraft({ ...draft, skills })}
+              />
+            )}
+            {selected?.kind === 'project' && createWorktree && (
               <Form.Item
-                label="Python 解释器"
-                extra="留空按 PATH 查找；相对路径以实际执行目录为准。保存不会执行程序。"
+                label="提交基线"
+                name="base_ref"
+                extra="默认 HEAD；原目录的未提交改动不会带入。"
               >
-                <Input
-                  aria-label="Python 解释器"
-                  value={pythonExecutable}
-                  placeholder="例如 .venv/Scripts/python.exe"
-                  onChange={
-                    /* 仅编辑草稿，明确保存后才影响下一轮。 */ (event) => {
-                      setPythonExecutable(event.target.value);
-                      setSettingsSaved(false);
-                    }
-                  }
-                />
-                {selected.kind === 'workspace' && (
-                  <Button
-                    size="small"
-                    loading={settings.isPending}
-                    onClick={/* 保存普通目录的解释器配置。 */ () => settings.mutate()}
-                  >
-                    保存项目设置
-                  </Button>
-                )}
+                <Input placeholder="HEAD" maxLength={200} />
               </Form.Item>
             )}
-            {selected?.kind === 'project' ? (
-              <>
-                {createWorktree && (
-                  <Form.Item
-                    label="提交基线"
-                    name="base_ref"
-                    extra="默认 HEAD；原目录和已有改动保持。"
-                  >
-                    <Input placeholder="HEAD" maxLength={200} />
-                  </Form.Item>
-                )}
-                <div className="project-test-settings">
-                  <label htmlFor="project-test-command">项目测试命令</label>
-                  <Input
-                    id="project-test-command"
-                    value={command}
-                    placeholder="例如 python -m pytest -q，可留空"
-                    onChange={
-                      /* 编辑不自动保存或执行。 */ (event) => {
-                        setCommand(event.target.value);
-                        setSettingsSaved(false);
-                      }
-                    }
-                  />
-                  <div className="project-test-actions">
-                    <label htmlFor="project-test-timeout">超时（秒）</label>
-                    <InputNumber
-                      id="project-test-timeout"
-                      min={1}
-                      max={3600}
-                      value={testSeconds}
-                      onChange={
-                        /* 任何未保存的超时修改都撤去旧保存提示。 */ (value) => {
-                          setTestSeconds(value || 30);
-                          setSettingsSaved(false);
-                        }
-                      }
-                    />
-                    <Button
-                      size="small"
-                      loading={settings.isPending}
-                      onClick={/* 用户明确保存后才更新该项目。 */ () => settings.mutate()}
-                    >
-                      保存项目设置
-                    </Button>
-                  </div>
-                  <p className="muted">
-                    保存不会执行命令；后续任务完成后运行这项检查。留空并保存可取消测试。
-                  </p>
-                </div>
-              </>
-            ) : (
+            {selected?.kind === 'project' && (
+              <Checkbox
+                checked={repairAvailable && autoRepair}
+                disabled={!repairAvailable}
+                onChange={
+                  /* 只对本次发送授权，修复共用任务预算。 */ (event) =>
+                    setAutoRepair(event.target.checked)
+                }
+              >
+                测试失败自动修复（最多2次）
+              </Checkbox>
+            )}
+            {selected?.kind === 'workspace' && options.verifiers.length > 0 && (
               <Form.Item label="独立验收" name="verifier_id" extra="不选择时，结果保持未验收。">
                 <Select
                   allowClear
                   placeholder="不进行独立验收"
                   options={options.verifiers.map(
-                    /* 仅接受宿主已登记检查。 */ (item) => ({ value: item.id, label: item.label }),
+                    /* 只提交宿主已登记的受控编号。 */ (item) => ({
+                      value: item.id,
+                      label: item.label,
+                    }),
                   )}
                 />
               </Form.Item>
             )}
-            {settingsSaved && <p role="status">项目设置已保存。</p>}
-            <Form.Item
-              label="预期产物"
-              name="outputs"
-              extra="每行一个工作区相对路径；声明路径不代表内容已验收。"
-            >
-              <Input.TextArea rows={2} placeholder={'report.md\nresult.csv'} />
-            </Form.Item>
           </div>
         </details>
       </Form>

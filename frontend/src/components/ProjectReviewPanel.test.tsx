@@ -74,7 +74,7 @@ describe('代码审阅', /* 代码事实、测试和人工决定相互独立；�
     expect(screen.getByText('new.py')).toBeInTheDocument();
     expect(screen.getByText('删除')).toBeInTheDocument();
     expect(screen.getByText('二进制文件')).toBeInTheDocument();
-    expect(screen.getByText(/补丁预览已截断/)).toBeInTheDocument();
+    expect(screen.getByText(/差异预览已截断/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /下载完整补丁/ })).toHaveAttribute(
       'href',
       '/api/runs/run-a/patch',

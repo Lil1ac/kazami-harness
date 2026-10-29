@@ -16,6 +16,12 @@ interface SkillChoice {
   names: string[]; // 明确选择；空列表也代表一次有效覆盖。
 }
 
+/** 最新父轮下的修复选择；未编辑时继承服务端固定配置。 */
+interface RepairChoice {
+  parentId: string; // 选择只归属于当前最新轮，查看旧轮不改变它。
+  enabled: boolean; // 显式开启或关闭，原请求重试始终使用冻结值。
+}
+
 /** 当前标签页的会话草稿；未知发送状态刷新后只供用户确认，不自动执行。 */
 interface SavedDraft {
   text: string; // 尚未发送或等待确认的可编辑文本。
@@ -71,6 +77,11 @@ export function useConversationSend(
   const [text, setText] = useState(initial.text); // 同一会话内连续编辑，允许执行中预写下一条。
   const [pending, setPending] = useState<PendingSend | null>(initial.pending); // 只在明确确认后清除。
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
+  const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
+  const autoRepair =
+    repairChoice?.parentId === conversation.latest_run_id
+      ? repairChoice.enabled
+      : run?.config.auto_repair;
   // 续轮默认读取最新真实配置；首轮页面的全局 draft.skills 不能覆盖继承结果。
   const skills =
     skillChoice?.parentId === conversation.latest_run_id ? skillChoice.names : run?.config.skills;
@@ -91,6 +102,12 @@ export function useConversationSend(
       submission,
     ) => {
       setPending(null);
+      setRepairChoice(
+        /* 发送期间编辑的新选择留给下一条，重试确认不改变原授权。 */ (choice) =>
+          choice && choice.enabled !== submission.body.config?.auto_repair
+            ? { parentId: view.run_id, enabled: choice.enabled }
+            : null,
+      );
       setSkillChoice(
         /* 发送期间若已预写不同技能选择，将其留给下一条；否则继承已确认新轮。 */ (choice) =>
           choice && JSON.stringify(choice.names) !== JSON.stringify(submission.body.config?.skills)
@@ -134,7 +151,7 @@ export function useConversationSend(
   /** 发送新要求或确认原请求；返回 void，忙碌和空输入直接忽略，不制造新编号。 */
   function send(): void {
     if (inFlight.current || !canSend) return;
-    const { skills: _previousTaskSkills, ...overrides } = draft;
+    const { skills: _previousTaskSkills, auto_repair: _previousRepairChoice, ...overrides } = draft;
     const submission = pending || {
       parentId: conversation.latest_run_id,
       body: {
@@ -143,6 +160,7 @@ export function useConversationSend(
         // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
         config: structuredClone({
           ...overrides,
+          ...(autoRepair !== undefined ? { auto_repair: autoRepair } : {}),
           ...(skills !== undefined ? { skills } : {}),
         }),
       },
@@ -155,6 +173,9 @@ export function useConversationSend(
     text,
     setText,
     skills: skills || [],
+    autoRepair: Boolean(autoRepair),
+    setAutoRepair: /* 只设置下一条新要求，不能覆盖已经发出的请求。 */ (enabled: boolean) =>
+      setRepairChoice({ parentId: conversation.latest_run_id, enabled }),
     setSkills: /* 当前最新轮下的明确选择；空列表也必须保留。 */ (names: string[]) =>
       setSkillChoice({ parentId: conversation.latest_run_id, names }),
     pending,

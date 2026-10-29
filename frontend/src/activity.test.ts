@@ -2,6 +2,28 @@ import { expect, it } from 'vitest';
 import { activitySteps, toolFailureMessage } from './activity';
 import { makeEvent } from './test/fixtures';
 
+it('多次检查各自保留，修复后通过不会覆盖首次失败', () => {
+  // 开始和结果按实际顺序成对投影，用户可回看每次测试。
+  const steps = activitySteps([
+    { ...makeEvent(1), type: 'verification_started', payload: { repair_attempt: 0 } },
+    {
+      ...makeEvent(2),
+      type: 'verification_result',
+      payload: { repair_attempt: 0, verification: { status: 'failed' } },
+    },
+    { ...makeEvent(3), type: 'repair_started', payload: { repair_attempt: 1 } },
+    { ...makeEvent(4), type: 'verification_started', payload: { repair_attempt: 1 } },
+    {
+      ...makeEvent(5),
+      type: 'verification_result',
+      payload: { repair_attempt: 1, verification: { status: 'passed' } },
+    },
+  ]);
+  expect(steps).toHaveLength(2);
+  expect(steps.map((step) => step.state)).toEqual(['failed', 'passed']);
+  expect(steps[1].label).toBe('第 1 次修复后检查');
+});
+
 it('按调用编号配对工具，保留真实参数与失败结果', () => {
   // 工具结果会覆盖同一操作状态，不能把一个调用展示成两次执行。
   const steps = activitySteps([

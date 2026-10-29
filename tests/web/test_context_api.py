@@ -189,25 +189,21 @@ def test_first_input_over_budget_has_zero_model_and_http_attempts(context_web_co
     asyncio.run(scenario())
 
 
-def test_legacy_history_without_context_events_stays_null(context_web_config: WebConfig):
-    """旧清单缺少 context 且没有上下文事件时返回 null；即便工作区现有 AGENTS，也不补造历史或触发模型。"""
+def test_unprepared_history_does_not_invent_context_snapshot(context_web_config: WebConfig):
+    """准备阶段中断且没有上下文事件时返回 null；工作区后来新增 AGENTS 也不补造快照或触发模型。"""
     identifier = uuid4()
     root = context_web_config.project_dir / "records"
     store = RunStore.create(root, RunManifest(
-        run_id=identifier, task=TaskSpec(prompt="旧版本中断任务", workspace=context_web_config.workspaces[0].path),
+        run_id=identifier, task=TaskSpec(prompt="准备阶段中断任务", workspace=context_web_config.workspaces[0].path),
         config=RunConfig(),
     ))
     store.append("run_started", {})
-    manifest_path = root / str(identifier) / "run.json"
-    legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
-    legacy["config"].pop("context")
-    manifest_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
     (context_web_config.workspaces[0].path / "AGENTS.md").write_text("不属于旧任务的约定。", encoding="utf-8")
     events_path = root / str(identifier) / "events.jsonl"
     before = events_path.read_bytes()
 
     async def scenario():
-        """新应用只读恢复缺少终态的记录，验证详情和事件不会因新增功能而自动写入内容。"""
+        """新应用只读恢复当前格式的中断记录，验证详情与事件不会补造当时尚未加载的指令。"""
         model = RecordingModel()
         async with context_client(context_web_config, model) as client:
             response = await client.get(f"/api/runs/{identifier}")

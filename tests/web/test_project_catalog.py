@@ -122,7 +122,7 @@ def test_picker_cancel_and_cross_origin_do_not_register(tmp_path: Path):
             assert (await client.post("/api/projects/pick")).json() == {"cancelled": True, "project": None}
             assert (await client.post("/api/projects/pick", headers={"Origin": "https://other.invalid"})).status_code == 403
             assert len(calls) == 1 and not manager.catalog.path.exists()
-            assert (await client.get("/api/runs")).json()["total"] == 0
+            assert (await client.get("/api/conversations")).json()["total"] == 0
     asyncio.run(scenario())
 
 
@@ -142,7 +142,7 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
             project = result.json()["project"]
             assert project["kind"] == "project" and project["available"] and project["test_argv"] == []
             assert project["branch"]
-            assert (await client.get("/api/runs")).json()["total"] == 0
+            assert (await client.get("/api/conversations")).json()["total"] == 0
             response = await client.post("/api/runs", json={"project_id": project["id"], "prompt": "修改value", "execution_mode": "isolated"})
             assert response.status_code == 202, response.text
             first = await finish(client, response.json()["run_id"])
@@ -187,7 +187,7 @@ def test_plain_directory_and_unborn_git_have_distinct_modes(tmp_path: Path):
             by_id = {item["id"]:item for item in options["recent_projects"]}
             assert by_id[ordinary_id]["kind"] == "workspace"
             assert by_id[unborn_id]["kind"] == "project" and by_id[unborn_id]["available"] is False
-            assert next(item for item in options["workspaces"] if item["id"] == ordinary_id)["path"] == str(ordinary)
+            assert next(item for item in options["recent_projects"] if item["id"] == ordinary_id)["path"] == str(ordinary)
     asyncio.run(scenario())
 
 

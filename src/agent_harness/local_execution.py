@@ -1,4 +1,4 @@
-"""原目录执行的身份核验与逐轮只读变更记录；不复制执行目录、不操作Git索引。"""
+"""执行目录的身份核验与逐轮只读变更证据；固定文件快照不作为执行副本，不操作Git索引。"""
 
 import difflib
 import hashlib
@@ -15,7 +15,7 @@ from .snapshots import FileSnapshotStore, SnapshotError
 
 
 class LocalFileChange(DataModel):
-    """原目录本轮前后快照中的文件变化，不包含早已存在的未修改文件。"""
+    """实际执行目录本轮前后快照中的文件变化，不包含早已存在的未修改文件。"""
 
     path: str  # 相对于实际执行目录的文件路径。
     status: Literal["added", "modified", "deleted"]  # 相对于本轮开始时，而非Git HEAD。
@@ -23,7 +23,7 @@ class LocalFileChange(DataModel):
 
 
 class LocalChangeView(DataModel):
-    """原目录执行的独立差异状态；报告失败不改写Runner结果，也不阻止继续当前目录。"""
+    """本轮文件差异的独立状态；报告失败不改写Runner执行结果，也不阻止继续当前目录。"""
 
     status: Literal["pending", "ready", "error"] = "pending"  # pending表示尚未固化，不能冒充无变化。
     files: list[LocalFileChange] = Field(default_factory=list)  # 本轮实际变化的完整文件列表。
@@ -32,7 +32,7 @@ class LocalChangeView(DataModel):
 
 
 class LocalChangeStore:
-    """按运行UUID保存原目录执行前后的有界快照与差异，不把快照作为继续的前提。"""
+    """按运行UUID保存本机文件的逐轮差异；CLI及原目录共用，Git隔离可复用已有结束快照。"""
 
     EXCLUDE_NAMES = frozenset({'.git', '.venv', 'venv', 'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.uv-cache', '.next', '.tox', '.nox'})  # 依赖与控制目录不属于源码差异采集范围。
     MAX_PATCH_BYTES = 32 * 1024 * 1024  # 完整文本差异上限，超限明确报告失败。
@@ -87,17 +87,23 @@ class LocalChangeStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def finish(self, run_id: UUID, root: Path) -> None:
-        """固定本轮结束文件并生成相对开始状态的差异；失败记录error，不伪造完整报告。"""
+    def finish(self, run_id: UUID, root: Path, snapshot: FileSnapshotStore | None = None) -> LocalChangeView:
+        """固定run_id在root的逐轮差异并返回状态；失败记录error，不伪造完整报告。
+
+        snapshot=None时采集自身结束快照；非空时复用宿主已固定的Git工作树快照，
+        不再次扫描或复制结束文件。只写旁路证据，不追加Runner事件、不改工作区。
+        """
         directory = self._directory(run_id)
         directory.mkdir(parents=True, exist_ok=False)
         view = LocalChangeView()
         patch = b''
         try:
-            self.after.capture(run_id, root)
-            before, after = self.before.info(run_id), self.after.info(run_id)
-            for snapshot in (before, after):
-                if snapshot is None or snapshot['status'] != 'ready':
+            saved = snapshot or self.after
+            if snapshot is None:
+                saved.capture(run_id, root)
+            before, after = self.before.info(run_id), saved.info(run_id)
+            for info in (before, after):
+                if info is None or info['status'] != 'ready':
                     raise SnapshotError('local_changes_incomplete', '本轮文件超过采集范围、包含不支持的文件或读取期间发生变化；差异未完整保存，当前目录仍可继续。')
             if before['workspace'] != after['workspace'] or before['identity'] != after['identity']:
                 raise SnapshotError('local_workspace_changed', '本轮执行期间原目录身份发生变化，不能生成可信差异。')
@@ -110,7 +116,7 @@ class LocalChangeStore:
                 if old.get(name) == new.get(name):
                     continue
                 previous = self.before.saved_file(run_id, name).read_bytes() if name in old else b''
-                current = self.after.saved_file(run_id, name).read_bytes() if name in new else b''
+                current = saved.saved_file(run_id, name).read_bytes() if name in new else b''
                 try:
                     binary = b'\0' in previous or b'\0' in current
                     previous.decode('utf-8')
@@ -135,6 +141,7 @@ class LocalChangeStore:
             view = LocalChangeView(status='error', warnings=[message])
         metadata = {'run_id': str(run_id), 'view': view.model_dump(mode='json'), 'patch_size': len(patch), 'patch_sha256': hashlib.sha256(patch).hexdigest()}
         self._write(directory, 'changes.json', json.dumps(metadata, ensure_ascii=False).encode('utf-8'))
+        return view
 
     def _metadata(self, run_id: UUID) -> dict | None:
         """有界读取run_id报告；尚未完成返回None，元数据损坏/链接抛SnapshotError。"""

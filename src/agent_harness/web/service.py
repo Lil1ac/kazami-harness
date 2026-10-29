@@ -13,9 +13,9 @@ from pydantic import ValidationError
 
 from ..config import ConfigurationError, load_config, prepare_task
 from ..providers.base import ModelClient
-from ..runner import CancellationState, RunContext, run_task, validate_execution, validate_output_paths
+from ..runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
 from ..execution import PythonExecutionError, prepare_python_execution, python_command
-from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerifierSpec
+from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
 from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
 from ..store import RunHistory, RunStore, StorageError
 from ..skills import SkillCatalog
@@ -28,7 +28,6 @@ from .conversation_index import ConversationIndex
 from .project_catalog import ProjectCatalog
 from .folder_picker import FolderPicker
 from .schemas import CreateRunRequest, EventPage, RunView
-from ..workspace import Workspace, WorkspaceError
 
 
 class WebServiceError(Exception):
@@ -68,6 +67,8 @@ def _phase(events: list[RunEvent]) -> str:
         "tool_result": "tool_result",
         "execution_completed": "execution_completed",
         "verification_started": "verification",
+        "repair_started": "repair",
+        "artifact_collection_started": "artifact_collection",
         "verification_result": "verification_result",
         "run_finished": "finished",
     }
@@ -78,7 +79,7 @@ def _phase(events: list[RunEvent]) -> str:
 
 
 def _context_view(events: list[RunEvent]) -> ContextView | None:
-    """从有序 events 还原指令快照与最新检查；旧记录返回 None，不从当前文件补造数据。
+    """从有序 events 还原指令快照与最新检查；尚未准备时返回 None，不从当前文件补造数据。
 
     本函数只读取事件，不读取工作区；受损上下文载荷抛 ValidationError，由视图层
     转为警告。只采用 context_prepared 之后的检查，避免无来源的统计被当作有效记录。
@@ -131,11 +132,21 @@ def _unfinished_result(history: RunHistory) -> RunResult:
         elif event.type == "verification_result":
             verifier_pending = False
             verification = event.payload.get("verification")
+            try:
+                attempt = VerificationAttempt.model_validate({"repair_attempt": event.payload["repair_attempt"], "result": verification})
+                result.verification_attempts.append(attempt)
+                result.artifacts.extend(reference for reference in attempt.result.artifacts if reference not in result.artifacts)
+            except (KeyError, ValidationError):
+                pass  # 损坏事件不补造检查结论，历史读取的警告仍由RunStore保留。
             status = verification.get("cleanup_status", "unknown") if isinstance(verification, dict) else "unknown"
             if status not in cleanup_rank:
                 status = "unknown"
             if cleanup_rank[status] > cleanup_rank[result.cleanup_status]:
                 result.cleanup_status = status
+        elif event.type == "repair_started":
+            attempt = event.payload.get("repair_attempt")
+            if type(attempt) is int and 1 <= attempt <= 2:
+                result.repair_attempts = attempt
         if event.type == "model_response":
             usage = event.payload.get("usage")
             for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -191,7 +202,7 @@ class WebRunManager:
 
     def options(self) -> dict:
         """返回可公开的配置、预设和槽位；密钥只报告是否存在，不返回环境值。"""
-        project_presets, workspace_presets, recent = self.catalog.snapshot()
+        project_presets, _, recent = self.catalog.snapshot()
         # Git探测可能耗时；之后不再重读目录登记，避免并发打开项目造成列表身份错配。
         project_options = [self._project_option(item) for item in project_presets]
         for item in recent:
@@ -205,19 +216,10 @@ class WebRunManager:
             "config": self.run_config,
             "skills": SkillCatalog(self.run_config.skill_roots).discover(),
             "key_configured": bool(os.environ.get(self.run_config.api_key_env)),
-            "workspaces": [
-                {
-                    "id": item.id,
-                    "label": item.label,
-                    "path": str(item.path),
-                }
-                for item in workspace_presets
-            ],
             "verifiers": [
                 {"id": item.id, "label": item.label, "description": item.description}
                 for item in self.web_config.verifiers
             ],
-            "projects": project_options,
             "busy_run_id": self.busy_run_id,
         }
 
@@ -292,7 +294,6 @@ class WebRunManager:
                 source = preset.path if preset is not None else workspace.path
                 task = prepare_task(
                     request.prompt, source, verifier_path, config.limits.verifier_timeout_seconds,
-                    request.expected_outputs,
                     python_paths=(preset or workspace).python_paths,
                     python_executable=(preset or workspace).python_executable,
                 )
@@ -306,7 +307,8 @@ class WebRunManager:
                 manifest = RunManifest(run_id=identifier, task=task, config=config, session_id=identifier, origin=origin)
                 api_key = os.environ.get(config.api_key_env, "")
                 validate_execution(manifest, api_key)
-                validate_output_paths(task, self.runs_root)
+                if config.auto_repair and (preset is None or not preset.test_argv):
+                    validate_auto_repair(manifest)  # 缺少公开测试先拒绝，避免为无效修复请求创建工作树。
                 if mode == 'local':
                     root = self.local_changes.verify(origin, task.workspace)
                     if preset is not None:
@@ -328,11 +330,11 @@ class WebRunManager:
                     verifier = self.project_verifier(preset, root)
                     task = task.model_copy(update={"workspace": root, "verifier": verifier})
                     manifest = manifest.model_copy(update={"task": task})
-                    validate_output_paths(task, self.runs_root)
                 # 必须等实际目录确定后冻结，避免把原仓库源码路径带到新工作树。
                 execution = prepare_python_execution(task.workspace, (preset or workspace).python_paths, python_executable=(preset or workspace).python_executable)
                 task = task.model_copy(update={"python_execution": execution})
                 manifest = manifest.model_copy(update={"task": task})
+                validate_auto_repair(manifest)
             except (ConfigurationError, ProjectError, SnapshotError, ValidationError, PythonExecutionError) as error:
                 if prepared is not None:
                     try:
@@ -350,6 +352,7 @@ class WebRunManager:
     def project_verifier(preset: ProjectPreset, root: Path) -> VerifierSpec | None:
         """按preset当前测试设置为实际root构建验收；空命令返回None，不启动进程。"""
         return VerifierSpec(
+            kind="project_tests",
             argv=python_command([part.replace("{workspace}", str(root)) for part in preset.test_argv], prepare_python_execution(root, preset.python_paths, python_executable=preset.python_executable)),
             cwd=root, timeout_seconds=preset.test_timeout_seconds,
         ) if preset.test_argv else None
@@ -384,14 +387,6 @@ class WebRunManager:
                 item.cancelling = True
                 raise asyncio.CancelledError
         try:
-            origin = item.manifest.origin
-            if origin is not None and origin.execution_mode == 'local':
-                root = self.local_changes.verify(origin, item.manifest.task.workspace)
-                try:
-                    await asyncio.to_thread(self.local_changes.begin, item.manifest.run_id, root)
-                except (SnapshotError, OSError):
-                    self._warnings.setdefault(item.manifest.run_id, []).append("本轮开始文件未完整保存，差异可能不可用；执行仍使用所选目录。")
-                self.local_changes.verify(origin, root)  # 采集期间目录被替换时不能执行到新位置。
             await run_task(
                 item.manifest,
                 self.runs_root,
@@ -400,40 +395,28 @@ class WebRunManager:
                 transport=self._transport,
                 cancellation_state=item.cancellation,
                 on_context=on_context,
+                file_changes=self.local_changes if item.manifest.origin is None or item.manifest.origin.execution_mode == 'local' else None,
+                project_manager=self.projects,
             )
         except asyncio.CancelledError:
+            item.startup_failed = item.context is None
             self._warnings.setdefault(item.manifest.run_id, []).append("后台任务在运行器收尾之外被中断，请以已保存事件为准。")
         except Exception:
             item.startup_failed = item.context is None
             self._warnings.setdefault(item.manifest.run_id, []).append("后台执行或记录保存发生异常；未生成可信终态时，请检查本地运行记录。")
         finally:
-            # run_finished 仍表示 Runner 终态，审阅快照作为独立元数据固化；完成前不能释放执行槽。
+            # 正常文件证据已在Runner终态前固定；启动失败的资源清理完成后才释放执行槽。
             item.finalizing = True
-            if self._project_review(item.manifest.run_id) is not None:
-                capturing = asyncio.create_task(asyncio.to_thread(self.projects.capture, item.manifest.run_id))
+            if item.startup_failed and item.context is None and self._project_review(item.manifest.run_id) is not None:
+                # 模型尚未启动的准备失败仍回收专属资源；正常证据已由Runner在终态前固化。
                 try:
-                    await asyncio.shield(capturing)
-                    if item.startup_failed and item.context is None:
-                        # Runner 尚未建立上下文即失败，进程从未执行；移除已登记副本避免不可见孤立资源。
-                        if item.manifest.parent_run_id is None:
-                            await asyncio.to_thread(self.projects.decide, item.manifest.run_id, "discard")
-                        else:
-                            await asyncio.to_thread(self.projects.abandon_turn, item.manifest.run_id)
-                except asyncio.CancelledError:
-                    try:
-                        await asyncio.shield(capturing)
-                    except ProjectError:
-                        self._warnings.setdefault(item.manifest.run_id, []).append("代码快照保存失败，请检查审阅状态。")
-                except Exception:
-                    self._warnings.setdefault(item.manifest.run_id, []).append("代码快照保存失败，请检查审阅状态。")
-            if item.manifest.origin is not None and item.manifest.origin.execution_mode == 'local' and item.context is not None:
-                capturing_local = asyncio.create_task(asyncio.to_thread(self.local_changes.finish, item.manifest.run_id, item.manifest.task.workspace))
-                try:
-                    await asyncio.shield(capturing_local)
-                except asyncio.CancelledError:
-                    await asyncio.shield(capturing_local)
-                except Exception:
-                    self._warnings.setdefault(item.manifest.run_id, []).append("本轮原目录差异记录未完整保存，实际修改仍位于所选目录。")
+                    await asyncio.to_thread(self.projects.capture, item.manifest.run_id)
+                    if item.manifest.parent_run_id is None:
+                        await asyncio.to_thread(self.projects.decide, item.manifest.run_id, "discard")
+                    else:
+                        await asyncio.to_thread(self.projects.abandon_turn, item.manifest.run_id)
+                except (ProjectError, OSError):
+                    self._warnings.setdefault(item.manifest.run_id, []).append("未启动任务的工作树清理未完成，请检查项目审阅记录。")
             if self._active is item:
                 self._active = None
             # 超预算快照只为活动订阅保留；任务结束后立即释放这个特例。
@@ -517,10 +500,11 @@ class WebRunManager:
             prompt=history.manifest.task.prompt,
             workspace=str(history.manifest.task.workspace),
             python_execution=history.manifest.task.python_execution,
+            verification_kind=history.manifest.task.verifier.kind if history.manifest.task.verifier else None,
             execution_mode=history.manifest.origin.execution_mode if history.manifest.origin else None,
             source_path=str(history.manifest.origin.registered_path) if history.manifest.origin else None,
             source_kind=history.manifest.origin.kind if history.manifest.origin else None,
-            local_changes=self.local_changes.summary(identifier) if history.manifest.origin and history.manifest.origin.execution_mode == 'local' else None,
+            local_changes=self.local_changes.summary(identifier) if history.manifest.origin is None or history.manifest.origin.execution_mode == 'local' else None,
             created_at=history.manifest.created_at,
             result=result,
             phase=(("workspace_snapshot" if item.manifest.origin is not None and item.manifest.origin.kind == "workspace" else "project_snapshot") if item.finalizing else item.context.phase) if active and item.context is not None else _phase(history.events),
@@ -543,25 +527,6 @@ class WebRunManager:
             turn_index=history.manifest.turn_index,
         )
 
-    def list_runs(self, offset: int, limit: int, status: str | None) -> dict:
-        """按创建时间倒序返回分页视图；status=None 不筛选，否则按 execution_status 匹配。
-
-        offset 从零开始，limit 由 API 限制在 1..100；不可读子记录被略过，服务不修改历史。
-        """
-        views: list[RunView] = []
-        if self.runs_root.is_dir():
-            for directory in self.runs_root.iterdir():
-                if not directory.is_dir() or directory.is_symlink():
-                    continue
-                try:
-                    view = self.get_run(directory.name)
-                except WebServiceError:
-                    continue
-                if status is None or view.result.execution_status == status:
-                    views.append(view)
-        views.sort(key=lambda view: view.created_at, reverse=True)
-        return {"items": views[offset:offset + limit], "total": len(views), "busy_run_id": self.busy_run_id}
-
     def list_events(self, run_id: UUID | str, after: int, limit: int) -> EventPage:
         """返回 run_id 中 seq>after 的最多 limit 条有效事件；after 从零开始。
 
@@ -579,7 +544,7 @@ class WebRunManager:
         """幂等请求取消指定活动任务；终态/历史任务仅返回视图，不重新执行或追加事件。"""
         view = self.get_run(run_id)
         item = self._active
-        if view.active and item is not None and item.task is not None and not item.cancelling and not item.finalizing:
+        if view.active and item is not None and item.task is not None and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
             item.cancellation.api_requested = True
             item.cancelling = True
             item.task.cancel()
@@ -602,7 +567,7 @@ class WebRunManager:
                 pass
         async with self._lock:
             item = self._active
-            if item is not None and item.task is not None and not item.task.done() and not item.cancelling and not item.finalizing:
+            if item is not None and item.task is not None and not item.task.done() and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
                 item.cancellation.shutdown_requested = True
                 item.cancelling = True
                 item.task.cancel()
@@ -621,17 +586,17 @@ class WebRunManager:
         references = view.result.artifacts
         if not any(item.location == location and item.path == path for item in references):
             raise WebServiceError(404, "artifact_not_found", "产物未登记或不可访问。")
-        if location == 'workspace' and view.execution_mode == 'local':
+        if location == 'workspace' and view.execution_mode != 'isolated':
             try:
                 return self.local_changes.after.saved_file(view.run_id, path)
             except SnapshotError:
                 raise WebServiceError(409, 'local_artifact_unavailable', '本轮固定产物尚未保存或已不可核对；请查看原目录，旧轮不会返回当前同名文件。') from None
-        if location == 'workspace' and view.execution_mode == 'isolated' and view.source_kind == 'project':
+        if location == 'workspace':
             try:
                 return self.projects.files.saved_file(view.run_id, path)
             except SnapshotError:
                 raise WebServiceError(409, 'project_artifact_unavailable', '本轮固定产物不可用，不会用共享工作树当前文件冒充历史内容。') from None
-        base = self.runs_root / str(view.run_id) if location == "run" else Path(view.workspace)
+        base = self.runs_root / str(view.run_id)
         try:
             candidate = base / path
             # ArtifactRef已校验词法边界，这里检查登记后新增的每一级链接。
@@ -645,10 +610,8 @@ class WebRunManager:
             resolved = candidate.resolve(strict=True)
             if not resolved.is_relative_to(base.resolve(strict=True)) or not resolved.is_file():
                 raise ValueError
-            if location == "workspace":
-                Workspace(Path(view.workspace), self.runs_root).resolve(path, must_exist=True)
             return resolved
-        except (OSError, RuntimeError, ValueError, WorkspaceError):
+        except (OSError, RuntimeError, ValueError):
             raise WebServiceError(404, "artifact_not_found", "产物未登记或不可访问。") from None
 
 

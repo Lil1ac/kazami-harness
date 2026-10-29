@@ -13,6 +13,7 @@ from ..local_execution import LocalChangeView
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
 class RunConfigPatch(DataModel):
+    auto_repair: bool | None = None  # None继承；显式开启要求宿主公开项目测试，首版最多两次修复。
     requested_model: str | None = Field(default=None, min_length=1, max_length=200)  # None 沿用宿主模型。
     tools: list[ToolName] | None = Field(default=None, min_length=1)  # None 沿用宿主工具。
     limits: dict[str, JsonValue] | None = None  # 按预算字段局部合并，再由 RunLimits 严格校验。
@@ -28,7 +29,6 @@ class CreateRunRequest(DataModel):
     execution_mode: Literal["local", "isolated"] = "local"  # 默认所选目录；isolated仅用于显式创建Git工作树。
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)  # 固定提交引用，默认提交时 HEAD。
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
-    expected_outputs: list[str] = Field(default_factory=list, max_length=100)  # 工作区内相对产物引用。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 每次运行配置，不修改服务默认值。
 
 
@@ -51,7 +51,6 @@ class FollowupRequest(DataModel):
     request_id: UUID = Field(strict=False)  # 浏览器生成的UUID字符串；相同编号和载荷只执行一次。
     prompt: str = Field(min_length=1, max_length=65536)  # 本次新要求，不要求用户重述历史。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 按字段覆盖前轮可编辑配置。
-    expected_outputs: list[str] | None = Field(default=None, max_length=100)  # None沿用前轮预期产物。
 
 
 # 连续对话使用精简逐轮视图；完整事件、测试和差异仍通过每轮详情查看。
@@ -137,6 +136,7 @@ class RunView(DataModel):
     prompt: str  # 原任务描述。
     workspace: str  # 模型工具、命令和验收实际使用的绝对目录。
     python_execution: PythonExecution | None  # 当轮已保存的默认解释器与源码目录；未准备时为 None，不用当前值填充。
+    verification_kind: Literal["independent", "project_tests"] | None = None  # 固定检查用途；只有公开项目测试允许模型获得修复反馈。
     execution_mode: Literal["local", "isolated"] | None = None  # CLI未知为None；网页明确原目录或隔离。
     source_path: str | None = None  # 网页最初选择的项目目录，旧记录未知时不猜测。
     source_kind: Literal["project", "workspace"] | None = None  # 原目录Git任务仍按项目测试展示，无需伪造工作树审阅。

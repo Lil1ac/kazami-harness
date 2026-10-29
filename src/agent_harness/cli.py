@@ -13,7 +13,7 @@ from uuid import uuid4
 from agent_harness import __version__
 from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.schemas import RunManifest, RunResult
-from agent_harness.runner import CancellationState, RunOutcome, exit_code, run_task, validate_output_paths
+from agent_harness.runner import CancellationState, RunOutcome, exit_code, run_task, validate_auto_repair
 from agent_harness.store import RunStore, StorageError
 
 
@@ -31,10 +31,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--config", type=Path, help="运行配置 TOML")
     run.add_argument("--verifier", type=Path, help="宿主侧验收清单 TOML；执行完成后独立运行")
     run.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="运行记录目录")
-    run.add_argument("--expected-output", action="append", default=[], help="登记工作区内预期产物的相对路径，可多次指定")
     run.add_argument("--python-executable", help="项目 Python 解释器；相对实际工作区，省略按 PATH 查找")
     run.add_argument("--model", help="覆盖 requested_model")
     run.add_argument("--max-model-turns", type=int, help="覆盖模型轮次上限")
+    run.add_argument("--auto-repair", action="store_true", default=None, help="公开项目测试失败后最多修复两次；验收清单须声明kind=project_tests")
     run.add_argument("--json", action="store_true", help="输出 JSON，便于脚本读取")
 
     show = commands.add_parser("show", help="只读查看历史运行")
@@ -83,9 +83,13 @@ def _print_result(data: dict, *, as_json: bool) -> None:
         print("提示：任务收到了取消请求，未检测到用户 Ctrl+C；来源位置已记录。")
     for artifact in data.get("artifacts", []):
         print(f"产物：{artifact['location']} / {artifact['path']}")
-    for missing in data.get("missing_artifacts", []):
-        print(f"产物提示：预期文件尚未生成：{missing}")
+    if data.get("artifact_status") == "incomplete":
+        for warning in data.get("artifact_warnings", []):
+            print(f"文件收集提示：{warning}")
     verification = data.get("verification")
+    for attempt in data.get("verification_attempts", []):
+        detail = attempt["result"]
+        print(f"检查记录：修复{attempt['repair_attempt']}次后，{detail['status']}；原因：{detail['reason']}")
     if verification is not None:
         print(f"验收原因：{verification['reason']}；退出码：{verification['exit_code']}；耗时：{verification['elapsed_ms']} ms")
         if verification.get("stdout"):
@@ -134,10 +138,12 @@ def _run(args: argparse.Namespace) -> int:
         overrides["requested_model"] = args.model
     if args.max_model_turns is not None:
         overrides["limits"] = {"max_model_turns": args.max_model_turns}
+    if args.auto_repair is not None:
+        overrides["auto_repair"] = args.auto_repair
     config = load_config(args.config, overrides)
-    task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, args.expected_output, python_executable=args.python_executable)
-    validate_output_paths(task, args.runs_dir)
+    task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, python_executable=args.python_executable)
     manifest = RunManifest(run_id=uuid4(), task=task, config=config)
+    validate_auto_repair(manifest)
     # 密钥值只交给请求适配器；配置快照与事件中仅记录环境变量名称。
     api_key = os.environ.get(config.api_key_env, "")
     outcome = asyncio.run(_execute_with_signals(manifest, args.runs_dir, api_key))

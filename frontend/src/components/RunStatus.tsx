@@ -46,7 +46,8 @@ export interface RunStatusSnapshot {
   phase: string; // 最新真实执行阶段。
   project?: RunView['project'] | boolean; // 完整审阅或只读的项目类型标记。
   source_kind?: 'project' | 'workspace' | null; // 原目录Git也显示项目测试，且不伪造待审阅。
-  result: Pick<RunResult, 'execution_status' | 'validation_status' | 'cleanup_status'>; // 三个独立状态。
+  result: Pick<RunResult, 'execution_status' | 'validation_status' | 'cleanup_status'> &
+    Partial<Pick<RunResult, 'repair_attempts'>>; // 列表只有三项状态，完整快照还可报告修复次数。
 }
 
 /** 根据真实终态生成概览，active/中断/清理异常优先，completed 本身不等于成功。 */
@@ -63,7 +64,9 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
             ? isProject
               ? '测试中'
               : '验收中'
-            : '运行中',
+            : run.result.execution_status === 'running' && run.result.repair_attempts
+              ? `正在修复 ${run.result.repair_attempts}/2`
+              : '运行中',
       color: 'processing',
     };
   if (['unknown', 'incomplete'].includes(run.result.cleanup_status))
@@ -103,9 +106,7 @@ export function RunStatus({ run }: { run: RunStatusSnapshot }) {
 /** 分别展示执行、验收或测试、人工审阅和清理；项目审阅不会覆盖执行或测试事实。 */
 export function StateBreakdown({ run }: { run: RunView }) {
   return (
-    <dl
-      className={`state-breakdown${run.project || run.source_kind === 'project' ? ' project-state' : ''}`}
-    >
+    <dl className={`state-breakdown${run.project ? ' project-state' : ''}`}>
       <div>
         <dt>执行</dt>
         <dd>{run.interrupted ? '运行已中断' : executionLabels[run.result.execution_status]}</dd>

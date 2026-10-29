@@ -95,6 +95,7 @@ it('续轮选择默认继承当前真实配置，清空覆盖不会恢复旧首�
     /* 检查真实 HTTP 边界的配置值。 */ () => expect(createFollowup).toHaveBeenCalledOnce(),
   );
   expect(vi.mocked(createFollowup).mock.calls[0][1].config).toEqual({
+    auto_repair: false,
     skills: [],
     limits: { max_model_turns: 7 },
   });
@@ -154,4 +155,34 @@ it('接纳新轮后沿用其实际选择，活动运行允许预选但不提交'
   expect(host.result.current.canSend).toBe(false);
   act(/* 活动任务期间的发送直接忽略。 */ () => host.result.current.send());
   expect(createFollowup).not.toHaveBeenCalled();
+});
+
+it('自动修复默认继承，网络重试不改变已冻结开关，后续新消息使用新选择', async () => {
+  // 发送期间关闭只影响下一条，不能撤改已接纳或结果未知的执行策略。
+  vi.mocked(createFollowup)
+    .mockRejectedValueOnce(new Error('网络断开'))
+    .mockResolvedValueOnce(
+      makeRun({ run_id: 'run-b', config: { ...makeRun().config, auto_repair: true } }),
+    );
+  const host = setup(makeRun({ config: { ...makeRun().config, auto_repair: true } }));
+  expect(host.result.current.autoRepair).toBe(true);
+  act(
+    /* 明确发送。 */ () => {
+      host.result.current.setText('继续修复');
+    },
+  );
+  act(/* 冻结当前开关。 */ () => host.result.current.send());
+  await waitFor(
+    /* 网络未知，等待用户确认。 */ () => expect(host.result.current.confirming).toBe(true),
+  );
+  const original = vi.mocked(createFollowup).mock.calls[0];
+  expect(original[1].config?.auto_repair).toBe(true);
+  act(/* 为下一条关闭修复。 */ () => host.result.current.setAutoRepair(false));
+  act(/* 确认旧请求。 */ () => host.result.current.send());
+  await waitFor(/* 收到真实确认才推进父轮。 */ () => expect(host.confirmed).toHaveBeenCalledOnce());
+  expect(vi.mocked(createFollowup).mock.calls[1]).toEqual(original);
+  host.rerender({
+    latest: makeRun({ run_id: 'run-b', config: { ...makeRun().config, auto_repair: true } }),
+  });
+  expect(host.result.current.autoRepair).toBe(false);
 });

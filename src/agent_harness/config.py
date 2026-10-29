@@ -166,7 +166,6 @@ def prepare_task(
     workspace: Path,
     verifier_path: Path | None = None,
     verifier_timeout: float = 30.0,
-    expected_outputs: list[str] | None = None,
     *,
     python_paths: list[str] | None = None,
     python_executable: str | None = None,
@@ -184,7 +183,7 @@ def prepare_task(
         execution = prepare_python_execution(resolved_workspace, python_paths, python_executable=python_executable)
         if verifier is not None:
             verifier = verifier.model_copy(update={"argv": python_command(verifier.argv, execution)})
-        return TaskSpec(prompt=prompt, workspace=resolved_workspace, python_execution=execution, verifier=verifier, expected_outputs=expected_outputs or [])
+        return TaskSpec(prompt=prompt, workspace=resolved_workspace, python_execution=execution, verifier=verifier)
     except ValidationError as error:
         raise ConfigurationError(_validation_message("任务参数", error)) from None
     except PythonExecutionError as error:

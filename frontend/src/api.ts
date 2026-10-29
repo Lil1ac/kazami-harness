@@ -52,17 +52,6 @@ export function getOptions(signal?: AbortSignal): Promise<OptionsResponse> {
   return request('/api/options', { signal });
 }
 
-/** 分页查询历史任务；status 为空时不筛选，返回列表和总数。 */
-export function getRuns(
-  offset: number,
-  status: string,
-  signal?: AbortSignal,
-): Promise<{ items: RunView[]; total: number; busy_run_id: string | null }> {
-  const query = new URLSearchParams({ offset: String(offset), limit: '12' });
-  if (status) query.set('status', status);
-  return request(`/api/runs?${query}`, { signal });
-}
-
 /** 提交新任务，返回已登记视图；失败时调用方保留表单内容。 */
 export function createRun(body: CreateRunRequest): Promise<RunView> {
   return request('/api/runs', {
@@ -173,7 +162,11 @@ export function saveProjectSettings(
   return request('/api/projects/' + encodeURIComponent(id) + '/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ test_command: command, test_timeout_seconds: seconds, python_executable: pythonExecutable }),
+    body: JSON.stringify({
+      test_command: command,
+      test_timeout_seconds: seconds,
+      python_executable: pythonExecutable,
+    }),
   });
 }
 

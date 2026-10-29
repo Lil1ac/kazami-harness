@@ -26,7 +26,7 @@ Vite默认在127.0.0.1:5173提供页面，将/api代理到127.0.0.1:8765。前�
 ## 2. 操作流程
 
 - **打开项目**：首页点击“选择项目文件夹”，从 Windows 系统窗口选择本机 Git 根目录或普通文件夹；已登记项目从侧栏进入。直接修改所选目录；只有明确创建 Git 工作树时才更换执行位置；取消保留输入且不执行。详细协议见 [打开本机项目](LOCAL_PROJECTS.md)。
-- **普通任务**：打开输入所在目录，填写任务、声明可选预期产物，再开始执行。任务产物可以是代码、文本、CSV等格式；不要求输出JSON。未选择验收器时最终明确显示“未验收”。
+- **普通任务**：打开输入所在目录，填写任务并开始执行，结束后自动收集本轮新增、修改文件。任务产物可以是代码、文本、CSV等格式；不要求输出JSON。未选择验收器时最终明确显示“未验收”。
 - **运行详情**：消息区展示用户要求、Markdown回答和折叠过程；右侧或手机抽屉按轮查看测试、代码、产物、上下文、完整轨迹与预算，工具参数/输出继续按纯文本展开。产物提供64KiB以内UTF-8文本预览，二进制文件可下载。
 - **运行配置**：修改模型、五类工具和模型轮次、工具次数、总时限，仅影响本浏览器之后提交的任务；刷新页面恢复宿主默认。正在运行的配置不变，页面不修改服务端TOML。
 - **取消**：明确点击并确认取消后，先显示正在取消，后端清理完成后才显示终态。刷新、页面切换、关闭网页或SSE断开只清理订阅，不取消Agent。
@@ -85,16 +85,15 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 
 | 方法与路径 | 请求/返回含义 |
 | --- | --- |
-| GET /api/options | 默认配置、密钥存在、工作区/验收/项目、最近项目、选择器能力与忙碌任务ID |
+| GET /api/options | 默认配置、密钥存在、统一 recent_projects 项目列表、验收器、技能、选择器能力与忙碌任务ID；不返回重复的 projects/workspaces |
 | POST /api/projects/pick | 系统选择目录；取消不登记，成功返回项目选项，不启动任务 |
 | POST /api/projects/{id}/open | 重新核验已登记目录并更新最近时间，返回项目选项 |
-| PUT /api/projects/{id}/settings | 显式保存 Git 项目的测试命令与秒级超时；保存不执行 |
-| POST /api/runs | 接收prompt、workspace_id/project_id二选一、项目base_ref或普通verifier_id、expected_outputs及config；成功202，忙碌409 |
-| GET /api/runs | offset从0开始，limit为1至100，可按执行status筛选；返回逐运行items/total/busy_run_id |
+| PUT /api/projects/{id}/settings | 从项目设置保存解释器；Git 项目还可保存测试命令与秒级超时；保存不执行 |
+| POST /api/runs | 接收prompt、workspace_id/project_id二选一、项目base_ref或普通verifier_id、config；成功202，忙碌409 |
 | GET /api/conversations | 先聚合会话再按project_id、最新轮status筛选及offset/limit分页；返回会话摘要items/total/busy_run_id |
 | GET /api/runs/{id} | 返回统一RunView，不恢复执行 |
 | GET /api/runs/{id}/conversation | 返回所属会话的逐轮要求/回答、最新轮与可继续条件；只读 |
-| POST /api/runs/{id}/followups | request_id、prompt及可选config/expected_outputs，成功202；同编号同载荷复用原运行，不重放 |
+| POST /api/runs/{id}/followups | request_id、prompt及可选config，成功202；同编号同载荷复用原运行，不重放 |
 | POST /api/runs/{id}/cancel | 幂等请求取消，返回视图；任务可能仍在清理 |
 | GET /api/runs/{id}/events | 返回seq>after的分页事件，limit为1至500；last_seq是当前磁盘有效最大序号 |
 | GET /api/runs/{id}/stream | SSE补发与持续订阅，支持after和Last-Event-ID，取较大非负游标 |
@@ -106,7 +105,7 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 
 RunView包含run_id、prompt、workspace、created_at、result、phase、event_count、last_seq、active、cancelling、interrupted、warnings、本次config、可空project审阅详情及可空context上下文详情；追加session_id、可空parent_run_id及从1开始的turn_index描述用户轮次。result继续使用RunResult及可空verification；毫秒、字节、字符等单位沿用后端定义。用户消息、工具输出、日志、指令和补丁按纯文本转义，Agent最终回答按受限Markdown渲染，不启用原始HTML。
 
-config覆盖只接受requested_model、tools、skills、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，尚未准备时为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
+config覆盖只接受requested_model、tools、skills、auto_repair、limits和context；limits/context按字段合并，分别复用RunLimits/ContextPolicy严格校验。提交配置不会改写宿主默认值。context保存本次指令快照与最新输入检查，尚未准备时为null；配置、事件和大小单位见 [上下文管理](CONTEXT_MANAGEMENT.md)。受控错误统一为{error:{code,message}}；校验错误不回显输入值、密钥或底层异常正文。
 
 SSE逐条发送event=run_event、id=seq、data=完整RunEvent；每10秒注释心跳。终态或无活动任务的中断历史补齐已落盘事件后发送stream_end，其中包含last_seq与interrupted。前端按run_id+seq排序去重、遇缺口补历史；重新建立连接时显式携带游标，收到终止通知后重新查询持久化快照。
 
@@ -134,6 +133,9 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_web_fixture.py
 该服务位于8766，仅使用脚本化模型，仍执行真实工具和验收，记录写入.runtime/browser-runs；它不证明真实模型能力。普通serve不启用这个替身。多轮页面的专用离线服务为 `uv --cache-dir .uv-cache run python tests/helpers/serve_conversation_fixture.py`，默认18771；预设files/code分别验证普通文件与Git项目，首轮输入 `first`、追加输入 `second`，记录保存在 `.runtime/conversation-browser/runs`。真实模型从页面运行会使用后端环境密钥并消耗额度，结果按实际记录核对。
 
 当前为本地单用户、单任务运行控制台。CSV/目录清单样例、demo 入口及后续恢复/容器/自优化的阶段安排统一见 [项目概览](../PROJECT.md)。缓存、依赖和本地输出保留原路径，只由 `.vscode/settings.json` 在编辑器文件树隐藏；`.runs/` 与 `.runtime/` 不因整理而删除或迁移。
+
+
+文件收集在Runner唯一终态之前完成，使用artifact_collection_started、artifact_registered、artifacts_collected事件；收尾阶段展示“整理交付文件”并继续占用单槽。RunResult.artifact_status为pending/complete/incomplete，artifact_warnings为采集受限的受控说明。命令和文件工具生成的本轮新增、修改文件自动进入产物列表，失败或取消后的实际成果仍保留；既有未修改文件、依赖缓存不列为新产物，删除仅在差异中查看。CLI产物也从该轮固定快照下载，读取不回退当前目录。
 
 ## 7. 已保留的验证证据
 
@@ -515,6 +517,84 @@ Git 隔离改为一个会话一个工作树，prepare_turn 只登记新轮证据
 共14次离线模型轮次、11次工具调用，供应商HTTP尝试为0。重启读取未创建额外运行，两轮核心记录SHA保持；第三轮未产生代码差异，首轮固定产物与差异仍与第一轮结束时一致。此验收证明功能链路，不用于推算真实模型成功率或调用成本收益。
 
 证据：[后端完整回归](../.runtime/newline-edit-tests/backend-full.txt)、[前端完整回归](../.runtime/newline-edit-tests/frontend-full.txt)、[页面事实核对](../output/playwright/newline-edit-20261028/proof.json)、[第二轮差异](../output/playwright/newline-edit-20261028/second-code.png)、[冲突原因](../output/playwright/newline-edit-20261028/conflict-message.png)。专属项目和运行记录保留于 `D:/Codex/Temp/harness-newline-edit-browser-20261028`。
+
+### 2026-10-28：自动收集本轮文件，删除手工预期产物
+
+CLI、原目录及Git隔离运行统一按本轮开始/结束文件证据登记新增、修改文件，包括命令生成的文件；未修改的旧文件、依赖缓存及运行记录不列入，删除只保留在差异。Git隔离复用已有结束快照，逐轮产物与累计代码审阅分别按各自基线计算。Runner在唯一终态之前固定证据，失败、超时或取消已经产生的文件同样可以保存。
+
+删除前端“预期产物”、请求与任务的expected_outputs、结果missing_artifacts及CLI --expected-output。artifact_status与artifact_warnings独立描述收集状态；超限不改写执行、测试和清理结论，没有可信索引时也不宣称没有文件变化。所有工作区下载读取固定快照，移除当前目录下载回退。
+
+验收结果：
+
+- 后端全量 **658 passed、10 skipped**，312.63秒；跳过来自Windows链接权限及POSIX能力。全量收集后新增的CLI回归另行通过；最后收紧下载路径后，CLI/逐轮收集/Web下载/原目录的受影响回归 **46 passed、1 skipped**，31.19秒，已包含该新增CLI用例。
+- 前端全量 **22个文件、103项通过**，93.54秒；最终补充空索引的错误提示后，产物面板 **3项通过**。TypeScript检查、生产构建通过；保留既有JSDOM样式模拟与Vite包体积提示。
+- 页面使用专属18808离线服务，真实执行命令、Git、项目检查与文件采集。只在夹具中将快照预算缩小到4096字节，产品默认预算保持。三轮隔离任务共用一个工作树，重启和刷新读取没有新增运行；普通目录保持原地执行。
+
+| 场景 | 运行ID | 页面与证据结果 |
+| --- | --- | --- |
+| 隔离首轮 | 0c54539c-7521-4103-8e6f-6aa83741b76f | 自动收集app.py、report.json、image.bin，项目检查通过；USER.txt与缓存不列为新产物 |
+| 隔离续轮 | 401de4f9-4af5-4b27-a02a-83497bbce3bc | 自动收集三个修改文件，检查通过；首轮文本及二进制下载仍为原字节 |
+| 重启后第三轮 | 4eafc748-e412-457a-8a56-5bf93ad8328f | 只收集extra.txt，检查通过；累计代码审阅仍显示四个改动文件 |
+| 普通目录采集超限 | 2df81a64-ad83-4d40-8b2c-00f45394b0d4 | 4097字节文件真实保留在目录；completed/unverified、收集incomplete，页面明确告警并保留stdout/stderr下载 |
+
+共8次离线模型轮次、4次工具调用，供应商HTTP尝试为0。前两轮43个固定证据文件的SHA-256、来源仓库代码、用户未提交文件和Git索引保持；四轮摘要与API结果一致，artifacts_collected均在唯一run_finished之前，所有登记文件均可下载。第三轮后首轮页面仍显示round=1；390×844手机预览可用，页面宽与滚动宽均390。主动停服期间有1次预期连接拒绝，最终普通目录页面控制台0错误、0警告。初次下载核对将Windows文本换行误写成LF预期，已按命令实际写出的CRLF字节重新核对；没有为验收改变产品文件行为。
+
+证据：[后端全量](../.runtime/auto-artifacts-tests/backend-full.txt)、[最终下载回归](../.runtime/auto-artifacts-tests/download-final.txt)、[前端全量](../.runtime/auto-artifacts-tests/frontend-full.txt)、[最终产物面板](../.runtime/auto-artifacts-tests/panel-final.txt)、[页面事实核对](../output/playwright/auto-artifacts-20261028/proof.json)、[第三轮产物](../output/playwright/auto-artifacts-20261028/third-artifacts.png)、[历史预览](../output/playwright/auto-artifacts-20261028/first-after-third.png)、[手机历史预览](../output/playwright/auto-artifacts-20261028/mobile-history.png)、[采集不完整](../output/playwright/auto-artifacts-20261028/incomplete.png)。专属浏览器与18808服务已关闭，项目及记录保留于 `D:/Codex/Temp/harness-auto-artifacts-browser-20261028`；该验收说明工程链路，不用于推算真实模型任务成功率或成本收益。
+
+### 2026-10-29：公开项目测试失败后的自动修复
+
+获批目标为公开项目测试失败后的完整修复闭环：默认关闭、最多两次修复，在同一 Run 中共享消息、压缩状态、工作区和模型/工具/时间总预算。独立检查不回传，错误、超时、取消或清理异常不触发修复。前端和 CLI 同步接入；逐次失败输出保存，最终文件只固化一次。
+
+后端完整回归 678 passed、10 skipped，433.23秒。跳过为 Windows 符号链接权限和 POSIX FIFO；第一次完整回归的两项取消阶段断言失败后，已修复为收尾前固定取消阶段，原断言保持，相关26项复验通过。前端完整23文件112项通过；取消后文案改为当前代码尚未取得新检查结果，组件追加停止状态后3项复验通过。并行界面修改保留后，相关后端30项、前端4文件18项复验通过；17:58的合并源码类型检查与生产构建通过，构建期间源码哈希保持。既有Vite大包提示保留。并行界面任务仍在迭代，其后续改动由该任务继续做整体验收。
+
+独立18809服务使用离线模型，实际执行文件工具、Git、Python测试与快照；供应商HTTP尝试为0。运行记录保留于D:/Codex/Temp/harness-auto-repair-browser-20261029。
+
+| 用户轮次 | 运行ID | 事实 |
+| --- | --- | --- |
+| 1 | 14f9c28e-43cf-4443-8e38-d658ddf9e4ee | 开启后首次失败，一次修复通过；4次模型、2次工具 |
+| 2 | 6040f7ae-a302-479f-a3aa-8c941f0dcdb4 | 重启后继承开启，三次检查失败/失败/通过；6次模型、3次工具 |
+| 3 | 31e62d54-2e47-4237-a483-ba338391ecb6 | 页面关闭修复，只检查一次且失败；2次模型、1次工具 |
+| 4 | d66d7f2b-00b8-4235-af6b-80bc83af94ff | 修复中环境中断，无终态；重启只读显示中断，保留首次失败和流，不自动续跑 |
+| 5 | ed69ac8a-56c3-45e7-beac-47076961ba5f | 页面明确继续，在修复中主动停止；api_user取消，当前未验收，首次失败仍可下载 |
+
+五轮共18次离线模型请求、8次工具调用、8次真实检查。16份检查原始输出下载字节与磁盘一致；首轮17个固定证据SHA-256保持，源码索引及原有USER.txt保持。四个正常收尾运行的summary与API一致，且artifacts_collected在唯一run_finished前；第四轮中断没有伪造终态。390×844手机页面宽与滚动宽均390，首轮代码预览仍为ROUND=1；最终浏览器控制台0错误、0警告。
+
+验收操作曾被自动审批服务的账户用量限制拦截，未执行点击；恢复后另起第五轮完成页面主动取消。一次只读验证脚本把interrupted误当作execution_status，已按真实RunView.interrupted契约修正，未修改产品状态或放宽断言。结论仅说明工程功能链路，不用于推算真实模型的成功率和收益。
+证据：[后端全量](../.runtime/auto-repair-tests/backend-final.txt)、[前端全量](../.runtime/auto-repair-tests/frontend-full.txt)、[合并后端复验](../.runtime/auto-repair-tests/integrated-final.txt)、[合并前端复验](../.runtime/auto-repair-tests/frontend-integrated.txt)、[类型检查](../.runtime/auto-repair-tests/typecheck-final.txt)、[构建](../.runtime/auto-repair-tests/build-final.txt)、[构建期间源码稳定性](../.runtime/auto-repair-tests/build-consistency.json)、[页面事实与下载哈希](../output/playwright/auto-repair-20261029/proof.json)。截图：[两次修复历史](../output/playwright/auto-repair-20261029/second-history.png)、[重启读取中断记录](../output/playwright/auto-repair-20261029/restarted-interrupted.png)、[合并界面取消结果](../output/playwright/auto-repair-20261029/integrated-cancelled.png)、[手机历史检查](../output/playwright/auto-repair-20261029/mobile-history.png)、[手机首轮产物](../output/playwright/auto-repair-20261029/mobile-first-artifact.png)。
+
+本次专属18809服务和浏览器已关闭，代码、运行记录及截图保留。按用户要求未暂存、提交或推送；原有自动产物收集与并行界面改动均保留。
+
+
+## 2026-10-29 工作台精简与界面统一
+
+按获批 Plan 完成一轮前后端同步调整。删除已被会话列表取代的 `getRuns`、`GET /api/runs` 和 `RunManager.list_runs`，以及 `/tasks`、`/tasks/{id}` 页面入口；`POST /api/runs` 与逐轮详情、事件、产物接口继续使用当前协议。`GET /api/options` 只提供 `recent_projects` 作为项目列表，删除重复的 `projects/workspaces` 响应、前端拼装回退与两套选项类型。宿主 TOML 的项目和普通目录登记仍各自承担配置职责。
+
+长期 Python/公开测试配置迁入项目页“项目设置”，任务草稿在跨页往返时保留；提交表单只收集当次执行方式、基线、技能和自动修复等选择，没有宿主验收器可选时不展示空下拉框。详情统一为结果、文件、诊断：当前及历次检查保留完整证据；本地与隔离共用文件清单、补丁下载和分文件差异组件，增删行与两侧行号可读，二进制与重命名仍以结构化清单为准。上下文、配置与原始事件收进诊断，切换轮次或分类复位详情滚动，事件刷新保持位置。
+
+以同一份暖灰/橙色设计变量重写全站样式，覆盖新建、项目、全部会话、持续对话、设置、详情、预览及手机抽屉，删除旧布局选择器与重复覆盖。修正当前 Ant Design 标签内容容器的边距与滚动、发送按钮宽度和输入提示对比度；桌面和390px手机无整页横向溢出。移除退役列表的缓存刷新；旧清单专属测试改为当前格式准备中断不补造指令的有效边界测试，不增加版本兼容实现。原有自动修复与产物收集改动均保留。
+
+### 验收结果
+
+- 后端相关回归：`tests/web`、自动修复与产物收集核心共164项通过、1项Windows符号链接权限跳过；最后当前导航契约/准备中断两项补验通过。临时项目置于仓库外的D盘目录，避免“普通目录”被祖先Git仓库识别为子目录。
+- 前端默认 `npm.cmd --prefix frontend test`：25文件、116项通过；最后详情/状态14项及轨迹2项补验通过。默认测试并行上限设为3，保留原交互超时与断言。
+- 类型检查和生产构建通过。Vite仍提示主包超过500kB；本轮未新增运行依赖。
+- 18819专属离线服务完成4次真实执行：原目录两轮修改并通过项目测试、第三轮由页面取消；另一个隔离会话完成修复与测试，并由页面保留工作树。隔离请求明确携带自动修复开关。历史列表只有2个会话，分别1轮与3轮，最新取消没有覆盖首轮测试结果。
+- 首轮产物在第二轮覆盖同名文件后仍返回首轮字节；原目录模式没有保留/丢弃操作，隔离模式保留审阅入口。手机详情抽屉宽390px，页面宽390px。文件区滚动至88px后切换诊断，滚动归零；浏览器错误与警告为0。
+
+本次使用离线模型替身，目录选择器返回专属测试目录；文件工具、Git、Python项目测试与快照访问真实执行，不评估真实模型成功率或成本。原生系统目录弹窗未在本轮重新操作。
+
+证据：[页面与固定事实](../output/playwright/ui-refresh-20261029/proof.json)、[后端相关回归](../.runtime/ui-refresh/backend-final.txt)、[当前契约补验](../.runtime/ui-refresh/format-contract-final.txt)、[前端默认回归](../.runtime/ui-refresh/frontend-default-final.txt)、[最终布局补验](../.runtime/ui-refresh/final-layout-tests.txt)、[构建](../.runtime/ui-refresh/build-final.txt)、[类型检查](../.runtime/ui-refresh/typecheck-final.txt)。
+
+| 步骤 | 检查与结果 | 截图 |
+| --- | --- | --- |
+| 1 | 新建输入、项目设置与草稿往返通过 | [新建](../output/playwright/ui-refresh-20261029/01-start-desktop.png)、[项目设置](../output/playwright/ui-refresh-20261029/02-project-settings.png) |
+| 2 | 测试结果、旧轮回看与固定输入通过 | [会话结果](../output/playwright/ui-refresh-20261029/03-conversation-result.png) |
+| 3 | 原目录分文件差异与固定产物预览通过 | [文件差异](../output/playwright/ui-refresh-20261029/04-files-diff.png)、[源码预览](../output/playwright/ui-refresh-20261029/05-artifact-preview.png) |
+| 4 | 诊断收纳、事件与滚动复位通过 | [诊断](../output/playwright/ui-refresh-20261029/06-diagnostics.png) |
+| 5 | 390px会话和详情抽屉通过 | [手机会话](../output/playwright/ui-refresh-20261029/07-mobile-conversation.png)、[手机详情](../output/playwright/ui-refresh-20261029/08-mobile-result.png) |
+| 6 | 全局模型、工具及预算分区通过 | [桌面设置](../output/playwright/ui-refresh-20261029/09-settings-desktop.png)、[手机设置](../output/playwright/ui-refresh-20261029/10-settings-mobile.png) |
+| 7 | 隔离工作树与独立审阅操作通过 | [隔离审阅](../output/playwright/ui-refresh-20261029/11-isolated-review.png) |
+| 8 | 项目/全局按会话聚合，最新状态正确 | [全部会话](../output/playwright/ui-refresh-20261029/12-history-desktop.png)、[项目](../output/playwright/ui-refresh-20261029/13-project-desktop.png) |
 
 ## 2026-10-29 V0.2 当前实现可靠性复验
 

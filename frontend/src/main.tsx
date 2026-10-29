@@ -22,23 +22,24 @@ createRoot(document.getElementById('root')!).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: '#c6653d',
-          colorInfo: '#c6653d',
+          colorPrimary: '#b95632',
+          colorInfo: '#b95632',
           colorSuccess: '#3e7759',
           colorWarning: '#a67529',
           colorError: '#b7473f',
-          colorText: '#292d29',
-          colorTextSecondary: '#777d75',
-          colorBgContainer: '#ffffff',
-          colorBorder: '#dedfd8',
-          borderRadius: 5,
-          fontFamily: 'Inter, "Segoe UI", "Microsoft YaHei", sans-serif',
+          colorText: '#292821',
+          colorTextSecondary: '#77756b',
+          colorTextPlaceholder: '#8c897e',
+          colorBgContainer: '#fffefa',
+          colorBorder: '#dfdace',
+          borderRadius: 8,
+          fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif',
           controlHeight: 36,
         },
         components: {
           Button: { primaryShadow: 'none' },
-          Tabs: { horizontalItemGutter: 28 },
-          Tag: { defaultBg: '#eeefe9' },
+          Tabs: { horizontalItemGutter: 30 },
+          Tag: { defaultBg: '#eeece4' },
         },
       }}
     >

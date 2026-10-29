@@ -7,10 +7,10 @@
 1. 按 README 构建前端并启动 `harness serve --config harness.example.toml`。
 2. 点击“选择项目文件夹”，在系统窗口选择真实目录。取消保留已输入文字，不登记目录、不创建运行、不调用模型。
 3. 输入框附近显示目录名、实际路径和执行方式；Git 分支和提交收在高级设置。侧栏点击项目进入会话列表，再新建或继续已有对话；读取列表不改变打开时间。
-4. 输入任务后发送，直接修改所选目录。高级设置可选择技能、预期产物或项目测试；Git 项目可明确选择“创建独立 Git 工作树（更换目录）”，此时才显示提交基线。执行位置不从文字草稿恢复。
+4. 输入任务后发送，直接修改所选目录。高级设置可选择技能和自动修复；测试命令与解释器在项目设置保存；Git 项目可明确选择“创建独立 Git 工作树（更换目录）”，此时才显示提交基线。执行位置不从文字草稿恢复。
 5. 在会话中查看工具轨迹、产物、测试与代码差异，并继续发送要求。原目录修改已经生效；隔离 Git 会话共用一个工作树，仅最新轮提供保留/丢弃，旧轮证据只读。
 
-新任务文字、基线和预期产物保存在当前浏览器标签页的 sessionStorage；调整配置或刷新后可以继续编辑，后端明确接纳后清除。最近选中项目只在浏览器保存编号。密钥继续来自服务进程环境，不通过项目设置保存。
+新任务文字保存在当前浏览器标签页的 sessionStorage；调整配置或刷新后可以继续编辑，后端明确接纳后清除。最近选中项目只在浏览器保存编号。密钥继续来自服务进程环境，不通过项目设置保存。
 
 ## 2. 目录与执行方式
 
@@ -32,6 +32,8 @@
 
 会话页始终显示“所选目录／独立 Git 工作树”和实际执行路径。会话执行方式固定，记录按当前格式核验。
 
+Runner在终态前固定结束证据，自动登记本轮新增、修改的文件；未修改的已有文件不列为新产物，删除只出现在差异中。采集状态通过artifact_status与artifact_warnings独立展示。
+
 每轮原目录执行前后分别采集有界快照（各最多1000项、16MiB），排除 Git 控制目录、常见依赖缓存及服务记录/工作树目录。报告相对该轮开始状态，而非 HEAD；二进制保留原始快照并列出变化，文本差异最多32MiB。它是审阅记录，不提供自动回滚或二进制补丁应用。采集超限、特殊文件或读取期间变化时明确报告不完整；实际目录仍可执行和继续，不因为差异限制强制改到副本。
 
 原目录运行的历史工作区产物从该轮结束快照取回，后续覆盖同名文件不会改变旧轮下载；快照缺失或损坏返回409，不冒充旧产物返回当前内容。隔离模式的既有产物访问规则保持。记录在 `.local-before/<run_id>`、`.local-after/<run_id>` 和 `.local-changes/<run_id>`，都位于受保护的 runs_root 中。
@@ -40,7 +42,7 @@
 
 ## 3. 项目测试与最近记录
 
-所有真实项目的“高级设置”可保存 Python 解释器，空白按 PATH；Git 项目另外可保存测试命令和超时（秒，必须大于 0 且不超过 3600）。例如：
+所有真实项目的“项目设置”可保存 Python 解释器，空白按 PATH；Git 项目另外可保存测试命令和超时（秒，必须大于 0 且不超过 3600）。例如：
 
 ```text
 D:\projects\AgentHarness\.venv\Scripts\python.exe -m pytest -q
@@ -60,7 +62,7 @@ TOML 的 projects/workspaces 仍可作为初始配置；明确打开的同路径
 
 | 方法与路径 | 请求与响应 |
 | --- | --- |
-| `GET /api/options` | 返回 `recent_projects`、`folder_picker_available`，以及已有配置、projects/workspaces、验收器、技能和忙碌状态；列表属于同一次登记快照 |
+| `GET /api/options` | 返回 `recent_projects`、`folder_picker_available`，以及默认配置、验收器、技能和忙碌状态；项目来源统一使用 recent_projects，不再返回 projects/workspaces；列表属于同一次登记快照 |
 | `POST /api/projects/pick` | 无需路径请求体，等待系统窗口；成功返回 `{cancelled:false,project:LocalProjectOption}`，取消返回 `{cancelled:true,project:null}` |
 | `POST /api/projects/{id}/open` | 只接受已登记编号，重新检查目录并更新最近时间；返回 `LocalProjectOption` |
 | `PUT /api/projects/{id}/settings` | JSON：`test_command`（最多 4096 字符，可空）与 `test_timeout_seconds`（默认 30）；只支持 Git 项目，返回更新后的 `LocalProjectOption` |

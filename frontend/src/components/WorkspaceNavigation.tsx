@@ -12,7 +12,6 @@ import {
 } from '@ant-design/icons';
 import { Link, NavLink, useLocation, useMatch } from 'react-router';
 import { errorMessage, getConversation, getConversations, getOptions, getRun } from '../api';
-import { localProjects } from '../projects';
 import type { LocalProjectOption } from '../types';
 
 /** 项目下按会话展示最新五条，展开才查询；更多会话由项目页完整分页。 */
@@ -184,8 +183,8 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
         <div className="sidebar-projects-title">项目</div>
         {options.error && <p className="sidebar-query-error">无法刷新项目列表</p>}
         {options.data ? (
-          localProjects(options.data).length ? (
-            localProjects(options.data).map(
+          options.data.recent_projects.length ? (
+            options.data.recent_projects.map(
               /* 项目包含自己的会话集合。 */ (project) => (
                 <ProjectGroup
                   key={project.id}

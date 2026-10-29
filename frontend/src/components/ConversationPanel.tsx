@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Button, Input } from 'antd';
+import { Alert, Button, Checkbox, Input } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { phaseLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
@@ -67,7 +67,8 @@ function TurnMessage({
           active={Boolean(selected && run?.active)}
           phase={phaseLabel(run?.phase || 'created')}
           onInspect={
-            /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () => onInspect(turn.run_id, 'trace')
+            /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () =>
+              onInspect(turn.run_id, 'diagnostics')
           }
         />
         {turn.final_answer ? (
@@ -85,15 +86,15 @@ function TurnMessage({
           <span>{turnStatus(turn.execution_status, turn.validation_status, interrupted)}</span>
           <button
             type="button"
-            onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'overview')}
+            onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'result')}
             aria-label={'查看第 ' + turn.turn_index + ' 轮详情'}
           >
             本轮详情
           </button>
-          {run?.project && (
+          {(run?.project || run?.local_changes) && (
             <button
               type="button"
-              onClick={/* 代码差异和审阅属于所选轮。 */ () => onInspect(turn.run_id, 'code')}
+              onClick={/* 代码差异和审阅属于所选轮。 */ () => onInspect(turn.run_id, 'files')}
             >
               代码改动
             </button>
@@ -231,19 +232,39 @@ export function ConversationPanel({
               {conversation.continuation_notice}
             </p>
           )}
-          <details className="composer-skills">
-            <summary>下一轮技能 · {send.skills.length ? send.skills.join('、') : '未选择'}</summary>
-            <SkillSelector
-              label="下一轮技能"
-              options={skills}
-              selected={send.skills}
-              onChange={send.setSkills}
-              disabled={!run}
-            />
-            {send.confirming && (
-              <p className="muted">重试确认仍使用原请求的技能选择；这里的修改用于下一条新消息。</p>
-            )}
-          </details>
+          {(skills.length > 0 ||
+            send.skills.length > 0 ||
+            run?.verification_kind === 'project_tests') && (
+            <details className="composer-skills">
+              <summary>
+                {run?.verification_kind === 'project_tests' ? '下一轮设置' : '下一轮技能'} ·{' '}
+                {send.skills.length ? send.skills.join('、') : '未选择'}
+              </summary>
+              <SkillSelector
+                label="下一轮技能"
+                options={skills}
+                selected={send.skills}
+                onChange={send.setSkills}
+                disabled={!run}
+              />
+              {run?.verification_kind === 'project_tests' && (
+                <Checkbox
+                  checked={send.autoRepair}
+                  onChange={
+                    /* 下一条要求沿用自己的预算；重试使用原请求冻结值。 */ (event) =>
+                      send.setAutoRepair(event.target.checked)
+                  }
+                >
+                  测试失败自动修复（最多2次）
+                </Checkbox>
+              )}
+              {send.confirming && (
+                <p className="muted">
+                  重试确认仍使用原请求的技能选择；这里的修改用于下一条新消息。
+                </p>
+              )}
+            </details>
+          )}
           <form className="message-composer" onSubmit={submit}>
             <Input.TextArea
               aria-label="输入消息"

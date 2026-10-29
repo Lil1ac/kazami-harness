@@ -20,9 +20,9 @@ from agent_harness.tools import ToolExecutor
 TOOLS = ["read_file", "search_files", "write_file", "run_command"]
 
 
-def _manifest(workspace: Path, *, expected=None, **limits) -> RunManifest:
+def _manifest(workspace: Path, **limits) -> RunManifest:
     """创建启用四工具并允许覆盖预算的任务，方便外部行为集成测试。"""
-    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="分析 app.log 并生成 report.json", workspace=workspace, expected_outputs=expected or []), config=RunConfig(tools=TOOLS, limits=RunLimits(**limits)))
+    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="分析 app.log 并生成 report.json", workspace=workspace), config=RunConfig(tools=TOOLS, limits=RunLimits(**limits)))
 
 
 def _call(identifier: str, name: str, arguments: dict) -> dict:
@@ -59,7 +59,7 @@ def test_four_tool_workflow_generates_script_and_report(tmp_path: Path):
         _reply(answer="已生成 report.json，ERROR 共2条。"),
     ]
     requests = []
-    value = _manifest(tmp_path, expected=["report.json"])
+    value = _manifest(tmp_path)
     outcome = asyncio.run(run_task(value, tmp_path / ".runs", "dummy-key", transport=_transport(replies, requests)))
     assert outcome.result.execution_status == "completed"
     assert outcome.result.validation_status == "unverified"
@@ -154,7 +154,9 @@ def test_cancelled_command_keeps_real_output_and_cleanup(tmp_path: Path):
     assert results[0]["result"]["data"]["cancelled"] is True
     assert "ready" in results[0]["result"]["data"]["stdout"]
     assert results[1]["result"]["error"]["code"] == "skipped_cancelled"
-    assert len(outcome.result.artifacts) == 2
+    assert len([item for item in outcome.result.artifacts if item.location == "run"]) == 2
+    assert {item.path for item in outcome.result.artifacts if item.location == "workspace"} == {"ready.txt"}
+    assert outcome.result.artifact_status == "complete"
     assert [event.type for event in history.events].count("run_finished") == 1
 
 
@@ -180,24 +182,6 @@ def test_command_timeout_is_returned_to_model_after_cleanup(tmp_path: Path):
     data = json.loads(requests[1]["messages"][-1]["content"])
     assert data["error"]["code"] == "command_timeout"
     assert data["data"]["timed_out"] is True
-
-
-def test_missing_expected_output_is_visible_without_claiming_validation(tmp_path: Path):
-    """模型声称结束但未生成声明文件时，在结果和事件中提示缺失，验收仍未验证。"""
-    value = _manifest(tmp_path, expected=["report.json"])
-    outcome = asyncio.run(run_task(value, tmp_path / ".runs", "dummy-key", transport=_transport([_reply(answer="结束")], [])))
-    assert outcome.result.validation_status == "unverified"
-    assert outcome.result.missing_artifacts == ["report.json"]
-    history = RunStore.read(tmp_path / ".runs", str(value.run_id))
-    assert any(event.type == "artifact_missing" for event in history.events)
-
-
-@pytest.mark.parametrize("relative", ["../outside.json", "records/report.json"])
-def test_invalid_expected_output_rejected_before_model(tmp_path: Path, relative: str):
-    """拒绝越界或位于运行记录目录的声明产物，且不创建半启动记录。"""
-    with pytest.raises(ConfigurationError):
-        asyncio.run(run_task(_manifest(tmp_path, expected=[relative]), tmp_path / "records", "dummy-key"))
-    assert not (tmp_path / "records").exists()
 
 
 @pytest.mark.parametrize("path", ["../outside", "/absolute", "C:/outside", "."])

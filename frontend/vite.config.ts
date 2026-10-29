@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 5173, strictPort: true, proxy: { '/api': 'http://127.0.0.1:8765' } },
   test: {
+    // 控制 Ant Design/jsdom 的同时加载数量，避免 Windows 上争用资源触发交互测试超时。
+    maxWorkers: 3,
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,

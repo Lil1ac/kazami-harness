@@ -38,7 +38,6 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
                 first = await finish(client, await client.post("/api/runs", json={
                     "project_id": app.state.fixture_project_id, "prompt": "修复加法函数并添加测试",
                     "config": {"tools": ["read_file", "search_files", "write_file", "edit_file", "run_command"]},
-                    "expected_outputs": ["calculator.py", "test_calculator.py"],
                 }))
                 assert first["result"]["execution_status"] == "completed", first
                 assert first["result"]["validation_status"] == "passed", first

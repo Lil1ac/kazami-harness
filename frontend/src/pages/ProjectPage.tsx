@@ -1,21 +1,29 @@
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Skeleton } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
-import { Link, useParams } from 'react-router';
+import { Alert, Button, Drawer, Skeleton } from 'antd';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { errorMessage, getOptions } from '../api';
-import { localProjects } from '../projects';
 import { ConversationHistory } from '../components/ConversationHistory';
+import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
 
 /** 一个项目的会话入口；新建与继续使用不同路由，读取本页不会发起任务。 */
 export function ProjectPage() {
   const { projectId = '' } = useParams();
+  const [params, setParams] = useSearchParams(); // 项目设置可从任务输入区直接打开，关闭后保留列表筛选。
+  /** 根据 open 显示或关闭设置抽屉；仅更新 URL，不改变项目或执行状态，返回 void。 */
+  function showSettings(open: boolean): void {
+    const next = new URLSearchParams(params);
+    if (open) next.set('settings', '1');
+    else next.delete('settings');
+    setParams(next, { replace: true });
+  }
   const options = useQuery({
     queryKey: ['options'],
     queryFn: /* 读取当前真实登记。 */ ({ signal }) => getOptions(signal),
     staleTime: 15000,
   });
   const project = options.data
-    ? localProjects(options.data).find(
+    ? options.data.recent_projects.find(
         /* 身份由宿主目录登记确定。 */ (item) => item.id === projectId,
       )
     : undefined;
@@ -42,19 +50,27 @@ export function ProjectPage() {
           <h1>{project.label}</h1>
           <p className="project-workspace-path">{project.path}</p>
         </div>
-        {project.available === false ? (
-          <Button type="primary" icon={<PlusOutlined />} disabled>
-            新建对话
-          </Button>
-        ) : (
-          <Link
-            to={'/runs?project=' + encodeURIComponent(project.id) + '&new=1'}
-            className="new-conversation-link"
-            aria-label="新建对话"
+        <div className="workspace-actions">
+          <Button
+            icon={<SettingOutlined />}
+            onClick={/* 明确打开当前项目设置。 */ () => showSettings(true)}
           >
-            <PlusOutlined /> 新建对话
-          </Link>
-        )}
+            项目设置
+          </Button>
+          {project.available === false ? (
+            <Button type="primary" icon={<PlusOutlined />} disabled>
+              新建对话
+            </Button>
+          ) : (
+            <Link
+              to={'/runs?project=' + encodeURIComponent(project.id) + '&new=1'}
+              className="new-conversation-link"
+              aria-label="新建对话"
+            >
+              <PlusOutlined /> 新建对话
+            </Link>
+          )}
+        </div>
       </header>
       {project.available === false && (
         <Alert
@@ -64,6 +80,15 @@ export function ProjectPage() {
         />
       )}
       <ConversationHistory key={projectId} projectId={projectId} />
+      <Drawer
+        title="项目设置"
+        open={params.get('settings') === '1'}
+        onClose={/* 关闭设置不发起任务或保存草稿。 */ () => showSettings(false)}
+        destroyOnHidden
+        styles={{ wrapper: { width: 'min(100vw, 480px)' } }}
+      >
+        <ProjectSettingsPanel key={project.id} project={project} />
+      </Drawer>
     </div>
   );
 }

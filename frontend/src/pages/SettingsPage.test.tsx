@@ -173,7 +173,7 @@ it('任务页选择技能后调整模型预算，不丢失已选择的技能', a
   });
   await user.click(await screen.findByText(/高级设置/));
   await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
-  await user.click(screen.getByRole('button', { name: '调整配置' }));
+  await user.click(screen.getByRole('link', { name: '调整模型与预算' }));
   await screen.findByLabelText('模型名称');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
   await screen.findByRole('status');

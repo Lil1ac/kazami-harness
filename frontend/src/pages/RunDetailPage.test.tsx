@@ -179,16 +179,26 @@ it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', asyn
   // 检查旧测试与继续最新代码可以同时进行，界面不会把旧轮变成新分支。
   const user = userEvent.setup();
   const first = runs.get('run-a')!;
-  first.python_execution = { workspace: first.workspace, executable: '/python/first', python_paths: [first.workspace, '/workspace/first-src'] };
+  first.python_execution = {
+    workspace: first.workspace,
+    executable: '/python/first',
+    python_paths: [first.workspace, '/workspace/first-src'],
+  };
   const second = sessionRun('run-b', 2, '补充类型提示');
-  second.python_execution = { workspace: second.workspace, executable: '/python/latest', python_paths: [second.workspace, '/workspace/latest-src'] };
+  second.python_execution = {
+    workspace: second.workspace,
+    executable: '/python/latest',
+    python_paths: [second.workspace, '/workspace/latest-src'],
+  };
   runs.set(second.run_id, second);
   record = { ...record, latest_run_id: second.run_id, turns: [...record.turns, turn(second)] };
-  show('/runs/run-a?tab=overview');
+  show('/runs/run-a?tab=result');
   const input = await screen.findByLabelText('输入消息');
   await user.type(input, '继续完善');
   await user.click(screen.getByRole('button', { name: '查看第 1 轮详情' }));
   expect(screen.getByText('第 1 轮详情')).toBeInTheDocument();
+  await user.click(screen.getByRole('tab', { name: '诊断' }));
+  await user.click(screen.getByText('运行配置与记录'));
   expect(await screen.findByText('/python/first')).toBeInTheDocument();
   expect(screen.getByText('/workspace · /workspace/first-src')).toBeInTheDocument();
   expect(screen.queryByText('/python/latest')).not.toBeInTheDocument();
@@ -240,7 +250,7 @@ it('旧上下文深链接在检查器显示完整运行快照，消息仍可阅�
     },
     serialization: 'json_utf8_v1',
   };
-  show('/runs/run-a?tab=context');
+  show('/runs/run-a?tab=diagnostics');
   expect(await screen.findByLabelText('项目指令内容')).toHaveTextContent('函数增加中文注释。');
   expect(screen.getByText(/拟请求第 4 轮 · 12 条消息/)).toBeInTheDocument();
   expect(screen.getByRole('log', { name: '会话消息' })).toBeInTheDocument();
@@ -311,7 +321,7 @@ it('GET发现已接纳新轮但快照尚未返回时保留输入节点和草稿'
   expect(screen.getByLabelText('输入消息')).toBe(input);
 });
 
-it('手机直接打开旧上下文链接时自动显示对应详情抽屉', async () => {
+it('手机直接打开诊断链接时自动显示对应详情抽屉', async () => {
   // 深链接应保留查看意图，不能被手机默认收起逻辑覆盖。
   const original = vi.mocked(window.matchMedia).getMockImplementation()!;
   vi.mocked(window.matchMedia).mockImplementation(
@@ -321,9 +331,9 @@ it('手机直接打开旧上下文链接时自动显示对应详情抽屉', asyn
     }),
   );
   try {
-    show('/runs/run-a?tab=context');
+    show('/runs/run-a?tab=diagnostics');
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(await screen.findByRole('tab', { name: '上下文', selected: true })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: '诊断', selected: true })).toBeInTheDocument();
   } finally {
     vi.mocked(window.matchMedia).mockImplementation(original);
   }

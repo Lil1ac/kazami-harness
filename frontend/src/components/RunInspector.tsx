@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useLayoutEffect, useRef } from 'react';
 import { Alert, Skeleton, Tabs } from 'antd';
 import { getRun, errorMessage } from '../api';
 import { duration, phaseLabel } from '../format';
@@ -16,60 +17,113 @@ import type { RunView } from '../types';
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
 export type RunEventView = ReturnType<typeof useRunEvents>;
 
-/** 检查面板输入；tab仅表示查看分类，不改变运行或会话状态。 */
+/** 检查面板输入；tab 仅控制阅读分类，历史轮不允许管理共享工作树。 */
 interface InspectorPanelsProps {
-  run: RunView; // 当前选择的实际运行。
-  events: RunEventView; // 对应该运行的事件窗口。
-  tab: string; // overview/code/artifacts/context/trace，只选择检查器分类。
-  onTab: (value: string) => void; // 把查看分类同步到URL。
-  historical?: boolean; // 旧轮固定只读，即使缓存中仍留有曾经的最新轮状态。
+  run: RunView; // 所选轮次的服务端快照。
+  events: RunEventView; // 对应该轮次的事件，不重复订阅最新轮。
+  tab: string; // result/files/diagnostics 三种查看分类。
+  onTab: (value: string) => void; // 只更新查看位置，不改变执行目标。
+  historical?: boolean; // true 表示历史只读，即使缓存仍保留过去的最新轮状态。
 }
 
-/** 独立显示选中运行的预算、测试、代码与轨迹；所有审阅决定仍由现有后端校验。 */
+/** 分离测试结果、交付文件和内部诊断；参数沿用真实运行事实，返回只读面板及明确的审阅入口。 */
 function InspectorPanels({ run, events, tab, onTab, historical = false }: InspectorPanelsProps) {
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
-  const keys = [
-    'overview',
-    'artifacts',
-    'context',
-    'trace',
-    ...(run.project || run.local_changes ? ['code'] : []),
-  ];
+  const container = useRef<HTMLDivElement>(null); // 仅定位详情滚动区，不触碰会话消息与草稿。
+  useLayoutEffect(
+    /* 切换分类或轮次时从顶部阅读；事件刷新保持位置，不把文件区的滚动带入诊断。 */ () => {
+      const body = container.current?.querySelector('.ant-tabs-body-holder');
+      if (body) body.scrollTop = 0;
+    },
+    [run.run_id, tab],
+  );
   return (
-    <div className="inspector-panels">
+    <div className="inspector-panels" ref={container}>
       <Tabs
-        activeKey={keys.includes(tab) ? tab : 'overview'}
+        activeKey={['result', 'files', 'diagnostics'].includes(tab) ? tab : 'result'}
         onChange={onTab}
         destroyOnHidden
         items={[
           {
-            key: 'overview',
-            label: '概况',
+            key: 'result',
+            label: '结果',
             children: (
               <div className="inspector-overview">
-                <section>
-                  <StateBreakdown run={run} />
-                  <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>
-                </section>
+                <StateBreakdown run={run} />
+                <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>
                 {run.interrupted && (
                   <Alert type="warning" title="该运行缺少可信结束记录，请核对已有输出。" />
                 )}
                 {run.warnings.map(
-                  /* 宿主警告只按受控文本显示。 */ (warning, index) => (
+                  /* 保留宿主风险提示，不从完成状态推断成功。 */ (warning, index) => (
                     <Alert key={index} type="warning" title={warning} />
                   ),
                 )}
                 <VerificationPanel
                   detail={run.result.verification}
+                  attempts={run.result.verification_attempts}
+                  repairAttempts={run.result.repair_attempts}
+                  runId={run.run_id}
                   active={run.active}
-                  project={Boolean(run.project) || run.source_kind === 'project'}
+                  project={
+                    run.verification_kind === 'project_tests' ||
+                    Boolean(run.project) ||
+                    run.source_kind === 'project'
+                  }
                 />
-                <section>
-                  <h3>运行记录</h3>
+                <div className="result-usage">
+                  <span>已知用量</span>
+                  <UsageDisplay run={run} />
+                </div>
+              </div>
+            ),
+          },
+          {
+            key: 'files',
+            label: '文件',
+            children: (
+              <div className="inspector-files">
+                {run.local_changes ? (
+                  <LocalChangesPanel
+                    runId={run.run_id}
+                    workspace={run.workspace}
+                    changes={run.local_changes}
+                    active={run.active}
+                  />
+                ) : run.project ? (
+                  <ProjectReviewPanel
+                    project={run.project}
+                    canManage={!historical && run.project_workspace?.latest_run_id === run.run_id}
+                    active={run.active}
+                    parentRunId={run.parent_run_id}
+                  />
+                ) : null}
+                <ArtifactPanel
+                  runId={run.run_id}
+                  artifacts={run.result.artifacts}
+                  status={run.result.artifact_status}
+                  warnings={run.result.artifact_warnings}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'diagnostics',
+            label: '诊断',
+            children: (
+              <div className="inspector-diagnostics">
+                <details className="diagnostic-section" open>
+                  <summary>执行轨迹</summary>
+                  <EventTrail {...events} />
+                </details>
+                <details className="diagnostic-section">
+                  <summary>上下文与指令</summary>
+                  <ContextPanel context={run.context} stopReason={run.result.stop_reason} />
+                </details>
+                <details className="diagnostic-section">
+                  <summary>运行配置与记录</summary>
                   {run.interrupted && (
-                    <p className="muted">
-                      本次执行中断，以下调用次数来自已保存事件；发送新消息会开始独立记录并重新测试。
-                    </p>
+                    <p className="muted">运行已中断；调用次数仅代表已保存记录。</p>
                   )}
                   <dl className="compact-dl">
                     <div>
@@ -78,22 +132,24 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
                         <code>{run.run_id}</code>
                       </dd>
                     </div>
-                    {run.execution_mode && (
-                      <div>
-                        <dt>执行方式</dt>
-                        <dd>{run.execution_mode === 'local' ? '所选目录' : '独立 Git 工作树'}</dd>
-                      </div>
-                    )}
+                    <div>
+                      <dt>实际执行目录</dt>
+                      <dd>
+                        <code>{run.workspace}</code>
+                      </dd>
+                    </div>
                     {run.source_path && (
                       <div>
                         <dt>所选项目</dt>
                         <dd>{run.source_path}</dd>
                       </div>
                     )}
-                    <div>
-                      <dt>实际执行目录</dt>
-                      <dd>{run.workspace}</dd>
-                    </div>
+                    {run.execution_mode && (
+                      <div>
+                        <dt>执行方式</dt>
+                        <dd>{run.execution_mode === 'local' ? '所选目录' : '独立 Git 工作树'}</dd>
+                      </div>
+                    )}
                     {run.python_execution && (
                       <>
                         <div>
@@ -117,31 +173,17 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
                       <dd>{duration(elapsed)}</dd>
                     </div>
                     <div>
-                      <dt>本次模型调用</dt>
-                      <dd>
-                        {run.result.model_turns}
-                        {run.interrupted && '（已记录）'}
-                      </dd>
+                      <dt>模型调用</dt>
+                      <dd>{run.result.model_turns}</dd>
                     </div>
                     <div>
-                      <dt>本次工具调用</dt>
-                      <dd>
-                        {run.result.tool_calls}
-                        {run.interrupted && '（已记录）'}
-                      </dd>
+                      <dt>工具调用</dt>
+                      <dd>{run.result.tool_calls}</dd>
                     </div>
                     <div>
-                      <dt>本次 HTTP 尝试</dt>
-                      <dd>
-                        {run.result.http_attempts}
-                        {run.interrupted && '（已记录）'}
-                      </dd>
+                      <dt>HTTP 尝试</dt>
+                      <dd>{run.result.http_attempts}</dd>
                     </div>
-                  </dl>
-                </section>
-                <section>
-                  <h3>本轮配置</h3>
-                  <dl className="compact-dl">
                     <div>
                       <dt>模型</dt>
                       <dd>{run.config.requested_model}</dd>
@@ -151,75 +193,23 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
                       <dd>{run.config.limits.run_timeout_seconds} 秒</dd>
                     </div>
                     <div>
+                      <dt>自动修复</dt>
+                      <dd>{run.config.auto_repair ? '开启（最多2次）' : '关闭'}</dd>
+                    </div>
+                    <div>
                       <dt>工具</dt>
                       <dd>
                         {run.config.tools.join(' · ')}
-                        {run.config.context?.compression && run.config.context.compression !== 'off'
+                        {run.config.context.compression !== 'off'
                           ? ' · read_context（自动只读）'
                           : ''}
                       </dd>
                     </div>
-                    <div>
-                      <dt>已知用量</dt>
-                      <dd>
-                        <UsageDisplay run={run} />
-                      </dd>
-                    </div>
                   </dl>
-                </section>
+                </details>
               </div>
             ),
           },
-          ...(run.local_changes
-            ? [
-                {
-                  key: 'code',
-                  label: '代码',
-                  children: (
-                    <LocalChangesPanel
-                      runId={run.run_id}
-                      workspace={run.workspace}
-                      changes={run.local_changes}
-                      active={run.active}
-                    />
-                  ),
-                },
-              ]
-            : run.project
-              ? [
-                  {
-                    key: 'code',
-                    label: '代码',
-                    children: (
-                      <ProjectReviewPanel
-                        project={run.project}
-                        canManage={
-                          !historical && run.project_workspace?.latest_run_id === run.run_id
-                        }
-                        active={run.active}
-                        parentRunId={run.parent_run_id}
-                      />
-                    ),
-                  },
-                ]
-              : []),
-          {
-            key: 'artifacts',
-            label: '产物',
-            children: (
-              <ArtifactPanel
-                runId={run.run_id}
-                artifacts={run.result.artifacts}
-                missing={run.result.missing_artifacts}
-              />
-            ),
-          },
-          {
-            key: 'context',
-            label: '上下文',
-            children: <ContextPanel context={run.context} stopReason={run.result.stop_reason} />,
-          },
-          { key: 'trace', label: '轨迹', children: <EventTrail {...events} /> },
         ]}
       />
     </div>

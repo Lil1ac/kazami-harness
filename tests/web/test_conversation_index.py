@@ -100,7 +100,7 @@ def test_three_turns_form_one_entry_before_filter_and_pagination(tmp_path: Path,
         async with service(config,NavigationModel()) as (client,manager):
             page=(await client.get('/api/conversations?project_id=alpha')).json()
             assert page['total']==2 and any(item['turn_count']==3 for item in page['items'])
-            assert (await client.get('/api/runs')).json()['total']==5
+            assert (await client.get('/api/conversations')).json()['total']==3
             assert manager._model_client.calls==0
     asyncio.run(scenario())
 

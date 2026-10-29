@@ -117,7 +117,7 @@ tests/
 | harness show RUN_ID | 只读展示历史摘要、轨迹和产物位置；不继续执行 |
 | harness serve | 提供本机任务API、SSE及React构建页面，后台仍使用同一Runner |
 
-通过 uv run 调用安装到项目环境的 harness 命令。task 与 task-file 二选一；所有路径在启动时解析为绝对路径。可重复使用 --expected-output 登记工作区内预期产物；缺失仅提示，不作为内容验收。计划中的 `harness demo csv / logs / inventory` 将复制输入到新的独立工作区，不覆盖已有目录，验收资源保留在宿主侧；当前尚无此命令。
+通过 uv run 调用安装到项目环境的 harness 命令。task 与 task-file 二选一；所有路径在启动时解析为绝对路径。CLI 与网页自动收集本轮新增、修改文件，删除保留在差异；不需要声明输出路径。
 
 配置使用 TOML，合并顺序为“内置默认值 → 显式配置文件 → CLI 覆盖”。模型密钥只读取 DEEPSEEK_API_KEY；配置和日志只保存环境变量名称，不保存值。V0.1 只支持已实现的 DeepSeek 适配器，不把任意兼容接口当作已验证能力。
 
@@ -254,7 +254,11 @@ events 包含运行开始、模型请求开始/失败/完成、assistant 消息�
 
 读取不完整记录时保留有效前缀并警告尾部损坏，不改写原日志、不自动续跑。V0.1 的历史读取与 V0.2 的恢复执行是不同能力。
 
-产物索引来自 write_file、edit_file、命令与验收原始输出、预先声明的预期输出。预期文件缺失记入 missing_artifacts，存在性登记不等于内容验收。run_command 创建的其他任意文件不会自动全量索引，没有被索引的成果仍可在工作区查看。
+文件产物索引由Runner统一收尾生成：运行前固定文件基线，模型/工具/验收结束后固化结束证据，登记本轮新增、修改的文件，再由唯一RunStore写入run_finished与摘要。文件工具和命令采用相同结果规则，运行内stdout/stderr引用继续独立保存。未修改的已有文件、Git控制目录、依赖缓存和运行记录不列为新交付；删除文件只进入差异，不提供不存在文件的下载。
+
+CLI和原目录运行复用LocalChangeStore的前后快照；Git隔离以同一逐轮开始基线对比ProjectManager已有的结束文件快照，不再次复制结束目录，也不把相对会话基线的累计Git差异当成本轮产物。采集范围内的权限或内容变化都算修改；该差异描述运行期间观察到的变化，不证明文件由哪个进程写入。
+
+RunResult.artifact_status为pending/complete/incomplete，artifact_warnings保存受控采集提示。超限、损坏或目录变化时明确收集不完整，不改写已确认的执行、验收和清理状态；失败、超时及取消后已经产生的文件也在收尾中保存。文件证据收尾在模型运行预算之后完成，受现有文件数量、大小、差异和Git命令边界约束，不因用户取消而打断正在固定的历史证据。原始记录写入失败仍传播StorageError，不补造可信终态。
 
 用量累加已知调用的 prompt_tokens、completion_tokens、total_tokens。usage 缺失时标记 usage_complete=false，展示“已知部分＋存在缺失”；失败请求也可能已计费，因此不把已知用量当精确账单。日志不保存认证头、密钥或完整进程环境。
 
@@ -285,21 +289,27 @@ cwd 相对 TOML 所在目录；argv[0] 启动前解析为绝对可执行入口�
 
 宿主验收程序需区分自身错误与产物断言失败：正常断言不符返回1，实现/配置异常返回2等其他值；仅凭stderr或Python异常退出1无法自动区分。日志入口捕获内部异常并返回2。输出预览截断不单独判错，原始输出超限则为error。
 
-RunResult.verification 默认None，兼容无详情的旧记录；不为None时，status必须与顶层validation_status相同且执行已completed。详情含reason、可空exit_code、stdout/stderr字符预览、elapsed_ms毫秒耗时、timed_out/cancelled/output_limit_exceeded/truncated标记、cleanup_status与artifacts。原始输出引用合入顶层产物；模型final_answer保持原文，验收结论以宿主字段为准。
+RunResult.verification为当前代码的检查，未执行或修复期间为None；非空时status与顶层validation_status相同且执行已completed。verification_attempts按顺序保存每次repair_attempt（0为初次、1/2为修复后）和result。repair_attempts记录已启动修复次数。详情含reason、可空exit_code、stdout/stderr预览、elapsed_ms、超时/取消/截断标记、cleanup_status与artifacts；所有次原始输出都合入顶层产物，不覆盖旧失败。
 
 新增事件按顺序写入，前端/接口接入时复用其语义：
 
 | 事件 | payload与用途 |
 | --- | --- |
 | execution_completed | model_turns、tool_calls；仅表示模型执行已完成，不等于整个任务成功 |
-| verification_started | timeout_seconds，秒；开始事件成功落盘后才启动验收副作用 |
-| verification_result | verification，完整详情；包括取消/总超时后的真实输出和清理结果 |
-| verification_skipped | reason=not_configured或execution_not_completed；不与本次verification_result并存 |
+| verification_started | timeout_seconds、repair_attempt、kind；开始事件落盘后才启动检查 |
+| verification_result | verification、repair_attempt；包括取消/总超时后的真实输出和清理结果 |
+| repair_started | repair_attempt、max_repair_attempts=2及message；公开失败反馈落盘后才可继续模型 |
+| repair_stopped | reason及repair_attempts；达到修复次数或剩余调用预算时保留当前失败 |
+| verification_skipped | 当前最终代码未检查时说明原因；此前检查历史和当前未验收分别保留 |
 | run_finished | 唯一最终结果，仍沿用原有持久化契约 |
 
 只有执行 completed、验收 passed 且 cleanup_status 为 not_needed/complete，才展示任务成功并返回 0。unknown/incomplete 不得返回 0；用户取消和总运行超时优先保留退出码 130/124。执行完成后验收异常，不改写原执行状态；验收阶段耗尽总时限时保留 execution_status=completed、validation_status=error，并返回 124。此前尚未完成的执行若发生取消或超时，则使用对应执行状态。
 
-完成验收与保存结果前不再调度模型修改工作区，保证验收对应最终交付版本。当前模型执行循环已将命令错误与输出回传模型，允许继续修改和重试；模型结束后，宿主独立验收只执行一次。验收未通过时保留失败证据，是否增加后续自动修复由真实失败记录决定，另行提交有次数、预算及重新验收边界的 Plan；不要求为此先建策略插件框架。可信本地模式不宣称验收资源能抵御恶意宿主命令篡改。
+RunConfig.auto_repair默认False。VerifierSpec.kind默认为independent，结果不反馈模型；Web项目测试固定为project_tests，CLI公开测试清单须显式声明该kind。开启修复但没有公开测试在启动前拒绝。普通设置页不提供全局修复授权，页面在本次任务及后续消息中明确选择。
+
+Agent在无工具回答处调用Runner的on_completion回调，Runner检查并决定结束或返回公开反馈。返回反馈时沿用同一消息、ContextBuilder、ContextCompressor和模型连接，不重新加载指令或重置计数。只允许正常断言失败且清理安全进入最多两次修复，异常不触发。修复开始清空当前verification/validation_status和临时final_answer，旧检查保留在verification_attempts。已无模型/工具预算则保留刚取得的失败结果并停止；修复执行中耗尽预算则当前代码未验收。最后一次检查后不再改代码，统一采集产物并写入唯一run_finished。
+
+repair_started保存的宿主反馈包含有界公开输出及截断标记，不能提升权限。history_messages按原顺序继承该消息，中断读取保留检查历史和原始输出，不自动重放。可信本地模式不宣称验收资源能抵御恶意宿主命令篡改。
 
 ## 10. 测试范围与 PRD 对应
 

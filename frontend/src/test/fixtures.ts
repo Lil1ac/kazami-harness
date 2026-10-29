@@ -1,6 +1,6 @@
 import type {
   OptionsResponse,
-  ProjectOption,
+  LocalProjectOption,
   ProjectReview,
   RunConfig,
   RunEvent,
@@ -9,6 +9,7 @@ import type {
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {
+  auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
   provider: 'deepseek',
   requested_model: 'deepseek-flash',
   api_key_env: 'DEEPSEEK_API_KEY',
@@ -46,7 +47,7 @@ export const config: RunConfig = {
 export const options: OptionsResponse = {
   config,
   key_configured: true,
-  workspaces: [], // 首次启动等待用户打开真实目录。
+  recent_projects: [], // 首次启动等待用户打开真实目录。
   verifiers: [], // 无宿主登记时不提供独立验收选择。
   busy_run_id: null,
 };
@@ -66,6 +67,7 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
         }
       : null, // 模拟真实会话当前状态。
     python_execution: null, // 未准备执行配置的记录；测试可提供独立轮次快照。
+    verification_kind: null, // 此夹具默认没有宿主检查。
     created_at: '2026-10-19T10:00:00Z',
     phase: 'finished',
     event_count: 0,
@@ -82,6 +84,8 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
       execution_status: 'completed',
       validation_status: 'unverified',
       verification: null,
+      verification_attempts: [],
+      repair_attempts: 0,
       cleanup_status: 'not_needed',
       stop_reason: 'final_answer',
       model_turns: 1,
@@ -89,7 +93,8 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
       tool_calls: 0,
       final_answer: '执行完成',
       artifacts: [],
-      missing_artifacts: [],
+      artifact_status: 'complete',
+      artifact_warnings: [],
       usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
       usage_complete: true,
     },
@@ -111,11 +116,11 @@ export function makeEvent(seq: number, runId = 'run-a'): RunEvent {
 }
 
 /** 无密钥的代码项目预设；允许测试原目录含未提交改动的说明和固定测试 argv。 */
-export const projectOption: ProjectOption = {
+export const projectOption: LocalProjectOption = {
   id: 'sample-project', // 受控项目 ID。
   label: '示例后端', // 展示名称。
   path: '/source/backend', // 原仓库只读说明。
-  base_ref: 'HEAD', // 初始选择。
+  kind: 'project', // Git 项目与普通目录共用一个选项结构。
   head_commit: 'abcdef1234567890', // 可见的当前 HEAD。
   source_dirty: true, // 原目录有不会带入任务的改动。
   test_argv: ['python', '-m', 'pytest', '-q'], // 宿主测试命令，前端不覆盖。

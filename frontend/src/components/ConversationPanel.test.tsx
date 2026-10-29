@@ -126,7 +126,7 @@ it('发送实际载荷，服务确认前显示发送中，确认后交付真实�
   expect(createFollowup).toHaveBeenCalledWith('run-a', {
     request_id: expect.stringMatching(/^[a-f0-9-]{36}$/),
     prompt: '补充类型提示',
-    config: {},
+    config: { auto_repair: false },
   });
   accept(makeRun({ run_id: 'run-b' }));
   await waitFor(
@@ -134,6 +134,30 @@ it('发送实际载荷，服务确认前显示发送中，确认后交付真实�
       expect(host.onConfirmed).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-b' })),
   );
   expect(screen.getByLabelText('输入消息')).toHaveValue('');
+});
+
+it('下一轮公开测试设置可关闭继承的自动修复，发送时使用当前选择', async () => {
+  // 查看旧轮不改变最新父轮，开关只控制下一条明确要求。
+  vi.mocked(createFollowup).mockRejectedValue(
+    Object.assign(new Error('明确拒绝'), { status: 400 }),
+  );
+  show(
+    makeRun({
+      verification_kind: 'project_tests',
+      config: { ...makeRun().config, auto_repair: true },
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByText(/下一轮设置/));
+  const checkbox = screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' });
+  expect(checkbox).toBeChecked();
+  await user.click(checkbox);
+  await user.type(screen.getByLabelText('输入消息'), '只执行一次');
+  await user.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(
+    /* 请求载荷必须冻结明确关闭的值。 */ () => expect(createFollowup).toHaveBeenCalledOnce(),
+  );
+  expect(vi.mocked(createFollowup).mock.calls[0][1].config?.auto_repair).toBe(false);
 });
 
 it('网络失败重试固定父轮、编号与原载荷，发送期间新写的草稿保留', async () => {
@@ -216,7 +240,7 @@ it('回看旧轮只选择详情，消息纯文本输入保持原样', async () =
   expect(await screen.findByText('<script>hack()</script>')).toBeInTheDocument();
   expect(document.querySelector('script')).toBeNull();
   await user.click(screen.getByRole('button', { name: '查看第 1 轮详情' }));
-  expect(host.onInspect).toHaveBeenCalledWith('run-a', 'overview');
+  expect(host.onInspect).toHaveBeenCalledWith('run-a', 'result');
   expect(createFollowup).not.toHaveBeenCalled();
 });
 

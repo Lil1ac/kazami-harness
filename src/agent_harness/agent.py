@@ -1,6 +1,7 @@
 """维护本次消息历史，确保每个工具批次配齐结果后才请求下一轮。"""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import json
 from typing import TYPE_CHECKING
 
@@ -41,7 +42,7 @@ def _record_tool(context: "RunContext", call: ToolCall, result: dict, messages: 
     if rank[status] > rank[context.result.cleanup_status]:
         context.result.cleanup_status = status
     for reference in references:
-        if reference not in context.result.artifacts:
+        if reference.location == "run" and reference not in context.result.artifacts:
             context.result.artifacts.append(reference)
     messages.append({"role": "tool", "tool_call_id": call.call_id, "content": content})
 
@@ -85,13 +86,18 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     return response
 
 
-async def run_agent(context: "RunContext", client: ModelClient, executor: ToolExecutor) -> None:
+async def run_agent(
+    context: "RunContext", client: ModelClient, executor: ToolExecutor,
+    *, on_completion: Callable[[], Awaitable[str | None]] | None = None,
+) -> None:
     """执行多轮模型与工具交互，直接更新 context 中的计数和最终回答。
 
     client 负责模型通信，executor 负责工具执行；本函数维护消息历史和调用配对。
     同一批工具按响应顺序串行处理，全部写入结果后才进入下一轮模型请求。
     首次冻结项目约定，每轮构建有来源的压缩投影并检查预算；摘要调用也占实际模型轮次。
     达到额度或项目约定读取错误时抛出 AgentStopped，取消和存储故障交由 Runner 处理。
+    on_completion在无工具回答后执行宿主检查；None返回表示结束，字符串表示已落盘的
+    公开测试反馈，追加后沿用同一消息、压缩器、工具执行器和预算继续，绝不重新初始化运行。
     """
     from .runner import AgentStopped
 
@@ -160,7 +166,11 @@ async def run_agent(context: "RunContext", client: ModelClient, executor: ToolEx
         messages.append(response.message)
         if not response.tool_calls:
             context.result.final_answer = response.message["content"]
-            return
+            feedback = await on_completion() if on_completion is not None else None
+            if feedback is None:
+                return
+            messages.append({"role": "user", "content": feedback})
+            continue
 
         batch = response.tool_calls
         if len(batch) > config.limits.max_tool_calls - context.result.tool_calls:

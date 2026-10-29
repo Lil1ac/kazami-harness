@@ -32,9 +32,9 @@ function useNarrowWorkspace(): boolean {
   return narrow;
 }
 
-/** 校验详情分类；空值或未知标签回到概况，不改变持续会话。 */
+/** 校验详情分类；空值或未知标签回到结果，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
-  return value && ['code', 'trace', 'context', 'artifacts'].includes(value) ? value : 'overview';
+  return value && ['result', 'files', 'diagnostics'].includes(value) ? value : 'result';
 }
 
 /** 读取路由运行后，以稳定session_id挂载工作区；新轮导航不会重建对话与输入。 */
@@ -126,7 +126,7 @@ function SessionWorkspace({
     /* 终态后核对执行、验收与快照事实。 */ () => {
       void cache.invalidateQueries({ queryKey: ['run', conversation.latest_run_id] });
       void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
-      void cache.invalidateQueries({ queryKey: ['runs'] });
+
       void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
     },
@@ -146,7 +146,7 @@ function SessionWorkspace({
   );
 
   /** 查看目标轮和分类，只更新URL检查状态，不切换或重建对话。 */
-  function inspect(runId: string, value = 'overview'): void {
+  function inspect(runId: string, value = 'result'): void {
     const next = new URLSearchParams(params);
     next.set('inspect', runId);
     next.set('tab', value);
@@ -163,7 +163,7 @@ function SessionWorkspace({
         current ? mergeConfirmedRun(current, view) : current,
     );
     void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
-    void cache.invalidateQueries({ queryKey: ['runs'] });
+
     void cache.invalidateQueries({ queryKey: ['conversations'] });
     void cache.invalidateQueries({ queryKey: ['options'] });
     void navigate(`/runs/${view.run_id}`, { replace: true });

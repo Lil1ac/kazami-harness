@@ -9,11 +9,13 @@ import type { ArtifactRef } from '../types';
 export function ArtifactPanel({
   runId,
   artifacts,
-  missing,
+  status,
+  warnings,
 }: {
   runId: string;
   artifacts: ArtifactRef[];
-  missing: string[];
+  status: 'pending' | 'complete' | 'incomplete'; // 尚未收集、完整、采集受限。
+  warnings: string[]; // 后端受控提示；不代表测试失败。
 }) {
   const [selection, setSelected] = useState<ArtifactRef | null>(null); // 当前抽屉预览目标。
   const selected = selection; // 历史文件来自固定快照，不依赖共享工作树仍然存在。
@@ -32,16 +34,25 @@ export function ArtifactPanel({
           </h2>
         </div>
       </div>
-      {missing.length > 0 && (
+      {status === 'incomplete' && (
         <Alert
           showIcon
           type="warning"
-          title="部分预期产物未找到"
-          description={missing.join('、')}
+          title="文件收集不完整"
+          description={warnings.join('；') || '部分文件未能固化，已保存的输出仍可查看。'}
         />
       )}
       {!artifacts.length && (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未登记产物" />
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            status === 'pending'
+              ? '任务结束后自动收集本轮文件'
+              : status === 'incomplete'
+                ? '暂无可核对的文件产物'
+                : '本轮没有新增或修改的文件及输出'
+          }
+        />
       )}
       <ul className="artifact-list">
         {artifacts.map(
@@ -59,14 +70,14 @@ export function ArtifactPanel({
                   {artifact.location === 'workspace' ? '工作区' : '运行记录'} · {artifact.kind}
                 </span>
               </div>
-                <a
-                  className="download-link"
-                  href={artifactUrl(runId, artifact)}
-                  aria-label={`下载 ${artifact.path}`}
-                  download
-                >
-                  <DownloadOutlined />
-                </a>
+              <a
+                className="download-link"
+                href={artifactUrl(runId, artifact)}
+                aria-label={`下载 ${artifact.path}`}
+                download
+              >
+                <DownloadOutlined />
+              </a>
             </li>
           ),
         )}

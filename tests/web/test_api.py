@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 import sys
 from typing import AsyncIterator
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from agent_harness.config import ConfigurationError
-from agent_harness.providers.base import ModelResponse
+from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
 from agent_harness.store import RunStore
 from agent_harness.web.api import create_app
@@ -39,6 +40,30 @@ class FinalModel:
             tool_calls=[], finish_reason="stop", response_model="offline-test",
             usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
         )
+
+
+class GeneratedFilesModel(FinalModel):
+    """用真实命令生成files，再返回最终回答；用于验证自动发现及受限下载。"""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        """固定相对文件名到正文的files映射，返回None；正文压缩后传给测试命令以避免Windows参数超长。"""
+        super().__init__()
+        self.files = files  # 仅测试给定的新文件，不扫描或读取其他宿主路径。
+
+    async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
+        """首轮通过run_command生成files，后续沿用固定回答；接收真实历史和工具定义，返回模型响应。"""
+        if self.calls:
+            return await super().complete(messages, tools)
+        import zlib
+        self.calls += 1
+        source = "from pathlib import Path; import zlib;" + ";".join(
+            "Path(" + repr(name) + ").write_bytes(zlib.decompress(bytes.fromhex(" + repr(zlib.compress(raw).hex()) + ")))"
+            for name, raw in self.files.items()
+        )
+        call = ToolCall("generate-files", "run_command", json.dumps({"argv": [sys.executable, "-c", source]}))
+        return ModelResponse(message={"role": "assistant", "content": None, "tool_calls": [{
+            "id": call.call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments_json},
+        }]}, tool_calls=[call], finish_reason="tool_calls", response_model="offline-generate")
 
 
 class GatedModel(FinalModel):
@@ -204,7 +229,6 @@ def test_api_cancel_is_idempotent_and_keeps_unique_terminal(web_config: WebConfi
     {"config": {"api_key": SECRET}},
     {"verifier": {"argv": [SECRET]}},
     {"workspace": SECRET},
-    {"expected_outputs": ["../outside.txt"]},
 ])
 def test_invalid_submission_has_safe_error_and_no_record(web_config: WebConfig, monkeypatch, payload: dict):
     """payload为无效或越界的任务覆盖；要求启动前拒绝且不回显敏感输入、不落盘，返回 None。"""
@@ -258,7 +282,7 @@ def test_host_log_verifier_runs_after_model_and_exposes_real_result(web_config: 
         """运行真实本地验收子进程，查询保存的详情和可读取的运行内stdout产物。"""
         model = FinalModel()
         async with api_client(web_config, model) as (client, app):
-            created = await submit(client, verifier_id="logs", expected_outputs=["report.json"])
+            created = await submit(client, verifier_id="logs")
             view = await finished(client, created["run_id"])
             result = view["result"]
             assert result["execution_status"] == "completed"
@@ -289,13 +313,13 @@ def test_history_pagination_filter_and_options_never_serialize_key(web_config: W
             await finished(client, first["run_id"])
             second = await submit(client, prompt="第二个任务", config={"limits": {"max_model_turns": 2}})
             second_view = await finished(client, second["run_id"])
-            page1 = await client.get("/api/runs", params={"offset": 0, "limit": 1})
-            page2 = await client.get("/api/runs", params={"offset": 1, "limit": 1})
+            page1 = await client.get("/api/conversations", params={"offset": 0, "limit": 1})
+            page2 = await client.get("/api/conversations", params={"offset": 1, "limit": 1})
             assert page1.json()["total"] == page2.json()["total"] == 2
-            assert {page1.json()["items"][0]["run_id"], page2.json()["items"][0]["run_id"]} == {first["run_id"], second["run_id"]}
-            assert page1.json()["items"][0]["run_id"] == second["run_id"]
-            assert (await client.get("/api/runs", params={"status": "completed"})).json()["total"] == 2
-            assert (await client.get("/api/runs", params={"status": "cancelled"})).json()["items"] == []
+            assert {page1.json()["items"][0]["entry_run_id"], page2.json()["items"][0]["entry_run_id"]} == {first["run_id"], second["run_id"]}
+            assert page1.json()["items"][0]["entry_run_id"] == second["run_id"]
+            assert (await client.get("/api/conversations", params={"status": "completed"})).json()["total"] == 2
+            assert (await client.get("/api/conversations", params={"status": "cancelled"})).json()["items"] == []
             assert second_view["config"]["limits"]["max_model_turns"] == 2
             assert second_view["config"]["limits"]["max_tool_calls"] == RunConfig().limits.max_tool_calls
             options = await client.get("/api/options")
@@ -388,13 +412,12 @@ def test_artifacts_require_registered_relative_reference(web_config: WebConfig, 
     """只允许访问已登记产物，拒绝穿越、绝对路径、未登记文件及内部manifest；返回 None。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
     workspace = web_config.workspaces[0].path
-    (workspace / "answer.txt").write_text("中文产物\n", encoding="utf-8", newline="")
     (workspace / "private.txt").write_text(SECRET, encoding="utf-8")
 
     async def scenario():
         """生成有登记产物的真实结果，分别检查文本预览、下载与不安全请求。"""
-        async with api_client(web_config) as (client, app):
-            created = await submit(client, expected_outputs=["answer.txt"])
+        async with api_client(web_config, GeneratedFilesModel({"answer.txt": "中文产物\n".encode("utf-8")})) as (client, app):
+            created = await submit(client, config={"tools": ["run_command"]})
             identifier = created["run_id"]
             await finished(client, identifier)
             endpoint = f"/api/runs/{identifier}/artifacts"
@@ -423,16 +446,18 @@ def test_registered_artifact_retargeted_to_outside_symlink_is_denied(web_config:
 
     async def scenario():
         """先结束真实运行并登记文件，再改变链接目标，检查后续访问不会跟随到外部。"""
-        async with api_client(web_config) as (client, app):
-            created = await submit(client, expected_outputs=["answer.txt"])
+        async with api_client(web_config, GeneratedFilesModel({"answer.txt": b"artifact"})) as (client, app):
+            created = await submit(client, config={"tools": ["run_command"]})
             await finished(client, created["run_id"])
+            from uuid import UUID
+            artifact = app.state.manager.local_changes.after.saved_file(UUID(created["run_id"]), "answer.txt")
             artifact.unlink()
             try:
                 artifact.symlink_to(outside)
             except OSError:
                 pytest.skip("当前Windows账户没有创建符号链接的权限")
             response = await client.get(f"/api/runs/{created['run_id']}/artifacts", params={"location": "workspace", "path": "answer.txt", "preview": "true"})
-            assert response.status_code in {400, 403, 404}
+            assert response.status_code in {400, 403, 404, 409}
             assert SECRET not in response.text
 
     asyncio.run(scenario())
@@ -564,6 +589,21 @@ def test_historical_unfinished_run_is_interrupted_without_fabricated_terminal(we
     asyncio.run(scenario())
 
 
+def test_current_navigation_contract_has_one_project_list_and_no_retired_routes(web_config: WebConfig):
+    """核对 web_config 对应的当前导航契约；返回 None，只读选项，不创建任务或修改项目。"""
+    async def scenario():
+        """通过真实 ASGI 检查统一列表；已移除的 GET 返回 405，旧页面返回 404，返回 None。"""
+        async with api_client(web_config) as (client, app):
+            options = (await client.get("/api/options")).json()
+            assert isinstance(options["recent_projects"], list)
+            assert "projects" not in options and "workspaces" not in options
+            assert (await client.get("/api/runs")).status_code == 405
+            for path in ("/tasks", f"/tasks/{uuid4()}"):
+                assert (await client.get(path)).status_code == 404
+
+    asyncio.run(scenario())
+
+
 def test_completed_history_survives_new_app_instance(web_config: WebConfig, monkeypatch):
     """完成任务可以由新应用实例恢复详情和事件，无需再次调用模型；返回 None。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
@@ -582,7 +622,7 @@ def test_completed_history_survives_new_app_instance(web_config: WebConfig, monk
             assert restored["active"] is False
             assert restored["interrupted"] is False
             assert restored_model.calls == 0
-            assert (await client.get("/api/runs")).json()["total"] == 1
+            assert (await client.get("/api/conversations")).json()["total"] == 1
 
     asyncio.run(scenario())
 
@@ -617,13 +657,11 @@ def test_binary_download_and_bounded_unicode_preview(web_config: WebConfig, monk
     workspace = web_config.workspaces[0].path
     binary = b"\x89PNG\x00\xff\x01"
     text = "a" * 65535 + "中" + "文" * 20
-    (workspace / "image.bin").write_bytes(binary)
-    (workspace / "large.txt").write_bytes(text.encode("utf-8"))
 
     async def scenario():
         """用真实登记产物请求有界预览和附件，检查类型、截断边界与原始字节。"""
-        async with api_client(web_config) as (client, app):
-            created = await submit(client, expected_outputs=["image.bin", "large.txt"])
+        async with api_client(web_config, GeneratedFilesModel({"image.bin": binary, "large.txt": text.encode("utf-8")})) as (client, app):
+            created = await submit(client, config={"tools": ["run_command"]})
             await finished(client, created["run_id"])
             endpoint = f"/api/runs/{created['run_id']}/artifacts"
             preview = await client.get(endpoint, params={"location": "workspace", "path": "image.bin", "preview": "true"})

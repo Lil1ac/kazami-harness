@@ -187,6 +187,11 @@ def history_messages(history: RunHistory, *, allow_interrupted: bool = False) ->
             continue
         if event.type == 'assistant_message':
             messages.append(deepcopy(event.payload.get('message')))
+        elif event.type == 'repair_started':
+            feedback = event.payload.get('message')
+            if not isinstance(feedback, dict) or feedback.get('role') != 'user' or not isinstance(feedback.get('content'), str):
+                raise SessionError('history_unverified', '历史项目测试反馈无法核对。')
+            messages.append(deepcopy(feedback))
         elif event.type == 'tool_result':
             if not isinstance(event.payload.get('result'), dict) or type(event.payload['result'].get('ok')) is not bool:
                 raise SessionError('history_unverified', '历史工具结果格式无法核对。')

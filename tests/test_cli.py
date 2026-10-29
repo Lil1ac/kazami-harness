@@ -146,15 +146,6 @@ def test_invalid_verifier_fails_before_creating_run(tmp_path: Path):
     assert not records.exists()
 
 
-def test_bad_expected_output_is_rejected_before_execution(tmp_path: Path):
-    """执行入口在启动前检查预期输出边界，拒绝父路径且不创建运行目录。"""
-    records = tmp_path / "records"
-    result = invoke("run", "--task", "报告", "--workspace", tmp_path, "--runs-dir", records, "--expected-output", "../outside.json")
-    assert result.returncode == 2
-    assert "预期输出" in result.stderr
-    assert not records.exists()
-
-
 @pytest.mark.parametrize("correct,expected_code,expected_status", [(True, 0, "passed"), (False, 1, "failed")])
 def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monkeypatch, capsys, correct: bool, expected_code: int, expected_status: str):
     """correct 选择报告内容，核对CLI的 expected_code/status、真实验收输出与历史；返回 None。"""
@@ -187,7 +178,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     records = tmp_path / "records"
     code = cli.main([
         "run", "--task", "检查已有报告", "--workspace", str(workspace), "--runs-dir", str(records),
-        "--verifier", str(verifier), "--expected-output", "report.json", "--json",
+        "--verifier", str(verifier), "--json",
     ])
     output = capsys.readouterr()
     result = json.loads(output.out)
@@ -195,7 +186,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     assert result["execution_status"] == "completed"
     assert result["validation_status"] == result["verification"]["status"] == expected_status
     assert len(result["verification"]["artifacts"]) == 2
-    assert len(result["artifacts"]) == 3
+    assert len(result["artifacts"]) == 2
     assert len(requests) == result["http_attempts"] == 1
     assert "dummy-cli-verifier-key" not in output.out + output.err
     shown = invoke("show", result["run_id"], "--runs-dir", records, "--json")

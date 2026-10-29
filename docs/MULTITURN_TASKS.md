@@ -22,6 +22,8 @@ V0.2 首版已交付，产品范围与 M01—M06 见 [PRD 4.3](PRD.md#43-多轮�
 
 每条接纳的用户要求对应独立 Run；Run 内部仍可进行多轮模型/工具调用。`turn_index` 从1开始表示用户轮次，`result.model_turns` 表示该次执行的实际模型轮次，两者含义不同。
 
+公开测试自动修复属于同一个Run，repair_attempts为0至2，不新增用户轮次或预算。repair_started中的反馈是宿主测试数据，随历史按原顺序继承。后续用户要求默认继承config.auto_repair，可在“下一轮设置”开启/关闭；网络重试沿用冻结的原载荷，不因下一条选择变化而改写。修复中断后先核对已保存检查与当前代码，重启和查看均不自动恢复。
+
 `RunManifest` 按当前格式保存以下会话字段：
 
 | 字段 | 含义 |
@@ -32,7 +34,7 @@ V0.2 首版已交付，产品范围与 M01—M06 见 [PRD 4.3](PRD.md#43-多轮�
 | origin | 宿主登记的项目/工作区编号与固定路径；普通任务还固定验收器编号 |
 | history_source | 后续运行使用的前轮事件最大序号与消息 SHA-256；首轮为空 |
 
-配置和预期产物默认沿用前轮；API 可覆盖已有开放配置，页面沿用本浏览器的公开配置草稿。宿主系统提示重新生成，工作区与验收来源不能通过追加请求任意切换。每轮实际计数从零开始，旧配置和结果保持不变。
+配置默认沿用前轮；每轮文件按本轮开始至结束的实际变化自动登记，不继承前轮产物清单。API 可覆盖已有开放配置，页面沿用本浏览器的公开配置草稿。宿主系统提示重新生成，工作区与验收来源不能通过追加请求任意切换。每轮实际计数从零开始，旧配置和结果保持不变。
 
 ## 3. 历史如何继承
 
@@ -82,12 +84,11 @@ HTTP请求断开不取消后台准备。前端在 sessionStorage 按会话保存
 {
   "request_id": "c1f54d17-b15c-4674-aac6-62311d6420f6",
   "prompt": "保留上次修复，再补充参数类型和中文说明。",
-  "config": {"limits": {"max_model_turns": 12}},
-  "expected_outputs": null
+  "config": {"limits": {"max_model_turns": 12}}
 }
 ```
 
-`request_id` 为 UUID；`prompt` 为1至65536字符，空白要求被拒绝。`config` 可省略，复用现有受限覆盖字段；`expected_outputs` 缺省或 null 沿用前轮，空列表表示不声明预期产物。不能传入新宿主路径、项目、基线、验收 argv 或凭据。
+`request_id` 为 UUID；`prompt` 为1至65536字符，空白要求被拒绝。`config` 可省略，复用现有受限覆盖字段。不能传入新宿主路径、项目、基线、验收 argv 或凭据。
 
 成功202返回新/原 `RunView`，其中包含会话、前轮和用户轮次。忙碌、旧轮追加、工作区变化、已丢弃和不确定请求返回409及受控原因；请求结构错误沿用422，运行不存在沿用404，会话元数据不可读/写返回503。界面保留草稿并显示原因；原运行结果不被错误响应覆盖。
 
@@ -111,7 +112,7 @@ HTTP请求断开不取消后台准备。前端在 sessionStorage 按会话保存
 | hooks/useConversationSend.ts | 会话草稿、固定父轮/载荷的发送与未知结果确认 |
 | components/MarkdownMessage.tsx | 受限Markdown、代码复制及宽表格/代码展示 |
 | activity.ts / components/TurnActivity.tsx | 从真实配对事件投影工具/验收过程，历史按需读取 |
-| components/RunInspector.tsx | 各轮概况、测试、代码、产物、上下文与完整轨迹 |
+| components/RunInspector.tsx | 各轮结果、文件与诊断：测试结果单独阅读，差异与产物共用文件分类，上下文与轨迹归入诊断 |
 
 最新轮消息过程与检查器共享同一useRunEvents订阅。查看历史只创建只读事件窗口；不订阅旧轮SSE、不重放工具。`inspect`查询参数表示检查对象，`tab`表示详情分类，都不改变追加目标；不属于本会话的inspect值被忽略。输入与未确认载荷只保存在当前标签页，未加入服务端消息编辑、运行中插话或并行分支。
 
@@ -139,7 +140,7 @@ RunManifest、RunResult 和会话请求只按当前数据模型严格读取，�
 
 新建对话从项目页进入时固定该来源，优先于浏览器上次选中的目录；不同项目的新会话文字草稿分别保存在当前标签页。已有会话的未发送消息仍按稳定 session_id 保存，切换到项目、全部会话或其他对话再返回后恢复。手机用“打开项目与会话导航”按钮进入同一项目树。
 
-新增只读 `GET /api/conversations`：offset从0开始，limit为1..100（默认20），project_id可选，status按最新轮 execution_status 筛选。服务先依据 run.json 与 `.sessions` 的线性关系核对并聚合完整会话，再筛选、排序、分页；不对某一页运行做去重。返回 items/total/busy_run_id；原 `GET /api/runs` 仍供运行级查询。
+新增只读 `GET /api/conversations`：offset从0开始，limit为1..100（默认20），project_id可选，status按最新轮 execution_status 筛选。服务先依据 run.json 与 `.sessions` 的线性关系核对并聚合完整会话，再筛选、排序、分页；不对某一页运行做去重。返回 items/total/busy_run_id；运行级列表接口已删除，单轮事实通过 `/api/runs/{id}` 获取。
 
 每个摘要含 session_id、title、entry_run_id、latest_run_id、turn_count、created_at、updated_at、source、latest、error。source固定原登记编号、类型和路径，只有三者仍匹配当前登记才属于当前项目；相同编号改指新路径时，旧会话只保留在全部会话。latest仅含最新轮执行、验收、清理与活动阶段，不附带完整回答和上下文。
 

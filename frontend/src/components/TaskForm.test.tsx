@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfigDraftProvider } from '../config';
-import { createRun, pickProject, saveProjectSettings } from '../api';
+import { createRun, pickProject } from '../api';
 import { makeRun, options, projectOption } from '../test/fixtures';
 import { TaskForm } from './TaskForm';
 import type { LocalProjectOption, OptionsResponse } from '../types';
@@ -15,7 +15,6 @@ vi.mock(
     createRun: vi.fn(),
     openProject: vi.fn(),
     pickProject: vi.fn(),
-    saveProjectSettings: vi.fn(),
     errorMessage: (error: unknown) => (error instanceof Error ? error.message : '操作失败'),
   }),
 );
@@ -129,7 +128,7 @@ it('恢复文字草稿时不恢复隔离方式，指定项目仍在原目录执�
   });
 });
 
-it('空要求不提交；发送失败后仍保留任务与高级产物字段', async () => {
+it('空要求不提交；发送失败后仍保留任务要求', async () => {
   // 防止目录入口改造丢失既有提交校验与草稿。
   const user = setup();
   await user.click(screen.getByRole('button', { name: '开始执行' }));
@@ -138,43 +137,11 @@ it('空要求不提交；发送失败后仍保留任务与高级产物字段', a
   await user.click(screen.getByText(/高级设置/));
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('清洗CSV');
-  await user.click(screen.getByLabelText('预期产物'));
-  await user.paste('clean.csv');
   await user.click(screen.getByRole('button', { name: '开始执行' }));
   expect(await screen.findByText('离线阻止模型运行')).toBeInTheDocument();
   expect(screen.getByLabelText('任务描述')).toHaveValue('清洗CSV');
-  expect(screen.getByLabelText('预期产物')).toHaveValue('clean.csv');
-  expect(vi.mocked(createRun).mock.calls[0][0]).toMatchObject({ expected_outputs: ['clean.csv'] });
-});
-
-it('隔离Git保存测试设置仍保留执行方式，保存本身不创建任务', async () => {
-  // 项目设置是独立用户动作，不能成为任务请求中的任意命令注入。
-  vi.mocked(saveProjectSettings).mockResolvedValue({
-    ...gitProject,
-    test_command: 'python -m pytest -q',
-    python_executable: 'D:/project-env/python.exe',
-    test_argv: ['python', '-m', 'pytest', '-q'],
-  });
-  const user = setup({ recent_projects: [gitProject] });
-  await user.click(screen.getByText(/高级设置/));
-  await user.click(screen.getByLabelText('执行目录'));
-  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
-  await user.click(screen.getByLabelText('项目测试命令'));
-  await user.paste('python -m pytest -q');
-  await user.click(screen.getByLabelText('Python 解释器'));
-  await user.paste('D:/project-env/python.exe');
-  await user.click(screen.getByRole('button', { name: '保存项目设置' }));
-  expect(await screen.findByRole('status')).toHaveTextContent('项目设置已保存');
-  expect(saveProjectSettings).toHaveBeenCalledWith(
-    gitProject.id,
-    'python -m pytest -q',
-    60,
-    'D:/project-env/python.exe',
-  );
-  expect(screen.getByLabelText('Python 解释器')).toHaveValue('D:/project-env/python.exe');
-  expect(createRun).not.toHaveBeenCalled();
-  expect(screen.getByLabelText('提交基线')).toHaveValue('HEAD');
-  expect(screen.getByText(/在独立 Git 工作树中执行/)).toBeInTheDocument();
+  expect(vi.mocked(createRun).mock.calls[0][0]).toMatchObject({ prompt: '清洗CSV' });
+  expect(screen.queryByLabelText('预期产物')).not.toBeInTheDocument();
 });
 
 it('隔离Git提交使用用户指定基线，执行方式与来源一并发送', async () => {
@@ -195,9 +162,30 @@ it('隔离Git提交使用用户指定基线，执行方式与来源一并发送'
     project_id: gitProject.id,
     execution_mode: 'isolated',
     base_ref: 'main',
-    expected_outputs: [],
-    config: {},
+    config: { auto_repair: false },
   });
+});
+
+it('只有已保存的公开项目测试才允许开启自动修复，并随本次请求冻结', async () => {
+  // 开关不是全局预算设置，也不能把未保存的命令草稿当成有效测试。
+  const user = setup({
+    recent_projects: [{ ...gitProject, test_argv: ['python', '-m', 'pytest'] }],
+  });
+  await user.click(screen.getByText(/高级设置/));
+  const checkbox = screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' });
+  expect(checkbox).not.toBeChecked();
+  await user.click(checkbox);
+  await user.type(screen.getByLabelText('任务描述'), '修复并重测');
+  await user.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(/* 核对HTTP边界实际携带授权。 */ () => expect(createRun).toHaveBeenCalledOnce());
+  expect(vi.mocked(createRun).mock.calls[0][0].config.auto_repair).toBe(true);
+});
+
+it('没有已保存测试时自动修复保持禁用', async () => {
+  // 填写测试草稿本身不等于登记或执行该命令。
+  const user = setup({ recent_projects: [gitProject] });
+  await user.click(screen.getByText(/高级设置/));
+  expect(screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' })).toBeDisabled();
 });
 
 it('技能收在高级设置，明确选择与清空仍随实际任务请求提交', async () => {
@@ -247,14 +235,11 @@ it('配置页往返或刷新重挂载后保留文字，成功接纳前不清空�
   await user.click(screen.getByText(/高级设置/));
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('继续编辑');
-  await user.click(screen.getByLabelText('预期产物'));
-  await user.paste('result.csv');
   const stored = JSON.parse(sessionStorage.getItem('harness-new-task-draft') || '{}');
-  expect(stored).toMatchObject({ prompt: '继续编辑', outputs: 'result.csv' });
+  expect(stored).toMatchObject({ prompt: '继续编辑' });
   user.unmount();
   setup();
   expect(screen.getByLabelText('任务描述')).toHaveValue('继续编辑');
-  expect(screen.getByLabelText('预期产物')).toHaveValue('result.csv');
 });
 
 it('真实接纳任务后清除新任务草稿，下一次打开不会重复填写已发送内容', async () => {
@@ -288,20 +273,4 @@ it('本机Git项目默认原目录执行，不允许隐藏的旧基线切换到�
     execution_mode: 'local',
     base_ref: 'HEAD',
   });
-});
-
-it('普通目录保存解释器后显示确认，保持项目和任务草稿且不执行任务', async () => {
-  // 普通目录没有 Git 测试区域，但解释器设置仍须显示保存结果。
-  const configured = { ...folder, python_executable: 'D:/plain-env/python.exe' };
-  vi.mocked(saveProjectSettings).mockResolvedValue(configured);
-  const user = setup();
-  await user.click(screen.getByText(/高级设置/));
-  await user.click(screen.getByLabelText('Python 解释器'));
-  await user.paste(configured.python_executable);
-  await user.click(screen.getByRole('button', { name: '保存项目设置' }));
-  expect(await screen.findByRole('status')).toHaveTextContent('项目设置已保存');
-  expect(screen.getByLabelText('Python 解释器')).toHaveValue(configured.python_executable);
-  expect(saveProjectSettings).toHaveBeenCalledWith(folder.id, '', 30, configured.python_executable);
-  expect(createRun).not.toHaveBeenCalled();
-  expect(screen.queryByLabelText('项目测试命令')).not.toBeInTheDocument();
 });

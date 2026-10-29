@@ -34,11 +34,13 @@ uv --cache-dir .uv-cache run harness serve --config harness.example.toml
 
 打开 [本地任务工作台](http://127.0.0.1:8765/runs)。构建后的页面由同一个 Python 服务提供；后续不修改前端源码时，只需运行最后一条命令。
 
-首页点击“选择项目文件夹”，从系统窗口打开电脑中的真实目录，再输入任务并发送。侧栏按项目组织已有对话，首页提供最近会话；每段多轮会话只显示一条，项目页可明确新建对话。高级设置提供技能、项目测试、预算及预期产物。会话详情默认收起，点击“查看详情”或各轮“本轮详情”查看测试、轨迹和产物；刷新或关闭网页不会取消后台任务。首次使用不必编辑项目目录配置，具体操作与限制见 [打开本机项目](docs/LOCAL_PROJECTS.md)。
+首页点击“选择项目文件夹”，从系统窗口打开电脑中的真实目录，再输入任务并发送。侧栏按项目组织已有对话，首页提供最近会话；每段多轮会话只显示一条，项目页可明确新建对话。高级设置提供技能、执行方式与自动修复；项目测试和解释器在项目页“项目设置”保存，全局模型与预算在“运行配置”调整，任务结束后自动收集本轮新增、修改的文件。会话详情默认收起，点击“查看详情”或各轮“本轮详情”查看测试、轨迹和产物；刷新或关闭网页不会取消后台任务。首次使用不必编辑项目目录配置，具体操作与限制见 [打开本机项目](docs/LOCAL_PROJECTS.md)。
 
 ## 使用自己的项目
 
-在首页打开 Git 仓库根目录，页面显示真实路径、分支、提交和未提交状态。默认直接在所选目录中读写，包含当前未提交改动；会话顶部显示实际执行路径，多轮继续使用同一目录。高级设置可明确选择隔离执行，再从指定基线建立 worktree；只有隔离工作树提供保留/丢弃，保留不自动合并。没有配置测试也能执行，结果明确保持“未验收”；可在高级设置保存已有测试命令和超时，保存本身不运行命令。依赖环境及审阅流程见 [代码任务与审阅](docs/PROJECT_TASKS.md)。
+在首页打开 Git 仓库根目录，页面显示真实路径、分支、提交和未提交状态。默认直接在所选目录中读写，包含当前未提交改动；会话顶部显示实际执行路径，多轮继续使用同一目录。高级设置可明确选择隔离执行，再从指定基线建立 worktree；只有隔离工作树提供保留/丢弃，保留不自动合并。没有配置测试也能执行，结果明确保持“未验收”；可在项目设置保存已有测试命令、超时和解释器，保存本身不运行命令。依赖环境及审阅流程见 [代码任务与审阅](docs/PROJECT_TASKS.md)。
+
+保存公开项目测试后，可开启“测试失败自动修复（最多2次）”。测试断言失败时，Agent沿用同一任务和剩余预算修改、重测；结果页保留每次检查、原始输出和最终结果。默认关闭，测试异常和取消不会触发修复。后续消息可在“下一轮设置”调整开关。
 
 普通文件夹始终在所选目录执行；Git 项目可明确选择独立工作树。执行位置不从文字草稿恢复。原目录差异采集超限会明确提示，但不会把任务改到另一目录或阻止继续；旧轮产物保存在固定快照中。最近项目登记保存在当前运行记录根目录的 .local-projects/catalog.json，重启服务后保留。系统选择框当前支持与服务同机运行的 Windows 桌面，不能选择另一台电脑的目录；详见 [打开本机项目](docs/LOCAL_PROJECTS.md)。
 
@@ -65,10 +67,10 @@ $demoWorkspace = Join-Path '.runtime' ('logs-' + [Guid]::NewGuid().ToString('N')
 New-Item -ItemType Directory -Path $demoWorkspace | Out-Null
 Copy-Item -LiteralPath examples/logs/app.log -Destination (Join-Path $demoWorkspace 'app.log')
 
-uv --cache-dir .uv-cache run harness run --task-file examples/logs/task_artifacts.md --workspace $demoWorkspace --config harness.example.toml --expected-output analyze_logs.py --expected-output report.json --verifier examples/verifiers/logs.toml
+uv --cache-dir .uv-cache run harness run --task-file examples/logs/task_artifacts.md --workspace $demoWorkspace --config harness.example.toml --verifier examples/verifiers/logs.toml
 ```
 
-`--expected-output` 可以重复传入，用来登记命令生成的文件；登记存在性不等于内容验收。固定日志验收器只适用于仓库输入，其他任务需配置相应的宿主验收程序。
+CLI 与网页均自动登记本轮新增、修改的文件，无需声明输出路径；删除文件保留在差异中，未修改的已有文件和依赖缓存不列为本轮产物。文件收集不等于内容验收。固定日志验收器只适用于仓库输入，其他任务需配置相应的宿主验收程序。
 
 也可指定自己的工作区：
 
@@ -89,7 +91,7 @@ uv --cache-dir .uv-cache run harness show RUN_ID --json
 
 根目录的 `harness.example.toml` 配置模型、工具、上下文和内部限制；普通设置页只开放模型、工具、模型轮次、工具次数和总时限。项目目录可直接从页面打开。`web.example.toml` 可选登记初始项目、工作区和验收器，启动时用 `--web-config web.example.toml` 加载。内置默认只启用 `read_file`，显式传入示例运行配置才启用读、搜、写、局部编辑和命令五类工具。修改已有文件可使用带版本核验的 edit_file，统一 LF/CRLF 文件支持等价匹配并保持原换行与 BOM；具体协议见 [文件工具](docs/TECH_DESIGN_V0.1.md#6-文件与命令工具及本地执行边界)。CLI 可用 `--model` 和 `--max-model-turns` 覆盖配置。
 
-执行、验收和清理分别记录；模型回答结束不代表产物正确。退出码如下，PowerShell 用 `$LASTEXITCODE` 查看：
+执行、验收、文件收集和清理分别记录；模型回答结束不代表产物正确。退出码如下，PowerShell 用 `$LASTEXITCODE` 查看：
 
 | 退出码 | 含义 |
 | --- | --- |
@@ -101,6 +103,8 @@ uv --cache-dir .uv-cache run harness show RUN_ID --json
 | 130 | 用户/上游取消或服务关闭 |
 
 `show` 返回 0 仅表示读取成功。当前执行可信本地命令，路径检查不等于容器隔离；命令边界、超时、取消、验收协议与记录结构见 [技术设计](docs/TECH_DESIGN_V0.1.md)。
+
+CLI使用`--auto-repair`明确开启修复，`--verifier`清单必须声明`kind = "project_tests"`，并配置自己的公开测试argv/cwd，例如`argv = ["python", "-m", "pytest", "-q"]`。清单未声明kind时默认独立验收，不允许模型获得结果反馈；整体轮次、调用和时限不会因修复重置。
 
 ## 检查
 
@@ -121,4 +125,4 @@ npm.cmd --prefix frontend run build
 
 默认直接修改所选目录；明确选择 Git 隔离时，一个会话复用一个工作树。各轮证据固定保存，只有最新轮可保留/丢弃，历史产物由快照读取。
 
-高级设置可保存项目 Python 解释器；空白按 PATH。CLI 可使用 --python-executable 指定入口。命令与裸 Python 验收统一解析，依赖环境需提前准备。详细规则见 [Python 执行配置](docs/PYTHON_EXECUTION.md)。
+项目页“项目设置”可保存 Python 解释器；空白按 PATH。CLI 可使用 --python-executable 指定入口。命令与裸 Python 验收统一解析，依赖环境需提前准备。详细规则见 [Python 执行配置](docs/PYTHON_EXECUTION.md)。

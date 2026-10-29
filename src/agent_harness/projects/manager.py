@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from agent_harness.processes import _child_environment, _windows_taskkill
 from agent_harness.snapshots import FileSnapshotStore
+from agent_harness.local_execution import LocalChangeStore
 
 from .models import ChangedFile, ProjectPreset, ProjectReview, ProjectWorkspace
 
@@ -47,7 +48,7 @@ class ProjectManager:
         self.metadata_root = self.runs_root / ".projects"  # 与 Runner 的 UUID 目录隔离，启动前可创建。
         self.files = FileSnapshotStore(
             self.runs_root, namespace=".project-files",
-            exclude_names=frozenset({".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".uv-cache", ".ruff_cache"}),
+            exclude_names=LocalChangeStore.EXCLUDE_NAMES,
             protected_roots=(self.runs_root,),
         )  # 每轮固定历史产物；共享工作树继续变化也不替换旧文件。
         self._lock = threading.RLock()  # 串行化创建、快照、保留和丢弃，避免线程内竞争。

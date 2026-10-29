@@ -27,9 +27,13 @@ const eventLabels: Record<string, string> = {
   execution_completed: '执行完成',
   verification_started: '开始独立验收',
   verification_result: '验收结果',
+  repair_started: '开始自动修复',
+  repair_stopped: '自动修复停止',
   verification_skipped: '未执行验收',
   run_finished: '运行结束',
   cancellation_received: '收到取消',
+  artifact_collection_started: '收集本轮文件',
+  artifacts_collected: '文件收集结束',
   artifact_registered: '登记产物',
 };
 const connectionLabels: Record<ConnectionState, string> = {
@@ -43,6 +47,8 @@ const connectionLabels: Record<ConnectionState, string> = {
 /** 根据已知事件生成简短摘要；不尝试将工具内容当 HTML 或 Markdown 执行。 */
 function eventSummary(event: RunEvent): string {
   const payload = event.payload;
+  if (event.type === 'repair_started') return `第 ${String(payload.repair_attempt)} / 2 次修复`;
+  if (event.type === 'repair_stopped') return String(payload.reason ?? '');
   if (event.type === 'context_prepared') {
     const instruction = payload.instruction as { status?: unknown } | undefined;
     const status = String(instruction?.status ?? '');
@@ -107,11 +113,8 @@ export function EventTrail({
   loadOlder,
 }: EventTrailProps) {
   return (
-    <section className="event-trail" aria-labelledby="trail-heading">
+    <section className="event-trail" aria-label="执行轨迹">
       <div className="section-heading">
-        <div>
-          <h2 id="trail-heading">执行轨迹</h2>
-        </div>
         <span className={`connection-state ${connection}`}>
           <i />
           {connectionLabels[connection]}

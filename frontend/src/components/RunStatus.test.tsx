@@ -48,3 +48,13 @@ it('项目测试通过后仍明确等待人工审阅', () => {
   run.phase = 'project_snapshot';
   expect(runSummary(run).label).toBe('整理代码改动');
 });
+
+it('修复阶段明确显示次数，重新测试期间继续展示测试状态', () => {
+  // 不能把原模型回答或旧检查通过视为整个任务已完成。
+  const run = makeRun({ active: true, source_kind: 'project', phase: 'model_request' });
+  run.result.execution_status = 'running';
+  run.result.repair_attempts = 1;
+  expect(runSummary(run).label).toBe('正在修复 1/2');
+  run.phase = 'verification';
+  expect(runSummary(run).label).toBe('测试中');
+});

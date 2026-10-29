@@ -248,6 +248,7 @@ class RunConfig(DataModel):
     limits: RunLimits = Field(default_factory=RunLimits)
     # 每次运行独立的指令加载与整体模型输入预算策略。
     context: ContextPolicy = Field(default_factory=ContextPolicy)
+    auto_repair: bool = False  # 明确开启后，公开项目测试失败最多追加两次修复；仍共用本轮全部预算。
 
     @model_validator(mode="after")
     def validate_config(self) -> "RunConfig":
@@ -271,6 +272,7 @@ class RunConfig(DataModel):
 
 # 宿主预先指定的验收程序及其工作目录、超时；描述入口，不负责执行验收。
 class VerifierSpec(DataModel):
+    kind: Literal["independent", "project_tests"] = "independent"  # 独立检查不反馈模型；project_tests表示用户明确公开的项目测试。
     argv: list[str] = Field(min_length=1)  # 宿主固定程序和参数，启动预检后 argv[0] 为绝对可执行入口。
     cwd: Path | None = None  # 验收进程目录；清单默认取清单所在目录，程序调用 None 时取宿主当前目录。
     timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)  # 验收自身上限（秒），仍受总运行截止时间约束。
@@ -320,7 +322,6 @@ class TaskSpec(DataModel):
     workspace: Path
     python_execution: PythonExecution | None = None  # 接纳运行时固定；None 表示尚未准备，读取时不推断当前环境。
     verifier: VerifierSpec | None = None
-    expected_outputs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_task(self) -> "TaskSpec":
@@ -412,6 +413,13 @@ class VerificationResult(DataModel):
     artifacts: list[ArtifactRef] = Field(default_factory=list)  # 本次验收的 stdout/stderr 运行内引用。
 
 
+class VerificationAttempt(DataModel):
+    """一次实际检查的固定证据；初次为0，修复后的检查与对应修复次数一致。"""
+
+    repair_attempt: int = Field(ge=0, le=2)  # 0为原始交付，1/2为相应修复后的代码。
+    result: VerificationResult  # 该次进程退出、输出和清理事实，后续成功不能覆盖早先失败。
+
+
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
     schema_version: Literal[1] = 1
@@ -421,7 +429,9 @@ class RunResult(DataModel):
         "created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"
     ] = "created"
     validation_status: Literal["unverified", "passed", "failed", "error"] = "unverified"
-    verification: VerificationResult | None = None  # None 表示未运行或旧记录没有详情；非空时 status 必须与 validation_status 相同。
+    verification: VerificationResult | None = None  # 当前代码的检查；修复开始后清空，不能用旧检查证明新代码。
+    verification_attempts: list[VerificationAttempt] = Field(default_factory=list)  # 按实际执行顺序保留全部检查，不包含未启动的检查。
+    repair_attempts: int = Field(default=0, ge=0, le=2)  # 已开始的自动修复次数，与模型轮次及用户追加轮次分别记录。
     cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"] = "not_needed"
     stop_reason: str | None = None
     # 统计已发起的逻辑轮次、HTTP 尝试及接纳处理的工具调用，不把重试重复算轮次。
@@ -430,7 +440,8 @@ class RunResult(DataModel):
     tool_calls: int = Field(default=0, ge=0)
     final_answer: str | None = None
     artifacts: list[ArtifactRef] = Field(default_factory=list)
-    missing_artifacts: list[str] = Field(default_factory=list)
+    artifact_status: Literal["pending", "complete", "incomplete"] = "pending"  # 文件收集独立状态；不改变执行或验收结论。
+    artifact_warnings: list[str] = Field(default_factory=list)  # 采集超限、文件变化或证据保存失败的受控说明。
     usage: TokenUsage = Field(default_factory=TokenUsage)
     # 缺少用量或发生重试时，只展示已知部分，不能据此推算精确账单。
     usage_complete: bool = False

@@ -96,7 +96,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
         async with client_for(config, model) as (client, manager):
             identifier = manager.catalog.register(selected)
             source = {'project_id' if kind == 'project' else 'workspace_id': identifier}
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'expected_outputs': ['result.txt'], **source}))
+            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', **source}))
             assert first['execution_mode'] == 'local' and Path(first['workspace']) == selected
             assert Path(first['source_path']) == selected
             assert first['project'] is None
@@ -226,13 +226,14 @@ def test_local_report_limit_does_not_force_a_copy_or_block_continuation(tmp_path
             manager.local_changes.before.MAX_BYTES = 128
             manager.local_changes.after.MAX_BYTES = 128
             identifier = manager.catalog.register(selected)
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier, 'expected_outputs': ['result.txt']}))
+            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier}))
             assert first['local_changes']['status'] == 'error'
             assert not first['local_changes']['patch_available']
             assert Path(first['workspace']) == selected
             assert (await client.get('/api/runs/' + first['run_id'] + '/conversation')).json()['can_continue']
             artifact = await client.get('/api/runs/' + first['run_id'] + '/artifacts', params={'location': 'workspace', 'path': 'result.txt', 'preview': True})
-            assert artifact.status_code == 409 and artifact.json()['error']['code'] == 'local_artifact_unavailable'
+            assert first['result']['artifact_status'] == 'incomplete' and first['result']['artifact_warnings']
+            assert artifact.status_code == 404 and artifact.json()['error']['code'] == 'artifact_not_found'
             second = await finish(client, await client.post('/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())}))
             assert Path(second['workspace']) == selected and second['local_changes']['status'] == 'error'
             assert (selected / 'result.txt').read_text(encoding='utf-8') == 'existing\nfirst\nsecond\n'

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from ..config import ConfigurationError, load_config, prepare_task
 from ..projects import ProjectError
-from ..runner import validate_execution, validate_output_paths
+from ..runner import validate_auto_repair, validate_execution
 from ..execution import PythonExecutionError, prepare_python_execution
 from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
 from ..sessions import SessionError, SessionStore, history_messages, payload_digest
@@ -189,13 +189,11 @@ class ConversationService:
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 identifier = uuid4()
-                expected = parent.manifest.task.expected_outputs if request.expected_outputs is None else request.expected_outputs
-                task = parent.manifest.task.model_copy(update={'prompt': prompt, 'expected_outputs': expected})
+                task = parent.manifest.task.model_copy(update={'prompt': prompt})
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
                 api_key = os.environ.get(config.api_key_env, '')
                 validate_execution(manifest, api_key)
-                validate_output_paths(task, self.manager.runs_root)
             except (ConfigurationError, ValidationError) as error:
                 raise SessionError('invalid_run', str(error) if isinstance(error, ConfigurationError) else '追加任务配置无效。') from None
             self.store.begin(session_id, request.request_id, parent_id, identifier, digest, prompt)
@@ -215,7 +213,7 @@ class ConversationService:
                             if selected is None:
                                 raise SessionError('continuation_verifier_missing', '前轮验收预设已移除，请核对宿主配置。')
                             verifier_path = selected.path
-                        verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, expected, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
+                        verifier = prepare_task(prompt, root, verifier_path, config.limits.verifier_timeout_seconds, python_paths=current_source.python_paths, python_executable=current_source.python_executable).verifier
                 else:  # 来源模型保证隔离执行只能属于 Git 项目。
                     preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
                     def prepare_project():
@@ -234,7 +232,7 @@ class ConversationService:
                 execution = prepare_python_execution(root, current_source.python_paths, python_executable=current_source.python_executable)
                 task = task.model_copy(update={'workspace': root, 'verifier': verifier, 'python_execution': execution})
                 manifest = manifest.model_copy(update={'task': task})
-                validate_output_paths(task, self.manager.runs_root)
+                validate_auto_repair(manifest)
                 self.store.commit(session_id, request.request_id)
                 return await self.manager._launch(manifest, api_key)
             except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:

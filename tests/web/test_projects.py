@@ -141,8 +141,8 @@ def test_project_options_probe_failure_does_not_break_ordinary_tasks(project_con
         """检查选项受控错误并执行普通任务；项目探测不阻断原功能。"""
         async with client_for(project_config, ProjectModel(repair=False)) as (client, app):
             options = (await client.get("/api/options")).json()
-            assert options["projects"][0]["available"] is False
-            assert options["projects"][0]["error"]
+            assert options["recent_projects"][0]["available"] is False
+            assert options["recent_projects"][0]["error"]
             response = await client.post("/api/runs", json={"prompt": "普通任务", "workspace_id": "ordinary"})
             assert response.status_code == 202
             assert (await finished(client, response.json()["run_id"]))["project"] is None
@@ -192,7 +192,7 @@ def test_real_tools_project_test_diff_and_keep_discard(project_config: WebConfig
     async def scenario():
         """完整走提交、项目检查、diff、下载、保留和丢弃；检查快照在删除后仍可下载。"""
         async with client_for(project_config) as (client, app):
-            option = (await client.get("/api/options")).json()["projects"][0]
+            option = (await client.get("/api/options")).json()["recent_projects"][0]
             assert option["source_dirty"] is True and option["available"] is True
             created = await start(client)
             identifier = created["run_id"]
@@ -294,7 +294,7 @@ def test_snapshot_keeps_slot_and_cannot_be_cancelled_mid_capture(project_config:
                 assert await asyncio.to_thread(entered.wait, 5)
                 identifier = created["run_id"]
                 view = (await client.get(f"/api/runs/{identifier}")).json()
-                assert view["active"] is True and view["phase"] == "project_snapshot"
+                assert view["active"] is True and view["phase"] == "artifact_collection"
                 await client.post(f"/api/runs/{identifier}/cancel")
                 assert (await client.get(f"/api/runs/{identifier}")).json()["cancelling"] is False
                 response = await client.post("/api/runs", json={"prompt": "第二项", "project_id": "backend", "execution_mode": "isolated"})
@@ -332,10 +332,11 @@ def test_request_disconnect_during_prepare_remains_service_owned(project_config:
                 release.set()
             await asyncio.wait_for(asyncio.shield(app.state.manager._submission), 10)
             await asyncio.wait_for(app.state.manager.wait_idle(), 10)
-            listed = (await client.get("/api/runs")).json()
+            listed = (await client.get("/api/conversations")).json()
             assert listed["total"] == 1
-            assert listed["items"][0]["project"]["snapshot_status"] == "ready"
-            assert listed["items"][0]["active"] is False
+            detail = (await client.get(f"/api/runs/{listed['items'][0]['entry_run_id']}")).json()
+            assert detail["project"]["snapshot_status"] == "ready"
+            assert detail["active"] is False
     asyncio.run(scenario())
 
 
@@ -486,17 +487,12 @@ def test_post_worktree_preflight_failure_removes_unstarted_copy(project_config: 
     """创建副本后的二次路径校验失败时清理已登记工作树，不启动模型也不遗留孤立副本；返回 None。"""
     from agent_harness import web
     monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
-    original = web.service.validate_output_paths
-    calls = 0
+    from agent_harness.execution import PythonExecutionError
 
-    def validate(task, root):
-        """首次源目录预检沿用真实实现，第二次工作树预检模拟受控错误；返回 None 或抛配置错误。"""
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise ConfigurationError("offline path changed")
-        return original(task, root)
-    monkeypatch.setattr(web.service, "validate_output_paths", validate)
+    def fail_execution_snapshot(*arguments, **keywords):
+        """实际工作树创建后的解释器快照预检失败；接收宿主参数并抛受控错误，不启动进程。"""
+        raise PythonExecutionError("offline path changed")
+    monkeypatch.setattr(web.service, "prepare_python_execution", fail_execution_snapshot)
 
     async def scenario():
         """提交到副本创建后失败，检查400、模型零调用和源目录唯一Git登记。"""

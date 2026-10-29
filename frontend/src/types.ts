@@ -125,6 +125,7 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  auto_repair: boolean; // 公开项目测试失败时最多自动修复两次，默认关闭，不重置预算。
   provider: 'deepseek'; // 当前宿主配置的供应商。
   requested_model: string; // 本次请求使用的模型名称。
   api_key_env: 'DEEPSEEK_API_KEY'; // 仅展示宿主环境变量来源。
@@ -159,6 +160,12 @@ export interface VerificationResult {
   artifacts: ArtifactRef[]; // 验收原始输出引用。
 }
 
+/** 对应某次代码版本的实际检查，0为首次，1/2为相应修复后的结果。 */
+export interface VerificationAttempt {
+  repair_attempt: number; // 检查时已经开始的修复次数，不是模型请求次数。
+  result: VerificationResult; // 当次真实进程结果与独立原始输出引用。
+}
+
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
   schema_version: 1; // 当前记录格式版本。
@@ -166,6 +173,8 @@ export interface RunResult {
   execution_status: ExecutionStatus; // 模型工具循环的执行状态。
   validation_status: ValidationStatus; // 独立验收的结论。
   verification: VerificationResult | null; // 未运行验收或旧记录时为 null。
+  verification_attempts: VerificationAttempt[]; // 全部实际检查，后续通过不覆盖此前失败。
+  repair_attempts: number; // 已启动的自动修复次数，0至2，与用户轮次分别记录。
   cleanup_status: CleanupStatus; // 所有已执行进程合并后的最坏清理状态。
   stop_reason: string | null; // 宿主结束原因码。
   model_turns: number; // 已发起的逻辑模型轮次。
@@ -173,7 +182,8 @@ export interface RunResult {
   tool_calls: number; // 已接纳的工具调用次数。
   final_answer: string | null; // 最终模型原文，界面按受限Markdown展示。
   artifacts: ArtifactRef[]; // 已登记的所有产物。
-  missing_artifacts: string[]; // 声明了但未找到的预期产物。
+  artifact_status: 'pending' | 'complete' | 'incomplete'; // 文件收集状态，独立于执行和测试。
+  artifact_warnings: string[]; // 采集受限或证据未完整保存的后端说明。
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; // 已知 token 数。
   usage_complete: boolean; // false 时 token 数仅为已知部分。
   active_duration_seconds?: number; // 本次主动执行秒数；旧记录缺省不推断。
@@ -192,6 +202,7 @@ export interface RunView {
   prompt: string; // 原始任务描述。
   workspace: string; // 工具、命令和验收实际使用的绝对目录。
   python_execution: PythonExecution | null; // 保存的解释器与源码目录；null 时不猜测历史执行环境。
+  verification_kind: 'independent' | 'project_tests' | null; // 固定检查用途，公开项目测试才允许自动修复反馈。
   execution_mode?: 'local' | 'isolated' | null; // CLI没有网页来源时可为空；网页会话明确固定此值。
   source_path?: string | null; // 用户最初选择的目录。
   source_kind?: 'project' | 'workspace' | null; // 项目测试与普通验收文案的来源。
@@ -225,36 +236,11 @@ export interface RunEvent {
   payload: Record<string, unknown>; // 不可信工具输出只按文本展示。
 }
 
-/** 服务启动时登记的工作区选项；前端不能提交任意绝对目录。 */
-export interface WorkspaceOption {
-  python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
-  id: string; // 提交给 API 的受控标识。
-  label: string; // 可读名称。
-  path: string; // 源目录说明。
-}
-
 /** 宿主预设验收器；固定样例在名称与说明中标明适用范围。 */
 export interface VerifierOption {
   id: string; // 可选验收器标识。
   label: string; // 面向用户的名称。
   description: string; // 适用范围与限制。
-}
-
-/** 宿主登记的 Git 项目；用户可通过明确保存修改解释器和测试设置。 */
-export interface ProjectOption {
-  python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
-  id: string; // 提交给 API 的受控项目标识。
-  label: string; // 项目的可读名称。
-  path: string; // 原始 Git 仓库目录，只读展示。
-  branch?: string | null; // 当前分支，分离HEAD时为HEAD。
-  test_command?: string; // 供项目设置编辑的完整命令，不经Shell执行。
-  base_ref: string; // 默认提交引用，通常为 HEAD。
-  head_commit: string | null; // 读取选项时的 HEAD 提交，不可用项目可能为 null。
-  source_dirty: boolean; // 原目录是否包含不会带入任务的未提交改动。
-  test_argv: string[]; // 宿主登记的测试参数列表，不经过浏览器拼接 shell。
-  test_timeout_seconds: number; // 项目测试超时，单位秒。
-  available?: boolean; // false 时登记项目目前不可使用，旧接口缺省视为可用。
-  error?: string | null; // 项目不可用时的受控说明，可用时为 null。
 }
 
 /** 会话级 Git 工作树生命周期；各轮代码证据单独保存。 */
@@ -310,19 +296,18 @@ export interface LocalProjectOption {
 
 /** 启动能力选项；密钥仅返回是否配置，不返回值。 */
 export interface OptionsResponse {
-  recent_projects?: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
+  recent_projects: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
   folder_picker_available?: boolean; // 本机原生文件夹选择器是否受支持。
   config: RunConfig; // 服务端默认配置。
   key_configured: boolean; // 进程中是否存在可用模型密钥。
-  workspaces: WorkspaceOption[]; // 已登记目录。
   verifiers: VerifierOption[]; // 已登记验收程序。
-  projects?: ProjectOption[]; // 已登记 Git 项目；旧服务缺省等价于空列表。
   skills?: SkillOption[]; // 宿主技能目录元数据；正文只在所选运行中加载。
   busy_run_id: string | null; // 唯一运行槽当前占用者。
 }
 
 /** 本浏览器下一次提交的配置；不修改服务器全局设置。 */
 export interface ConfigOverrides {
+  auto_repair?: boolean; // 本轮明确开启/关闭自动修复；缺省继承宿主或前轮。
   requested_model?: string; // 缺省沿用宿主模型。
   tools?: ToolName[]; // 缺省沿用宿主工具。
   skills?: string[]; // 缺省继承宿主或前轮选择，[] 明确清空。
@@ -334,7 +319,6 @@ export interface ConfigOverrides {
 export type CreateRunRequest = {
   prompt: string; // 非空任务文本。
   execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated 仅用于主动创建 Git 工作树。
-  expected_outputs: string[]; // 工作区相对产物路径。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
 } & (
   | {
@@ -363,7 +347,6 @@ export interface FollowupRequest {
   request_id: string; // 浏览器生成的 UUID。
   prompt: string; // 本次新增要求。
   config?: ConfigOverrides; // 默认沿用前轮，可用当前配置草稿覆盖。
-  expected_outputs?: string[] | null; // 缺省沿用前轮预期产物。
 }
 
 /** 连续对话的一轮；详细测试、事件与差异仍在独立运行详情。 */

@@ -173,7 +173,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=20, ge=1, le=100),
         project_id: str | None = Query(default=None, min_length=1, max_length=64),
-        status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"] | None = None,
+        status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "waiting_input"] | None = None,
     ) -> ConversationPage:
         """按最新状态和当前项目身份聚合分页；只读磁盘事实，不打开目录或启动模型。"""
         # 与现有运行列表一样串行读取，共享的历史LRU不跨线程修改。

@@ -99,6 +99,12 @@ def _print_result(data: dict, *, as_json: bool) -> None:
     if data.get("final_answer"):
         print("\n模型回答：")
         print(data["final_answer"])
+    if data["execution_status"] == "waiting_input":
+        print("提示：正在等待用户回答或批准，未完成开发；返回码为4。网页会话可在原会话处理请求。")
+        planning = data.get("planning", {})
+        if planning.get("plans"):
+            plan = planning["plans"][-1]
+            print(f"计划 v{plan['version']}：{plan['title']}\n{plan['summary']}")
     if data["execution_status"] == "completed" and data["validation_status"] == "unverified":
         print("提示：执行已结束，尚未通过独立验收；本次执行命令返回码为 3。")
     if data.get("interrupted"):

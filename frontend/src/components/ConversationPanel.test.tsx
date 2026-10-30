@@ -20,6 +20,8 @@ vi.mock(
     getProjectReview: vi.fn(),
     reviewRun: vi.fn(),
     patchUrl: /* 固定附件地址，不触发下载。 */ (id: string) => `/api/runs/${id}/patch`,
+    planMarkdownUrl: /* 本例仅测试审批发送，不触发附件读取。 */ (id: string, version: number) =>
+      `/api/runs/${id}/artifacts?location=run&path=plans%2Fv${version}.md`,
     errorMessage: /* 不回显不可信对象。 */ (error: unknown) =>
       error instanceof Error ? error.message : '请求失败',
   }),
@@ -105,6 +107,62 @@ beforeEach(
     vi.mocked(getDiff).mockResolvedValue({ content: '+fixed', truncated: false, size_bytes: 6 });
   },
 );
+
+it('批准操作经真实发送Hook绑定当前请求和版本，重复点击不重复提交', async () => {
+  const user = userEvent.setup();
+  const run = makeRun();
+  run.result.execution_status = 'waiting_input';
+  run.result.planning = {
+    phase: 'planning',
+    reason: '先研究',
+    // 批准入口必须同时展示与请求匹配的真实方案，不能仅靠一个待批准编号授权。
+    plans: [
+      {
+        version: 3,
+        title: '实现登录与退出',
+        summary: '前后端联调并核对会话状态。',
+        scope: ['登录接口与页面'],
+        steps: [{ text: '实现并联调', status: 'pending' }],
+        verification: ['登录后退出并检查会话'],
+        workspace: 'D:/project',
+        workspace_identity: [1, 2],
+        status: 'pending',
+      },
+    ],
+    decisions: [],
+    pending: {
+      id: 'current-request',
+      kind: 'plan_approval',
+      question: '请审阅',
+      options: [],
+      plan_version: 3,
+    },
+  };
+  let accept!: (view: RunView) => void;
+  vi.mocked(createFollowup).mockReturnValue(
+    new Promise(
+      /* 延迟HTTP确认以验证双击不会重新分配批准请求。 */ (resolve) => {
+        accept = resolve;
+      },
+    ),
+  );
+  show(run);
+  const approve = await screen.findByRole('button', { name: '批准并执行' });
+  await user.dblClick(approve);
+  expect(createFollowup).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(createFollowup).mock.calls[0]).toEqual([
+    'run-a',
+    expect.objectContaining({
+      prompt: '批准执行计划 v3',
+      decision: { interaction_id: 'current-request', action: 'approve', plan_version: 3 },
+    }),
+  ]);
+  accept(makeRun({ run_id: 'run-b' }));
+  await waitFor(
+    /* 确认后旧请求不再保留于草稿。 */ () =>
+      expect(screen.queryByText('发送中')).not.toBeInTheDocument(),
+  );
+});
 
 it('发送实际载荷，服务确认前显示发送中，确认后交付真实新轮', async () => {
   // pending用户消息不会被伪装成真实Agent回答。

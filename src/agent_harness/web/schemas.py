@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ..schemas import PythonExecution, ContextView, DataModel, JsonValue, RunConfig, RunEvent, RunResult, ToolName
+from ..schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from ..projects import ProjectReview, ProjectWorkspace
 from ..local_execution import LocalChangeView
 
@@ -23,6 +23,7 @@ class RunConfigPatch(DataModel):
 
 # 提交任务时不接受宿主任意路径、程序参数或密钥。
 class CreateRunRequest(DataModel):
+    mode: Literal["auto", "plan"] = "auto"  # auto允许Agent主动规划；plan由用户明确限制为先规划。
     prompt: str = Field(min_length=1, max_length=65536)  # 本次任务描述，空白由 TaskSpec 拒绝。
     workspace_id: str | None = Field(default=None, min_length=1, max_length=64)  # 普通任务工作区，与 project_id 二选一。
     project_id: str | None = Field(default=None, min_length=1, max_length=64)  # Git 项目任务编号。
@@ -48,6 +49,8 @@ class CreateRunRequest(DataModel):
 
 # 追加要求只接受会话请求内容，工作区和验收来源继承父运行并由宿主核对。
 class FollowupRequest(DataModel):
+    mode: Literal["auto", "plan"] | None = None  # None继承；auto不能解除未批准计划的只读状态。
+    decision: HumanDecision | None = None  # 当前问题回答或计划决定；不接受模型生成的批准。
     request_id: UUID = Field(strict=False)  # 浏览器生成的UUID字符串；相同编号和载荷只执行一次。
     prompt: str = Field(min_length=1, max_length=65536)  # 本次新要求，不要求用户重述历史。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 按字段覆盖前轮可编辑配置。
@@ -55,6 +58,7 @@ class FollowupRequest(DataModel):
 
 # 连续对话使用精简逐轮视图；完整事件、测试和差异仍通过每轮详情查看。
 class ConversationTurn(DataModel):
+    stop_reason: str | None = None  # 区分规划结束、拒绝和实际开发完成，缺少可信终态时为None。
     run_id: UUID  # 本轮独立运行编号。
     parent_run_id: UUID | None  # 首轮为空。
     turn_index: int = Field(ge=1)  # 用户请求序号。
@@ -80,7 +84,7 @@ class ConversationSource(DataModel):
 class ConversationRunState(DataModel):
     """会话列表使用的最新轮状态；不携带完整回答、配置或工具输出。"""
 
-    execution_status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"]  # 最新轮执行事实。
+    execution_status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "waiting_input"]  # 等待用户也是真实终态，不标为开发完成。
     validation_status: Literal["unverified", "passed", "failed", "error"]  # 最新轮验收事实。
     cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"]  # 最新轮清理事实。
     active: bool  # 当前服务仍持有该轮任务，包括快照收尾。

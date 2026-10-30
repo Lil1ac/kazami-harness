@@ -230,6 +230,7 @@ ToolName = Literal["read_file", "search_files", "write_file", "edit_file", "run_
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
 class RunConfig(DataModel):
+    planning_policy: Literal["auto", "required"] = "auto"  # 宿主策略：auto由Agent判断；required在新任务开始即只读，网页不能覆盖。
     provider: Literal["deepseek"] = "deepseek"
     requested_model: str = Field(default="deepseek-flash", min_length=1)
     # 只记录密钥来源名称；凭据值从不进入可序列化配置。
@@ -359,8 +360,84 @@ class HistorySource(DataModel):
     interrupted: bool = False  # 宿主明确接纳中断后继续；旧记录默认False，网页不能设置来源。
 
 
-# 运行创建时保存的登记快照，使历史记录保留当时的任务、配置和运行时版本。
+class PlanStep(DataModel):
+    """计划内稳定编号的执行步骤；进度更新不能修改已经批准的步骤正文。"""
+
+    text: str = Field(min_length=1, max_length=4000)  # 可审阅的具体工作与产出。
+    status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"  # 当前进度，不表示验收事实。
+
+
+class PlanRevision(DataModel):
+    """绑定实际工作区的不可变方案版本；只有宿主处理用户决定时才能批准。"""
+
+    version: int = Field(ge=1)  # 同一会话从1递增，旧版不能授权新版。
+    title: str = Field(min_length=1, max_length=200)  # 方案名称。
+    summary: str = Field(min_length=1, max_length=8000)  # 目标、架构与设计理由。
+    scope: list[str] = Field(min_length=1, max_length=50)  # 本轮影响范围与重要边界。
+    steps: list[PlanStep] = Field(min_length=1, max_length=30)  # 正文固定，状态可由模型维护。
+    verification: list[str] = Field(min_length=1, max_length=30)  # 前后端联动与结果检查方式。
+    workspace: str  # 提交时实际目录，批准与执行必须保持一致。
+    workspace_identity: tuple[int, int]  # 目录对象身份，拒绝同路径被其他目录替换。
+    status: Literal["pending", "approved", "rejected", "superseded"] = "pending"  # 用户决定与新版替代分别记录。
+
+
+class UserInteraction(DataModel):
+    """需要用户处理的单个持久请求；计划批准与普通问题使用不同语义。"""
+
+    id: UUID = Field(strict=False)  # 宿主生成，客户端只能回应当前请求。
+    kind: Literal["question", "plan_approval"]  # 回答问题不会自动获得执行权限。
+    question: str = Field(min_length=1, max_length=8000)  # 问题或待批准说明。
+    options: list[str] = Field(default_factory=list, max_length=6)  # 建议答案；仍允许自由输入。
+    plan_version: int | None = Field(default=None, ge=1)  # 仅批准请求绑定具体计划版本。
+
+
+class HumanDecision(DataModel):
+    """浏览器明确提交的回答或计划决定；此结构不注册为模型工具。"""
+
+    interaction_id: UUID = Field(strict=False)  # 必须匹配最新待处理请求。
+    action: Literal["answer", "approve", "revise", "reject", "cancel"]  # 回答、批准、修改、拒绝或取消问题等待。
+    plan_version: int | None = Field(default=None, ge=1)  # 计划操作必须携带当前版本。
+
+
+class DecisionRecord(DataModel):
+    """固定用户处理请求的事实；后续运行保留来源，模型文字不能伪造该记录。"""
+
+    interaction_id: UUID = Field(strict=False)  # 原待处理请求编号。
+    action: Literal["answer", "approve", "revise", "reject", "cancel"]  # 用户实际选择，取消不产生答案。
+    plan_version: int | None = None  # 普通问题没有计划版本。
+    text: str  # 用户补充或回答；不作为新工具权限指令。
+
+
+class PlanningState(DataModel):
+    """跨轮传递的规划状态；每轮输入和事件各自固定，不改写历史证据。"""
+
+    phase: Literal["execution", "planning"] = "execution"  # 自动入口允许简单任务执行；进入规划后须批准才能解锁。
+    reason: str | None = None  # 用户或Agent进入规划的原因。
+    plans: list[PlanRevision] = Field(default_factory=list, max_length=30)  # 保留历史版本和各自决定。
+    pending: UserInteraction | None = None  # None表示没有待回答请求，不等于已经批准。
+    decisions: list[DecisionRecord] = Field(default_factory=list, max_length=100)  # 有界保留本会话用户决定。
+
+    @model_validator(mode="after")
+    def validate_state(self) -> "PlanningState":
+        """核对本实例版本、待批准请求与权限状态，返回自身；矛盾抛ValueError，不访问磁盘。"""
+        if [item.version for item in self.plans] != list(range(1, len(self.plans) + 1)):
+            raise ValueError("计划版本必须连续且唯一")
+        if any(item.status in {"pending", "approved"} for item in self.plans[:-1]):
+            raise ValueError("旧版本不能保持待批准或执行授权")
+        if self.phase == "execution" and self.plans and self.plans[-1].status != "approved":
+            raise ValueError("存在计划时执行必须对应当前批准版本")
+        if self.pending is not None:
+            if self.pending.kind == "plan_approval":
+                if (self.phase != "planning" or not self.plans or self.plans[-1].status != "pending"
+                        or self.pending.plan_version != self.plans[-1].version):
+                    raise ValueError("待批准请求必须绑定规划状态的当前方案")
+            elif self.pending.plan_version is not None:
+                raise ValueError("普通问题不能绑定计划批准版本")
+        return self
+
+
 class RunManifest(DataModel):
+    """运行开始时固定的任务、来源、配置、计划与当前用户决定；不保存密钥。"""
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
     schema_version: Literal[1] = 1
     run_id: UUID
@@ -373,6 +450,8 @@ class RunManifest(DataModel):
     turn_index: int = Field(default=1, ge=1)  # 用户请求轮次，从1开始，不等于模型轮次。
     origin: RunOrigin | None = None  # 新网页运行的宿主来源；旧记录可能未记录。
     history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
+    planning: PlanningState = Field(default_factory=PlanningState)  # 宿主固定的模式、计划和用户决定；网页不能直接传入该状态。
+    human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。
@@ -426,7 +505,7 @@ class RunResult(DataModel):
     run_id: UUID
     # 执行结束与验收通过分别记录：completed 本身不代表产物已经符合要求。
     execution_status: Literal[
-        "created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded"
+        "created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "waiting_input"
     ] = "created"
     validation_status: Literal["unverified", "passed", "failed", "error"] = "unverified"
     verification: VerificationResult | None = None  # 当前代码的检查；修复开始后清空，不能用旧检查证明新代码。
@@ -434,6 +513,7 @@ class RunResult(DataModel):
     repair_attempts: int = Field(default=0, ge=0, le=2)  # 已开始的自动修复次数，与模型轮次及用户追加轮次分别记录。
     cleanup_status: Literal["not_needed", "complete", "incomplete", "unknown"] = "not_needed"
     stop_reason: str | None = None
+    planning: PlanningState = Field(default_factory=PlanningState)  # 本轮结束时的规划事实，等待不计为开发完成。
     # 统计已发起的逻辑轮次、HTTP 尝试及接纳处理的工具调用，不把重试重复算轮次。
     model_turns: int = Field(default=0, ge=0)
     http_attempts: int = Field(default=0, ge=0)

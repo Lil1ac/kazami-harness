@@ -14,6 +14,7 @@ import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import ContextPolicy, RunConfig
+from tests.planning_helpers import include_planning_overhead
 from agent_harness.store import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -280,11 +281,15 @@ def test_selected_skill_counts_towards_hard_input_budget(skill_environment):
         config, roots = skill_environment
         _, original = write_skill(roots, "alpha", "STYLE_ALPHA_V1" + "额外说明" * 2000)
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
-            baseline = await create_run(client, config={"context": {"max_input_bytes": 8000}})
+        host = RunConfig(skill_roots=[roots], tools=["write_file"], context=ContextPolicy(max_input_bytes=8000))
+        # 8KB 表示留给原文件工具场景的空间，固定规划协议开销按实际声明计入；技能超限断言不变。
+        include_planning_overhead(host, config.workspaces[0].path, config.project_dir / "records")
+        budget = host.context.max_input_bytes
+        async with skill_client(config, host, model) as (client, app):
+            baseline = await create_run(client, config={"context": {"max_input_bytes": budget}})
             assert baseline["result"]["execution_status"] == "completed"
             before = len(model.requests)
-            selected = await create_run(client, config={"skills": ["alpha"], "context": {"max_input_bytes": 8000}})
+            selected = await create_run(client, config={"skills": ["alpha"], "context": {"max_input_bytes": budget}})
             assert selected["result"]["execution_status"] == "limit_exceeded"
             assert selected["result"]["stop_reason"] == "max_model_input_bytes"
             assert selected["result"]["model_turns"] == selected["result"]["tool_calls"] == selected["result"]["http_attempts"] == 0
@@ -349,6 +354,7 @@ def test_hybrid_preserves_current_skill_and_inherits_summaries_across_prefix_cha
                 inline_tool_bytes=1024, max_summary_calls=4,
             ),
         )
+        include_planning_overhead(host, config.workspaces[0].path, config.project_dir / "records")
         async with skill_client(config, host, model) as (client, app):
             first = await create_run(client, prompt="compress-first", config={"skills": ["alpha"]})
             assert first["result"]["execution_status"] == "completed", first["result"]

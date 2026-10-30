@@ -71,6 +71,7 @@ export function TaskForm({
   const [opened, setOpened] = useState<LocalProjectOption | null>(null); // 目录POST返回后立即可用，等待选项刷新。
   const [projectBusy, setProjectBusy] = useState(false); // 项目切换或创建弹窗期间防止向旧目录发送。
   const [autoRepair, setAutoRepair] = useState(false); // 本次明确开启，不从其他项目或文字草稿恢复。
+  const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 自动也允许Agent主动进入规划。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
   const navigate = useNavigate();
@@ -121,6 +122,7 @@ export function TaskForm({
     if (!selected) return;
     mutation.mutate({
       prompt: values.prompt.trim(),
+      ...(mode === 'plan' ? { mode } : {}),
       execution_mode: createWorktree ? 'isolated' : 'local',
       ...(selected.kind === 'project'
         ? {
@@ -196,6 +198,16 @@ export function TaskForm({
           </Form.Item>
           <div className="start-input-toolbar">
             <div className="start-send-area">
+              <Select
+                aria-label="工作模式"
+                value={mode}
+                virtual={false}
+                onChange={setMode}
+                options={[
+                  { value: 'auto', label: '自动' },
+                  { value: 'plan', label: '先规划' },
+                ]}
+              />
               <span className="start-model" title={config.requested_model}>
                 {config.requested_model}
               </span>
@@ -222,6 +234,7 @@ export function TaskForm({
         )}
         {selected && (
           <p className="project-mode-note">
+            {config.planning_policy === 'required' && '宿主要求先批准计划，批准前只能读取项目。'}
             {createWorktree
               ? '在独立 Git 工作树中执行，原目录的未提交改动不会带入，修改不会写回原目录。'
               : '在所选目录执行，文件直接保存到该目录。'}

@@ -9,6 +9,7 @@ import type {
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {
+  planning_policy: 'auto', // 默认由Agent判断；强制规划由宿主TOML配置。
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
   provider: 'deepseek',
   requested_model: 'deepseek-flash',
@@ -79,6 +80,7 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     config,
     context: null, // 默认模拟尚未记录上下文的历史任务。
     result: {
+      planning: { phase: 'execution', reason: null, plans: [], pending: null, decisions: [] },
       schema_version: 1,
       run_id: 'run-a',
       execution_status: 'completed',

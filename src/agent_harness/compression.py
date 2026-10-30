@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from .context import ContextBuilder, ModelInput
 from .context_archive import ContextArchive
 from .providers.base import ModelError, ModelResponse
+from .planning import project_plan_history
 from .schemas import ContextAction, WorkSummary
 from .store import RunHistory
 from .workspace import WorkspaceError
@@ -190,7 +191,10 @@ class ContextCompressor:
                 units.append(InputUnit(unit.start, unit.end, deepcopy(unit.messages), unit.end > boundary))
             else:
                 projected = [deepcopy(self.replacements.get(index, messages[index])) for index in range(group.start, group.end)]
-                units.append(InputUnit(group.start, group.end, projected, group.protected or group.end > boundary))
+                if self.builder.planning is not None:
+                    # 先投影成功规划交互，摘要器只整理仍有意义的工作记录；原始索引和归档不变。
+                    projected = project_plan_history(projected)
+                units.append(InputUnit(group.start, group.end, projected, group.protected or group.end > boundary or not projected))
         return units
 
     def _project(self, messages: list[dict]) -> list[dict]:
@@ -261,7 +265,7 @@ class ContextCompressor:
             self.seen.add(index)
             if any(unit.start <= index < unit.end for unit in self.summaries.values()):
                 continue
-            if original.get("role") != "tool" or names.get(original.get("tool_call_id")) == "read_context":
+            if original.get("role") != "tool" or names.get(original.get("tool_call_id")) in {"read_context", "read_plan"}:
                 continue
             try:
                 payload = json.loads(original["content"])
@@ -414,8 +418,9 @@ class ContextCompressor:
         完整批次不会被摘要；无法压缩的超限输入交给Agent按确定原因停止。
         """
         if self.policy.compression == "off":
-            return self.builder.build(messages, tools, self.context.result.model_turns + 1)
-        raw_bytes = self._size(messages, tools)
+            raw = None if self.builder.planning is None else self.builder.build(messages, tools, self.context.result.model_turns + 1, apply_planning=False).check.input_bytes
+            return self.builder.build(messages, tools, self.context.result.model_turns + 1, raw_input_bytes=raw)
+        raw_bytes = self.builder.build(messages, tools, self.context.result.model_turns + 1, apply_planning=False).check.input_bytes
         self._offload(messages, tools)
         prepared = self.builder.build(self._project(messages), tools, self.context.result.model_turns + 1)
         if self._pressure(prepared, self.policy.trigger_ratio):

@@ -18,6 +18,7 @@ from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, RunManife
 from agent_harness.sessions import history_messages
 from agent_harness.store import RunStore
 from agent_harness.workspace import WorkspaceError
+from tests.planning_helpers import include_planning_overhead
 
 
 def _manifest(tmp_path: Path, **context: object) -> RunManifest:
@@ -26,13 +27,16 @@ def _manifest(tmp_path: Path, **context: object) -> RunManifest:
     workspace.mkdir(exist_ok=True)
     (workspace / "small.txt").write_text("实际文件内容\n", encoding="utf-8")
     (workspace / "AGENTS.md").write_text("必须保留 RULE_COMPRESSION。\n", encoding="utf-8")
-    return RunManifest(
+    manifest = RunManifest(
         run_id=uuid4(), task=TaskSpec(prompt="保留兼容接口 USER_CONSTRAINT，完成小修改。", workspace=workspace),
         config=RunConfig(
             tools=["read_file"], limits=RunLimits(max_model_turns=15),
             context=ContextPolicy(compression="hybrid", **context),
         ),
     )
+    if "max_input_bytes" in context:
+        include_planning_overhead(manifest.config, workspace, tmp_path / "runs")
+    return manifest
 
 
 def _response(content: str, call: dict | None = None) -> dict:

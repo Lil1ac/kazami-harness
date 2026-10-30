@@ -25,6 +25,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
       let retry: ReturnType<typeof setTimeout> | undefined; // 手动重连使用最新 after 游标。
       let cursor = 0; // 已连续补齐到的序号，不直接跳过缺失事件。
       let disposed = false; // 卸载后不再触发 setState 或刷新缓存。
+      let historySettled = false; // 历史已经包含可信终态时，不再等待本次页面错过的 SSE 结束通知。
       windowLimit.current = 400;
       setEvents([]);
       setConnection('loading');
@@ -47,6 +48,10 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
               event.run_id === runId && event.seq > cursor,
           );
           if (rows.length) {
+            historySettled ||= rows.some(
+              /* 快速规划可能在首次订阅前已经结束，仍需刷新会话继续条件。 */ (event) =>
+                event.type === 'run_finished',
+            );
             setEvents(
               /* 保留有界最新窗口，完整轨迹仍可从历史接口读取。 */ (previous) =>
                 mergeEvents(previous, rows, runId, windowLimit.current),
@@ -78,6 +83,11 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
           await catchUp();
           if (!valid()) return;
           setError(null);
+          if (historySettled) {
+            setConnection('closed');
+            onSettledRef.current();
+            return;
+          }
           if (!active) {
             setConnection('closed');
             return;

@@ -22,6 +22,7 @@ export function mergeConfirmedRun(current: ConversationView, view: RunView): Con
     prompt: view.prompt,
     final_answer: view.result.final_answer,
     execution_status: view.result.execution_status,
+    stop_reason: view.result.stop_reason,
     validation_status: view.result.validation_status,
     created_at: view.created_at,
     interrupted: view.interrupted,

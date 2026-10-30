@@ -25,7 +25,7 @@ class RunHistory:
     interrupted: bool = False
 
 
-_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timed_out", "limit_exceeded"}
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timed_out", "limit_exceeded", "waiting_input"}
 
 
 def _contained(path: Path, directory: Path) -> Path:

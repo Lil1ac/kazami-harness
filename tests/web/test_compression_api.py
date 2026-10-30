@@ -15,6 +15,7 @@ from agent_harness.schemas import ContextPolicy, RunConfig
 from agent_harness.store import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
+from tests.planning_helpers import include_planning_overhead
 
 
 class CompressionEditingModel:
@@ -109,6 +110,7 @@ def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypa
     host = RunConfig(tools=["read_file", "write_file"], context=ContextPolicy(
         compression="hybrid", max_input_bytes=15000, keep_recent_groups=1, inline_tool_bytes=1024, max_summary_calls=4,
     ))
+    include_planning_overhead(host, workspace, tmp_path / "runs")
     model = CompressionEditingModel()
 
     async def scenario() -> None:

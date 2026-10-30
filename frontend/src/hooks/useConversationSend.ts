@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, errorMessage } from '../api';
 import { useConfigDraft } from '../config';
-import type { ConversationView, FollowupRequest, RunView } from '../types';
+import type { ConversationView, FollowupRequest, HumanDecision, RunView } from '../types';
 
 /** 未确认的发送；父轮和完整载荷一起固定，重试只能确认同一请求。 */
 export interface PendingSend {
@@ -76,6 +76,7 @@ export function useConversationSend(
   );
   const [text, setText] = useState(initial.text); // 同一会话内连续编辑，允许执行中预写下一条。
   const [pending, setPending] = useState<PendingSend | null>(initial.pending); // 只在明确确认后清除。
+  const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 只决定下一轮入口，不解除已存在的规划限制。
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
   const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
   const autoRepair =
@@ -147,6 +148,15 @@ export function useConversationSend(
         !run.active &&
         text.trim(),
       ));
+  const canDecide = Boolean(
+    !inFlight.current &&
+    !pending &&
+    !mutation.isPending &&
+    conversation.can_continue &&
+    run &&
+    run.run_id === conversation.latest_run_id &&
+    !run.active,
+  );
 
   /** 发送新要求或确认原请求；返回 void，忙碌和空输入直接忽略，不制造新编号。 */
   function send(): void {
@@ -157,6 +167,7 @@ export function useConversationSend(
       body: {
         request_id: crypto.randomUUID(),
         prompt: text.trim(),
+        ...(mode === 'plan' ? { mode } : {}),
         // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
         config: structuredClone({
           ...overrides,
@@ -169,7 +180,32 @@ export function useConversationSend(
     setPending(submission);
     mutation.mutate(submission);
   }
+
+  /** 将用户action和回答answer绑定当前请求发送；无授权或已有不确定请求时返回而不发新编号。 */
+  function decide(action: HumanDecision['action'], answer: string): void {
+    const interaction = run?.result.planning.pending;
+    if (inFlight.current || !canDecide || !interaction) return;
+    const submission: PendingSend = {
+      parentId: conversation.latest_run_id,
+      body: {
+        request_id: crypto.randomUUID(),
+        prompt: answer,
+        decision: {
+          interaction_id: interaction.id,
+          action,
+          plan_version: interaction.plan_version,
+        },
+      },
+    };
+    inFlight.current = true;
+    setPending(submission);
+    mutation.mutate(submission);
+  }
   return {
+    mode,
+    setMode,
+    canDecide,
+    decide,
     text,
     setText,
     skills: skills || [],

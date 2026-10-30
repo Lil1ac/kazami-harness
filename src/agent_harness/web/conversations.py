@@ -15,6 +15,7 @@ from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
 from ..sessions import SessionError, SessionStore, history_messages, payload_digest
 from ..snapshots import SnapshotError
 from ..store import StorageError
+from ..planning import PlanningError, continue_planning, planning_from_history
 from .schemas import ConversationTurn, ConversationView, FollowupRequest
 
 if TYPE_CHECKING:
@@ -97,6 +98,7 @@ class ConversationService:
                     run_id=identifier, parent_run_id=expected_parent, turn_index=ordinal,
                     prompt=view.prompt, final_answer=view.result.final_answer,
                     execution_status=view.result.execution_status,
+                    stop_reason=view.result.stop_reason,
                     validation_status=view.result.validation_status,
                     created_at=view.created_at, interrupted=view.interrupted,
                 )
@@ -172,11 +174,17 @@ class ConversationService:
             if self.store.read(session_id).run_ids[-1] != parent_id:
                 raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
             origin = self._ready(parent)
+            try:
+                planning = continue_planning(planning_from_history(parent), request.decision, request.prompt.strip(),
+                                             parent.manifest.task.workspace, request.mode)
+            except PlanningError as error:
+                raise SessionError(error.code, error.message) from None
             interrupted = parent.result is None and parent.interrupted
             inherited = history_messages(parent, allow_interrupted=interrupted)
             merged = parent.manifest.config.model_dump(mode='python')
             # 宿主系统规则重新生成；网页可编辑部分默认沿用前轮，覆盖仍严格校验。
             merged['system_prompt'] = self.manager.run_config.system_prompt
+            merged['planning_policy'] = self.manager.run_config.planning_policy  # 权限策略始终取当前宿主，旧轮配置不能绕过强制规划。
             merged['skill_roots'] = list(self.manager.run_config.skill_roots)  # 技能来源使用当前宿主登记，选择默认沿用前轮。
             patch = request.config.model_dump(exclude_none=True)
             for section in ('limits', 'context'):
@@ -185,12 +193,14 @@ class ConversationService:
             merged.update(patch)
             try:
                 config = load_config(overrides=merged)
+                if config.planning_policy == "required" and not (planning.plans and planning.plans[-1].status == "approved"):
+                    planning.phase, planning.reason = "planning", "宿主要求先批准计划"
                 prompt = request.prompt.strip()
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 identifier = uuid4()
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
-                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
+                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
                 api_key = os.environ.get(config.api_key_env, '')
                 validate_execution(manifest, api_key)

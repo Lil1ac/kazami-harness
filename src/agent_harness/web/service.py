@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import os
+import re
 from pathlib import Path
 import subprocess
 import shlex
@@ -15,13 +16,15 @@ from ..config import ConfigurationError, load_config, prepare_task
 from ..providers.base import ModelClient
 from ..runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
 from ..execution import PythonExecutionError, prepare_python_execution, python_command
-from ..schemas import ContextAction, ContextCheck, ContextView, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
+from ..schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
 from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
 from ..store import RunHistory, RunStore, StorageError
 from ..skills import SkillCatalog
 from ..local_execution import LocalChangeStore
 from ..snapshots import SnapshotError
 from ..sessions import SessionError
+from ..planning import planning_from_history
+from ..plan_exports import materialize_plan_export
 from .config import WebConfig
 from .conversations import ConversationService
 from .conversation_index import ConversationIndex
@@ -75,6 +78,10 @@ def _phase(events: list[RunEvent]) -> str:
     current = "created"
     for event in events:
         current = "context_compaction" if event.type == "model_request_started" and event.payload.get("purpose") == "summary" else phases.get(event.type, current)
+        if event.type == "run_finished":
+            reason = event.payload.get("result", {}).get("stop_reason")
+            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled"}:
+                current = reason
     return current
 
 
@@ -110,6 +117,7 @@ def _unfinished_result(history: RunHistory) -> RunResult:
         http_attempts=sum(event.type == "model_http_attempt" for event in history.events),
         tool_calls=sum(event.type == "tool_started" for event in history.events),
         usage_complete=False, active_duration_seconds=history.events[-1].elapsed_ms / 1000 if history.events else 0,
+        planning=planning_from_history(history),
     )
     # 未封存终态不等于每个旧进程都失联；采用已配对结果的清理事实，只有在途动作未知。
     pending_commands: set[str] = set()  # 已开始但尚无结果的命令编号。
@@ -304,7 +312,9 @@ class WebRunManager:
                 if mode == 'local' and request.base_ref != 'HEAD':
                     raise WebServiceError(400, 'local_base_ref', '原目录执行使用当前文件，不能切换Git基线；请选择隔离执行。')
                 origin = RunOrigin(kind="project" if preset is not None else "workspace", preset_id=selected_id, registered_path=source.resolve(), verifier_id=request.verifier_id, execution_mode=mode, workspace_identity=self.local_changes.identity(source.resolve()) if mode == 'local' else None)
-                manifest = RunManifest(run_id=identifier, task=task, config=config, session_id=identifier, origin=origin)
+                required = request.mode == "plan" or config.planning_policy == "required"
+                planning = PlanningState(phase="planning", reason="宿主要求先批准计划" if config.planning_policy == "required" else "用户选择先规划") if required else PlanningState()
+                manifest = RunManifest(run_id=identifier, task=task, config=config, session_id=identifier, origin=origin, planning=planning)
                 api_key = os.environ.get(config.api_key_env, "")
                 validate_execution(manifest, api_key)
                 if config.auto_repair and (preset is None or not preset.test_argv):
@@ -581,8 +591,19 @@ class WebRunManager:
         """仅解析已登记产物 path；location 为 run/workspace，越界、链接或未登记抛 404。
 
         每次访问重新检查真实路径，拒绝文件登记后被链接替换；不返回任意工作区文件。
+        run/plans/vN.md 是由本轮已保存版本生成的 Markdown 导出，复用网页和原生下载链路。
         """
         view = self.get_run(run_id)
+        plan_export = re.fullmatch(r"plans/v([1-9][0-9]{0,2})\.md", path) if location == "run" else None
+        if plan_export is not None:
+            version = int(plan_export[1])
+            plan = next((item for item in view.result.planning.plans if item.version == version), None)
+            if plan is None:
+                raise WebServiceError(404, "plan_not_found", "所选计划版本不存在。")
+            try:
+                return materialize_plan_export(self.runs_root / str(view.run_id), plan)
+            except StorageError:
+                raise WebServiceError(503, "plan_export_unavailable", "计划导出暂不可用，请检查运行记录后重试。") from None
         references = view.result.artifacts
         if not any(item.location == location and item.path == path for item in references):
             raise WebServiceError(404, "artifact_not_found", "产物未登记或不可访问。")

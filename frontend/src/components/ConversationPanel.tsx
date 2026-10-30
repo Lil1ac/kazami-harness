@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Input } from 'antd';
+import { Alert, Button, Checkbox, Input, Select } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { phaseLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
+import { PlanningPanel } from './PlanningPanel';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
@@ -19,7 +20,14 @@ interface ConversationPanelProps {
 }
 
 /** 简洁说明单轮真实结论；未知和未验收不被展示为成功。 */
-function turnStatus(status: string | null, validation: string | null, interrupted = false): string {
+function turnStatus(
+  status: string | null,
+  validation: string | null,
+  interrupted = false,
+  reason?: string | null,
+): string {
+  if (!interrupted && reason === 'planning_complete') return '规划已结束';
+  if (!interrupted && reason === 'plan_rejected') return '已拒绝计划';
   const labels: Record<string, string> = {
     created: '已创建',
     running: '执行中',
@@ -28,6 +36,7 @@ function turnStatus(status: string | null, validation: string | null, interrupte
     cancelled: '已取消',
     timed_out: '已超时',
     limit_exceeded: '达到运行限制',
+    waiting_input: '等待你的决定',
   };
   const checks: Record<string, string> = {
     passed: '检查通过',
@@ -71,7 +80,9 @@ function TurnMessage({
               onInspect(turn.run_id, 'diagnostics')
           }
         />
-        {turn.final_answer ? (
+        {selected && run?.result.planning.pending?.kind === 'question' ? (
+          <p className="message-waiting">需要你确认下面的问题。</p>
+        ) : turn.final_answer ? (
           <MarkdownMessage text={turn.final_answer} />
         ) : (
           <p className="message-waiting">
@@ -83,7 +94,14 @@ function TurnMessage({
           </p>
         )}
         <div className="message-actions">
-          <span>{turnStatus(turn.execution_status, turn.validation_status, interrupted)}</span>
+          <span>
+            {turnStatus(
+              turn.execution_status,
+              turn.validation_status,
+              interrupted,
+              turn.stop_reason,
+            )}
+          </span>
           <button
             type="button"
             onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'result')}
@@ -200,6 +218,14 @@ export function ConversationPanel({
               <div className="user-message-body">{send.pending!.body.prompt}</div>
             </div>
           )}
+          {run && (
+            <PlanningPanel
+              runId={run.run_id}
+              state={run.result.planning}
+              disabled={!send.canDecide}
+              onDecision={send.decide}
+            />
+          )}
         </div>
       </div>
       <div className="conversation-composer">
@@ -302,6 +328,16 @@ export function ConversationPanel({
               }
             />
             <div className="composer-toolbar">
+              <Select
+                aria-label="下一轮工作模式"
+                value={send.mode}
+                virtual={false}
+                onChange={send.setMode}
+                options={[
+                  { value: 'auto', label: '自动' },
+                  { value: 'plan', label: '先规划' },
+                ]}
+              />
               <span>
                 {!run
                   ? '正在核对最新运行状态…'

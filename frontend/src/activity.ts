@@ -11,11 +11,17 @@ export interface ActivityStep {
 }
 const toolLabels: Record<string, string> = {
   read_file: '读取文件',
+  list_files: '列举目录',
   search_files: '搜索内容',
   write_file: '写入文件',
   edit_file: '局部编辑文件',
   run_command: '执行命令',
   read_context: '回读历史证据',
+  read_plan: '读取计划记录',
+  enter_plan_mode: '进入规划',
+  ask_user_question: '向你提问',
+  submit_plan: '提交计划',
+  update_plan: '更新计划进度',
 }; // 文件、命令及只读历史工具的操作语义。
 
 /** 安全解析工具参数 JSON；损坏输入保留原字符串，便于在完整轨迹中核对。 */

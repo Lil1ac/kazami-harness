@@ -91,6 +91,11 @@ export function artifactUrl(runId: string, artifact: ArtifactRef, preview = fals
   return `/api/runs/${encodeURIComponent(runId)}/artifacts?${query}`;
 }
 
+/** 返回 runId 内 version 的 Markdown 附件地址；版本从 1 开始，下载不发起执行或改变批准。 */
+export function planMarkdownUrl(runId: string, version: number): string {
+  return artifactUrl(runId, { location: 'run', path: `plans/v${version}.md`, kind: 'file' });
+}
+
 /** 请求 UTF-8 有界文本预览；二进制或不可读文件由后端给出明确错误。 */
 export function previewArtifact(
   runId: string,

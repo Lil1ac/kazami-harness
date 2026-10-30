@@ -8,12 +8,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agent_harness.context import ContextBuilder
 from agent_harness.runner import run_task
 from agent_harness.schemas import ContextPolicy, RunConfig, RunManifest, TaskSpec
 from agent_harness.store import RunStore
-from agent_harness.tools.registry import ToolExecutor
-from agent_harness.workspace import Workspace
+from tests.planning_helpers import initial_input
 
 
 def make_manifest(workspace: Path, *, budget: int = 256 * 1024, load: bool = True, instruction_limit: int = 32 * 1024) -> RunManifest:
@@ -36,9 +34,8 @@ def tool_call(identifier: str, name: str, arguments: dict) -> dict:
 
 def initial_size(value: RunManifest, root: Path) -> int:
     """用同一完整工具定义计算清单 value 的首轮字节数；root 为受保护记录目录。"""
-    builder = ContextBuilder(Workspace(value.task.workspace, root), value.task, value.config)
-    executor = ToolExecutor(value.task.workspace, root, value.config)
-    return builder.build(builder.initial_messages(), executor.definitions, 1).check.input_bytes
+    builder, messages, tools = initial_input(value, root)
+    return builder.build(messages, tools, 1).check.input_bytes
 
 
 def scripted_run(value: RunManifest, root: Path, replies: list[dict], *, rewrite_rule: str | None = None):

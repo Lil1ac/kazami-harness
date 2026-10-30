@@ -143,8 +143,20 @@ async def run_agent(
         return await _request_model(context, client, messages, tools, purpose)
 
     messages = builder.initial_messages(inherited)
+    planning = getattr(executor, "planning", None)
+    if planning is not None:
+        # 使用原系统消息追加受控协议，保持历史重建约定的消息偏移不变。
+        builder.bind_planning(planning, messages[0]["content"])
+        messages[0] = {**messages[0], "content": messages[0]["content"] + planning.instructions()}
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
     context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
+    if context.manifest.human_decision is not None and context.manifest.human_decision.action in {"reject", "cancel"}:
+        # 拒绝仍固定完整会话历史，但不调用模型、工具或验收，后续重新规划不会丢失原目标。
+        if context.manifest.human_decision.action == "cancel":
+            context.result.final_answer = "已取消本次等待，不会自动恢复执行。"
+            raise AgentStopped("cancelled", "interaction_cancelled")
+        context.result.final_answer = "已拒绝这一版计划，项目执行保持停止。"
+        raise AgentStopped("completed", "plan_rejected")
     if skill_error is not None:
         # 仍保存本轮要求与可信历史，便于用户清空失效选择后在同一会话继续。
         raise AgentStopped("failed", skill_error.code)
@@ -195,6 +207,14 @@ async def run_agent(
                 result = await executor.execute(call.name, call.arguments_json)
                 _record_tool(context, call, result, messages)
                 started = False
+                if planning is not None:
+                    context.result.planning = planning.state.model_copy(deep=True)
+                    if planning.state.pending is not None:
+                        for remaining in batch[index + 1:]:
+                            _record_tool(context, remaining, _skipped("skipped_user_input"), messages)
+                        pending = planning.state.pending
+                        context.result.final_answer = pending.question if pending.kind == "question" else "已提交计划，等待你审阅并批准。"
+                        raise AgentStopped("waiting_input", "user_question" if pending.kind == "question" else "plan_approval")
                 if context.result.cleanup_status in {"unknown", "incomplete"}:
                     for remaining in batch[index + 1:]:
                         _record_tool(context, remaining, _skipped("skipped_cleanup"), messages)

@@ -63,6 +63,25 @@ afterEach(
 );
 
 describe('单任务 SSE 生命周期', /* 覆盖补齐、重连、终态与卸载，不只镜像状态更新。 */ () => {
+  it('首次历史已包含终态时刷新会话，不依赖已经错过的 SSE 通知', async () => {
+    // 复现快速规划结束时运行已不活跃，但会话查询还保留占槽状态的跨接口竞态。
+    vi.mocked(getEvents).mockResolvedValue({
+      items: [{ ...makeEvent(1), type: 'run_finished' }],
+      has_more: false,
+      last_seq: 1,
+    });
+    const settled = vi.fn();
+    const { result, rerender } = renderHook(
+      /* 历史读取必须主动同步会话的继续条件。 */ () => useRunEvents('run-a', false, settled),
+    );
+    await waitFor(
+      /* 历史终态触发一次权威快照刷新。 */ () => expect(settled).toHaveBeenCalledOnce(),
+    );
+    rerender();
+    expect(FakeSource.instances).toHaveLength(0);
+    expect(result.current.connection).toBe('closed');
+    expect(settled).toHaveBeenCalledOnce();
+  });
   it('先读完历史分页，再以连续游标订阅，重复事件不重复展示', async () => /* 验证 HTTP 与实时事件交界的去重。 */ {
     vi.mocked(getEvents)
       .mockResolvedValueOnce({ items: [makeEvent(1)], has_more: true, last_seq: 2 })

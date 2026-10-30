@@ -7,16 +7,20 @@ from pydantic import ValidationError
 
 from ..context_archive import ContextArchive, ReadContextArguments
 from ..processes import ProcessRunner
+from ..planning import PLANNING_TOOLS, PlanningController, PlanningError
 from ..execution import PythonExecutionError, prepare_python_execution, validate_python_execution
 from ..schemas import PythonExecution, RunConfig
 from ..store import StorageError
 from ..workspace import WorkspaceError
 from .command import RunCommandArguments, run_command
+from .listing import ListFilesArguments, list_files
 from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, WriteFileArguments,
                     edit_file, read_file, search_files, write_file)
 
 
 _TOOL_SPECS = {
+    **PLANNING_TOOLS,
+    "list_files": (ListFilesArguments, "只读列举工作区目录的直接子项，无需执行命令。不递归；对子目录继续传directory。offset/limit分页，next_offset为空表示无下一页；truncated或skipped表示并非完整目录。"),
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
     "read_file": (ReadFileArguments, "只读工作区UTF-8文件；offset/max_bytes按字节，next_offset用于继续分页。sha256是完整原字节指纹，newline是完整文件的lf/crlf/cr/mixed/none；超出编辑预算时两者为null，不可edit_file。"),
     "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
@@ -51,6 +55,11 @@ class ToolExecutor:
         self.artifact_refs: list[dict] = []
         self.cancelled_result: dict | None = None
         self.context_archive: ContextArchive | None = None  # 压缩启用时绑定本轮证据归档，只开放只读引用。
+        self.planning: PlanningController | None = None  # Runner绑定后开放规划工具并执行宿主只读限制。
+
+    def bind_planning(self, planning: PlanningController) -> None:
+        """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
+        self.planning = planning
 
     def bind_python_execution(self, execution: PythonExecution) -> None:
         """绑定宿主清单中的 execution 快照，返回 None；仅更新执行器配置，不启动命令。
@@ -80,6 +89,10 @@ class ToolExecutor:
         names = list(self.config.tools)
         if self.config.context.compression != "off":
             names.append("read_context")
+        if self.planning is not None:
+            names.extend(PLANNING_TOOLS)
+            if "read_file" in names:
+                names.append("list_files")
         return names
 
     @property
@@ -134,11 +147,19 @@ class ToolExecutor:
         except (ValidationError, TypeError, ValueError):
             return _error("invalid_arguments", "工具参数无效，请按工具 Schema 提供 JSON 对象。")
         try:
+            if self.planning is not None:
+                self.planning.check_permission(name)
+                if name in PLANNING_TOOLS:
+                    data = self.planning.execute(name, arguments)
+                    return {"ok": True, "data": data, "error": None, "truncated": name == "read_plan" and not data["eof"]}
             if name == "read_context":
                 if self.context_archive is None:
                     return _error("context_not_ready", "历史证据尚未绑定。")
                 data = self.context_archive.read(arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": not data["eof"]}
+            if name == "list_files":
+                data = list_files(self.workspace, self.runs_root, arguments)
+                return {"ok": True, "data": data, "error": None, "truncated": data["truncated"]}
             if name == "run_command":
                 if self.process_runner is None:
                     return _error("command_not_ready", "命令工具尚未绑定运行目录。")
@@ -163,6 +184,8 @@ class ToolExecutor:
             raise
         except StorageError:
             raise
+        except PlanningError as error:
+            return _error(error.code, error.message)
         except PythonExecutionError as error:
             return _error("python_execution_changed", str(error))
         except WorkspaceError as error:

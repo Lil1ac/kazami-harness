@@ -20,6 +20,7 @@ from .tools.registry import ToolExecutor
 from .local_execution import LocalChangeStore
 from .projects import ProjectError, ProjectManager
 from .snapshots import SnapshotError
+from .planning import PlanningController
 from .verifier import Verifier
 
 
@@ -231,6 +232,11 @@ async def run_task(
     # 程序入口也在落盘前固定快照；读取历史不执行此准备流程。
     task = manifest.task.model_copy(update={"python_execution": execution})
     manifest = manifest.model_copy(update={"task": task})
+    if manifest.config.planning_policy == "required" and not (manifest.planning.plans and manifest.planning.plans[-1].status == "approved"):
+        # CLI和Web统一执行宿主强制策略；自动入口也不能先执行命令再补规划。
+        state = manifest.planning.model_copy(deep=True)
+        state.phase, state.reason = "planning", "宿主要求先批准计划"
+        manifest = manifest.model_copy(update={"planning": state})
     try:
         tool_executor = executor or ToolExecutor(manifest.task.workspace, runs_root, manifest.config, python_execution=execution)
     except (OSError, RuntimeError, ValueError):
@@ -259,10 +265,13 @@ async def run_task(
     store = RunStore.create(runs_root, manifest)
     if hasattr(tool_executor, "bind_run"):
         tool_executor.bind_run(store.run_dir)
-    result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True)
+    result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True, planning=manifest.planning.model_copy(deep=True))
     started_at = asyncio.get_running_loop().time()
     deadline = started_at + manifest.config.limits.run_timeout_seconds
     context = RunContext(manifest, store, result, deadline, started_at=started_at)
+    planning = PlanningController(manifest.planning, root, context.emit)
+    if hasattr(tool_executor, "bind_planning"):
+        tool_executor.bind_planning(planning)
     verifier = Verifier(manifest.config.limits, store.run_dir) if manifest.task.verifier is not None else None
     from .agent import run_agent
 
@@ -277,6 +286,10 @@ async def run_task(
         result.execution_status = "completed"
         result.stop_reason = "final_answer"
         context.emit("execution_completed", {"model_turns": result.model_turns, "tool_calls": result.tool_calls, "repair_attempt": result.repair_attempts})
+        if planning.state.phase == "planning":
+            # 规划自然语言结束不启动可能写缓存/文件的测试，也不代表已经完成开发。
+            result.stop_reason = "planning_complete"
+            return None
         if verifier is None:
             return None
         context.emit("verification_started", {"timeout_seconds": manifest.task.verifier.timeout_seconds, "repair_attempt": result.repair_attempts, "kind": manifest.task.verifier.kind})
@@ -371,6 +384,7 @@ async def run_task(
         context.emit("runtime_error", {"code": result.stop_reason, "error_type": type(error).__name__})
 
     _collect_tool_state(result, tool_executor)
+    result.planning = planning.state.model_copy(deep=True)
     context.emit("artifact_collection_started")
     references, warnings = await _file_operation(_capture_artifacts, manifest, changes, projects, finalizing=True)
     result.artifact_status = "incomplete" if warnings else "complete"
@@ -397,6 +411,8 @@ def exit_code(result: RunResult) -> int:
         return 130
     if result.execution_status == "timed_out" or result.stop_reason == "run_timeout":
         return 124
+    if result.execution_status == "waiting_input":
+        return 4
     if result.execution_status != "completed" or result.cleanup_status in {"incomplete", "unknown"}:
         return 1
     if result.validation_status == "unverified":

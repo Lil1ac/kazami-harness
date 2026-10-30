@@ -16,6 +16,7 @@ const executionLabels: Record<ExecutionStatus, string> = {
   cancelled: '已取消',
   timed_out: '已超时',
   limit_exceeded: '预算耗尽',
+  waiting_input: '等待你的决定',
 };
 /** 普通工作区独立验收的稳定状态文案。 */
 const validationLabels: Record<ValidationStatus, string> = {
@@ -71,6 +72,10 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
     };
   if (['unknown', 'incomplete'].includes(run.result.cleanup_status))
     return { label: '需检查清理', color: 'warning' };
+  if (run.phase === 'planning_complete') return { label: '规划已结束' };
+  if (run.phase === 'plan_rejected') return { label: '已拒绝计划' };
+  if (run.phase === 'user_question') return { label: '等待回答', color: 'warning' };
+  if (run.phase === 'plan_approval') return { label: '等待批准', color: 'warning' };
   if (run.result.execution_status === 'completed') {
     const status = run.result.validation_status;
     return {

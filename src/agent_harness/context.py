@@ -11,6 +11,7 @@ import stat
 import sys
 
 from .schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, SkillSnapshot, TaskSpec
+from .planning import PlanningController, project_plan_history
 from .workspace import Workspace, WorkspaceError
 
 
@@ -105,6 +106,13 @@ class ContextBuilder:
         self.skills = [item.model_copy(deep=True) for item in skills or []]  # 冻结所选正文，压缩始终保护此初始用户前缀。
         self.token_ratio = 1 / 3  # UTF-8字节到token的初始启发式；后续只用真实usage保守上调。
         self.instruction = load_project_instructions(workspace, self._config.context)  # 本次运行固定的项目指令快照。
+        self.planning: PlanningController | None = None  # Runner 绑定的可信状态，每次实际输入读取最新快照。
+        self._planning_base: str | None = None  # 不含规划动态状态的原系统正文，刷新时替换而非反复追加。
+
+    def bind_planning(self, planning: PlanningController, base_instructions: str) -> None:
+        """绑定 planning 与原系统正文 base_instructions，返回 None，不修改持久消息或请求模型。"""
+        self.planning = planning
+        self._planning_base = base_instructions
 
     def initial_messages(self, history: list[dict] | None = None) -> list[dict]:
         """返回新的初始消息列表，依次包含宿主规则、可选项目约定和实际用户任务。
@@ -154,14 +162,22 @@ class ContextBuilder:
     def build(
         self, messages: list[dict], tools: list[dict], model_turn: int, *,
         purpose: str = "execution", raw_input_bytes: int | None = None,
+        apply_planning: bool = True,
     ) -> ModelInput:
         """冻结messages/tools并计量，返回实际请求副本；不发送、不修改原始输入。
 
         model_turn为正整数拟请求轮次；purpose区分执行与摘要。raw_input_bytes为压缩前
         字节数，None表示未提供。JSON计量版本不变；token值为带15%余量的启发式，
         可用实际usage保守上调，不保证满足供应商精确窗口。未声明窗口时仅字节数决定放行。
+        apply_planning 默认刷新执行请求的当前计划并投影已保存交互；False 仅供原始大小计量。
+        摘要请求始终不注入执行权限状态，原消息和工具结果不被覆盖。
         """
         frozen_messages = deepcopy(messages)
+        if apply_planning and purpose == "execution" and self.planning is not None:
+            frozen_messages = project_plan_history(frozen_messages)
+            if not frozen_messages or frozen_messages[0].get("role") != "system" or self._planning_base is None:
+                raise ValueError("planning context requires host system prefix")
+            frozen_messages[0]["content"] = self._planning_base + self.planning.instructions()
         frozen_tools = deepcopy(tools)
         encoded = json.dumps({"messages": frozen_messages, "tools": frozen_tools}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         policy = self._config.context

@@ -9,6 +9,7 @@ import type { RunEvent } from '../types';
 const eventLabels: Record<string, string> = {
   run_created: '任务已登记',
   run_started: '开始执行',
+  planning_updated: '更新规划与用户请求',
   history_loaded: '继承前轮历史',
   context_prepared: '准备项目指令',
   context_checked: '检查输入预算',

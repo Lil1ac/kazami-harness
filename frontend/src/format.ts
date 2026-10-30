@@ -40,6 +40,11 @@ export function phaseLabel(phase: string): string {
         workspace_snapshot: '保存工作区快照',
         verification_result: '保存验收结果',
         finished: '已结束',
+        planning_complete: '规划已结束',
+        plan_rejected: '已拒绝计划',
+        user_question: '等待回答',
+        plan_approval: '等待批准',
+        interaction_cancelled: '已取消等待',
         running: '正在执行',
       } as Record<string, string>
     )[phase] ?? phase

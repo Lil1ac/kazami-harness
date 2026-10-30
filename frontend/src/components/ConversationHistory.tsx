@@ -41,6 +41,7 @@ export function ConversationHistory({ projectId }: { projectId?: string }) {
           options={[
             { value: '', label: '全部状态' },
             { value: 'running', label: '执行中' },
+            { value: 'waiting_input', label: '等待你的决定' },
             { value: 'completed', label: '执行完成' },
             { value: 'failed', label: '执行失败' },
             { value: 'cancelled', label: '已取消' },

@@ -1,9 +1,60 @@
 /** Python 数据模型的浏览器表示；字段名与后端持久化及 HTTP 契约保持一致。 */
 export type ToolName = 'read_file' | 'search_files' | 'write_file' | 'edit_file' | 'run_command';
 export type ExecutionStatus =
-  'created' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'limit_exceeded';
+  | 'created'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'limit_exceeded'
+  | 'waiting_input';
 export type ValidationStatus = 'unverified' | 'passed' | 'failed' | 'error';
 export type CleanupStatus = 'not_needed' | 'complete' | 'incomplete' | 'unknown';
+
+/** 模型维护的步骤进度；正文属于对应计划版本，不能借更新进度扩大授权。 */
+export interface PlanStep {
+  text: string; // 已提交的工作步骤。
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked'; // 进度陈述，与独立验收分别记录。
+}
+
+/** 与后端一致的固定计划版本，批准只绑定这一版及实际工作区。 */
+export interface PlanRevision {
+  version: number; // 从1递增。
+  title: string; // 功能名称。
+  summary: string; // 目标、架构和理由。
+  scope: string[]; // 影响范围。
+  steps: PlanStep[]; // 正文固定的步骤与当前进度。
+  verification: string[]; // 前后端与结果验收方式。
+  workspace: string; // 实际执行目录。
+  workspace_identity: [number, number]; // 宿主核对的目录对象身份，页面不修改。
+  status: 'pending' | 'approved' | 'rejected' | 'superseded'; // 用户决定或新版替代。
+}
+
+/** 持久化的人机请求；问题回答与计划批准是不同操作。 */
+export interface UserInteraction {
+  id: string; // 必须原样回应的请求UUID。
+  kind: 'question' | 'plan_approval'; // 控制展示问题还是批准操作。
+  question: string; // 自包含问题。
+  options: string[]; // 可选建议答案，允许自由输入。
+  plan_version: number | null; // 普通问题为空。
+}
+
+/** 仅由用户操作发出的决定；模型没有对应的批准工具。 */
+export interface HumanDecision {
+  interaction_id: string; // 当前请求编号。
+  action: 'answer' | 'approve' | 'revise' | 'reject' | 'cancel'; // 回答、方案决定或取消问题等待。
+  plan_version: number | null; // 当前方案版本，问题为空。
+}
+
+/** 某一Run输入或结束时的固定规划事实，历史状态不会被新轮覆盖。 */
+export interface PlanningState {
+  phase: 'execution' | 'planning'; // 自动简单执行或受后端约束的规划。
+  reason: string | null; // 进入规划的原因。
+  plans: PlanRevision[]; // 全部有界版本。
+  pending: UserInteraction | null; // 待处理请求，刷新不会消失。
+  decisions: (HumanDecision & { text: string })[]; // 已处理决定和用户原文。
+}
 
 /** 单次任务预算；时间以秒计，字节和字符预算分别命名，禁止混用。 */
 export interface RunLimits {
@@ -125,6 +176,7 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  planning_policy: 'auto' | 'required'; // 宿主只读策略，required时自动入口也必须先批准，浏览器不能覆盖。
   auto_repair: boolean; // 公开项目测试失败时最多自动修复两次，默认关闭，不重置预算。
   provider: 'deepseek'; // 当前宿主配置的供应商。
   requested_model: string; // 本次请求使用的模型名称。
@@ -168,6 +220,7 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  planning: PlanningState; // 规划、批准与等待的固定事实，不按最终回答猜测权限。
   schema_version: 1; // 当前记录格式版本。
   run_id: string; // 本次运行 UUID。
   execution_status: ExecutionStatus; // 模型工具循环的执行状态。
@@ -325,6 +378,7 @@ export interface ConfigOverrides {
 
 /** 提交任务的受控 HTTP 请求体；不支持模型密钥或任意验收命令。 */
 export type CreateRunRequest = {
+  mode?: 'auto' | 'plan'; // 自动允许Agent主动规划；plan明确要求先规划。
   prompt: string; // 非空任务文本。
   execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated 仅用于主动创建 Git 工作树。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
@@ -352,6 +406,8 @@ export interface EventsResponse {
 
 /** 用户追加要求；请求编号在网络重试时保持，避免重复修改。 */
 export interface FollowupRequest {
+  mode?: 'auto' | 'plan'; // auto不解除待批准状态；plan明确重新规划。
+  decision?: HumanDecision; // 只有用户明确操作才携带计划批准。
   request_id: string; // 浏览器生成的 UUID。
   prompt: string; // 本次新增要求。
   config?: ConfigOverrides; // 默认沿用前轮，可用当前配置草稿覆盖。
@@ -359,6 +415,7 @@ export interface FollowupRequest {
 
 /** 连续对话的一轮；详细测试、事件与差异仍在独立运行详情。 */
 export interface ConversationTurn {
+  stop_reason?: string | null; // 区分规划收尾、拒绝与开发结果；未建立终态时未知。
   run_id: string; // 本轮运行编号。
   parent_run_id: string | null; // 前轮编号。
   turn_index: number; // 从1开始的用户请求序号。

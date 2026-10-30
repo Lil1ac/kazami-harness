@@ -20,9 +20,11 @@ harness = "agent_harness.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]
+desktop-build = ["pyinstaller>=6.16,<7"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
 
 [tool.hatch.build.targets.wheel]

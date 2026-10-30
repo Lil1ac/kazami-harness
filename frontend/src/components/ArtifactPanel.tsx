@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Alert, Button, Drawer, Empty, Spin, Tag } from 'antd';
-import { DownloadOutlined, FileTextOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FileTextOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { artifactUrl, errorMessage, previewArtifact } from '../api';
+import { artifactUrl, desktopAction, errorMessage, getOptions, previewArtifact } from '../api';
 import type { ArtifactRef } from '../types';
 
 /** 展示工作区及运行内产物，预览失败仍允许附件下载；runId 改变时详情页会整体重置。 */
@@ -18,6 +18,11 @@ export function ArtifactPanel({
   warnings: string[]; // 后端受控提示；不代表测试失败。
 }) {
   const [selection, setSelected] = useState<ArtifactRef | null>(null); // 当前抽屉预览目标。
+  const [nativeError, setNativeError] = useState<string | null>(null); // 原生定位失败不影响历史文件预览。
+  const options = useQuery({
+    queryKey: ['options'],
+    queryFn: /* 复用宿主能力缓存以显示原生定位操作。 */ ({ signal }) => getOptions(signal),
+  });
   const selected = selection; // 历史文件来自固定快照，不依赖共享工作树仍然存在。
   const preview = useQuery({
     queryKey: ['artifact', runId, selected?.location, selected?.path],
@@ -70,6 +75,22 @@ export function ArtifactPanel({
                   {artifact.location === 'workspace' ? '工作区' : '运行记录'} · {artifact.kind}
                 </span>
               </div>
+              {options.data?.desktop && (
+                <Button
+                  type="text"
+                  icon={<FolderOpenOutlined />}
+                  aria-label={`在文件夹中显示 ${artifact.path}`}
+                  onClick={
+                    /* 仅向宿主传已登记产物引用，不接受页面拼接宿主路径。 */ () => {
+                      setNativeError(null);
+                      void desktopAction('reveal', artifactUrl(runId, artifact)).catch(
+                        /* 原生定位失败保留文件列表并提供可重试说明。 */ (error: unknown) =>
+                          setNativeError(errorMessage(error)),
+                      );
+                    }
+                  }
+                />
+              )}
               <a
                 className="download-link"
                 href={artifactUrl(runId, artifact)}
@@ -82,6 +103,7 @@ export function ArtifactPanel({
           ),
         )}
       </ul>
+      {nativeError && <Alert type="error" title={nativeError} />}
       <Drawer
         title={selected?.path || '产物预览'}
         size="large"

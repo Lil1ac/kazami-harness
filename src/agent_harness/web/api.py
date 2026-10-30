@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import AsyncIterator, Literal
 from uuid import UUID
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -23,6 +24,9 @@ from .schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest,
 from .service import WebRunManager, WebServiceError
 from .project_catalog import CatalogError
 
+if TYPE_CHECKING:
+    from ..desktop.host import DesktopHost
+
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
     """把受控 status/code/message 转成统一 JSON 错误响应；不序列化异常正文或输入值。"""
@@ -36,10 +40,12 @@ def create_app(
     *,
     model_client: ModelClient | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    desktop: "DesktopHost | None" = None,
 ) -> FastAPI:
     """创建本地应用并返回 FastAPI；run_config/runs_root=None 使用安全默认配置与项目 .runs。
 
     web_config 固定可选工作区和前端目录；client/transport 是离线测试注入点，None 用真实模型。
+    desktop 为原生宿主，None 表示独立 Web 服务；桌面模式启用会话认证、原生选择器和凭据读取。
     lifespan 关闭时会等待活动任务清理；构造不调用模型，不读取密钥值到响应或日志。
     """
     manager = WebRunManager(
@@ -48,7 +54,11 @@ def create_app(
         runs_root or web_config.project_dir / ".runs",
         model_client=model_client,
         transport=transport,
+        key_provider=desktop.api_key if desktop is not None else None,
     )
+    if desktop is not None:
+        manager.folder_picker = desktop
+        desktop.manager = manager
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -70,13 +80,15 @@ def create_app(
         """
         if request.url.hostname not in {"127.0.0.1", "localhost", "testserver"}:
             return _error(400, "invalid_host", "本地服务只接受本机地址。")
+        if desktop is not None and not desktop.authorized(request):
+            return _error(403, "desktop_session_required", "请从 Agent Harness 桌面窗口操作。")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             allowed_origins = {
                 f"{request.url.scheme}://{request.url.netloc}",
-                "http://127.0.0.1:5173",
-                "http://localhost:5173",
             }
+            if desktop is None:
+                allowed_origins.update({"http://127.0.0.1:5173", "http://localhost:5173"})
             if (
                 request.headers.get("sec-fetch-site") == "cross-site"
                 or (origin is not None and origin not in allowed_origins)
@@ -85,6 +97,9 @@ def create_app(
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
+        if desktop is not None:
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         return response
 
     @app.exception_handler(WebServiceError)
@@ -124,7 +139,10 @@ def create_app(
     @app.get("/api/options")
     async def options() -> dict:
         """返回宿主登记选项、默认配置、密钥存在标记和当前槽位；不接收参数。"""
-        return await asyncio.to_thread(manager.options)
+        result = await asyncio.to_thread(manager.options)
+        if desktop is not None:
+            result["desktop"] = desktop.public_settings()
+        return result
 
     @app.post("/api/projects/pick")
     async def pick_project() -> dict:
@@ -361,4 +379,7 @@ def create_app(
             )
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
+    if desktop is not None:
+        from ..desktop.api import install_routes
+        install_routes(app, desktop, manager)
     return app

@@ -420,3 +420,11 @@ RunConfig 的 skills 保存当前选择，浏览器 RunConfigPatch 只能覆盖�
 实际工作区确定后生成 PythonExecution，记录项目设置或 PATH 解析的解释器与共享源码目录。Runner落盘前核验，命令与验收使用相同项目源码范围；ProcessRunner仅对各自子进程注入PYTHONPATH，命令cwd可以是工作区子目录。独立验收的私有依赖仍在其自身cwd内单独校验，不传给模型命令。
 
 项目配置python_paths省略时自动根目录/已有src，空列表只用根目录；隔离工作树及续轮按当轮实际路径重新生成，旧快照不改写。详情页从持久记录展示默认Python与源码目录；工具声明如实描述项目解释器与 PATH。数据、边界和配置见 [Python源码导入](PYTHON_EXECUTION.md)。
+
+## Electron 桌面宿主（2026-10-30）
+
+`desktop/src/main.ts` 管理单实例、窗口、菜单、会话 Cookie 和后台子进程；预加载只暴露正常退出和固定错误通知。React 保留同一套页面与 HTTP/SSE 契约。`desktop/src/backend.ts` 只通过标准输入发送私有启动凭据，按 ready 消息等待随机端口就绪；运行记录仍由 Python Runner 唯一写入。
+
+`src/agent_harness/desktop/server.py` 启动独立后台，`bridge.py` 以专用输入线程配对原生请求与异步结果。主进程只接受固定能力白名单，后台先验证产物引用和真实快照再请求文件操作。父进程发送 shutdown 或输入 EOF 时，后台进入现有 lifespan/Runner 取消与清理流程。Git、命令及验收进程与控制 stdin 隔离，Windows 辅助控制台隐藏。
+
+公开设置和窗口状态分别原子保存，密钥只在主进程使用系统加密后保存。桌面 HTTP 拒绝无会话访问及跨源写入，页面使用 HttpOnly Cookie；会话令牌不进入 argv、URL 或日志。开发与发布的资源路径、运行目录、模块边界及验收见 [桌面端说明](DESKTOP.md)。

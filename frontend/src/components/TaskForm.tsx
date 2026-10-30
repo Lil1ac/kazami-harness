@@ -143,8 +143,14 @@ export function TaskForm({
         <Alert
           type="warning"
           showIcon
-          title={'请先配置 ' + options.config.api_key_env}
-          description="在启动服务的终端设置环境变量，然后重启服务。"
+          title={options.desktop ? '请先配置模型密钥' : '请先配置 ' + options.config.api_key_env}
+          description={
+            options.desktop ? (
+              <Link to="/settings">前往运行配置保存 DeepSeek API Key</Link>
+            ) : (
+              '在启动服务的终端设置环境变量，然后重启服务。'
+            )
+          }
         />
       )}
       {busyId && (

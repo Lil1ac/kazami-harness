@@ -1,19 +1,21 @@
 # Agent Harness
 
-面向后端开发者的本地代码任务工作台，支持直接修改所选目录、可选独立工作树、项目测试和代码差异。CLI 与网页共用一个 Runner，支持模型多轮调用、读取/搜索/写入文件、执行命令、保存轨迹和产物，以及可选的宿主独立验收。
+面向后端开发者的本地代码任务工作台，以 Windows 桌面端为主要入口，支持直接修改所选目录、可选独立工作树、项目测试和代码差异。Electron 桌面端、CLI 与网页共用一个 Python Runner，支持模型多轮调用、读取/搜索/写入文件、执行命令、保存轨迹和产物，以及可选的宿主独立验收。
 
 当前提供本地单用户、单任务控制台。任务产物可以是代码、文本、CSV 等格式；没有验收器时保持“未验收”。任务结束后可在详情页追加要求，继承会话历史和已有代码，在独立新一轮中执行、测试和审阅；使用与边界见 [多轮任务交互](docs/MULTITURN_TASKS.md)。当前阶段、后续路线、目录职责和完整文档导航见 [PROJECT.md](PROJECT.md)。
 
 ## 安装与密钥
 
-需要 Python 3.12、uv；使用网页还需要 Node.js 22.12 或更新兼容版本完成前端构建。所有命令在项目根目录执行。
+Windows 发布版运行安装程序，或解压发布包后双击 `Agent Harness.exe`。Python 后台与界面随应用分发；在“运行配置”输入 DeepSeek API Key，应用使用操作系统加密后保存。桌面启动与构建详见 [桌面端说明](docs/DESKTOP.md)。
+
+源码运行需要 Python 3.12、uv；源码桌面端和网页还需要 Node.js 22.12 或更新兼容版本完成构建。所有命令在项目根目录执行。
 
 ```powershell
 uv --cache-dir .uv-cache sync --frozen
 uv --cache-dir .uv-cache run harness --help
 ```
 
-程序从启动终端的 `DEEPSEEK_API_KEY` 环境变量读取密钥，不读取 `.env`。如果已经设置，可直接启动；也可以在 PowerShell 的密码框输入，避免把明文写入命令历史：
+CLI 和独立网页服务从启动终端的 `DEEPSEEK_API_KEY` 环境变量读取密钥，不读取 `.env`。桌面端使用设置页保存的加密凭据。CLI 密钥也可以在 PowerShell 的密码框输入，避免把明文写入命令历史：
 
 ```powershell
 $credential = Get-Credential -UserName 'deepseek' -Message '在密码框输入 DeepSeek API Key'
@@ -21,6 +23,24 @@ $env:DEEPSEEK_API_KEY = $credential.GetNetworkCredential().Password
 ```
 
 密钥不进入网页或运行记录。真实模型运行会发送任务和读取的内容并消耗服务额度；仓库样例使用虚构数据。
+
+## 启动桌面端
+
+源码首次启动会自动准备依赖并构建界面：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-desktop.ps1
+```
+
+后续直接运行 `npm.cmd --prefix desktop run dev`。桌面程序自动启动本机后台，不需要另开服务或浏览器；前端改动后先重新构建。源码默认复用仓库 `.runs`，桌面公开设置、窗口状态及缓存放在 `.runtime/desktop`。
+
+构建 Windows 安装包及便携 ZIP：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1
+```
+
+产物位于 `dist/desktop`。下载默认保存到 `D:\Codex\Downloads`；发布版应用数据优先保存在 `D:\Codex\AgentHarness`，可通过 `--data-dir` 指定。任务运行中关闭窗口会先确认取消并等待清理；后台不会在无窗口状态下继续执行。
 
 ## 启动网页控制台
 

@@ -357,6 +357,7 @@ export interface LocalProjectOption {
 
 /** 启动能力选项；密钥仅返回是否配置，不返回值。 */
 export interface OptionsResponse {
+  desktop?: DesktopSettings; // 原生桌面宿主能力；独立浏览器服务不提供。
   recent_projects: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
   folder_picker_available?: boolean; // 本机原生文件夹选择器是否受支持。
   config: RunConfig; // 服务端默认配置。
@@ -364,6 +365,20 @@ export interface OptionsResponse {
   verifiers: VerifierOption[]; // 已登记验收程序。
   skills?: SkillOption[]; // 宿主技能目录元数据；正文只在所选运行中加载。
   busy_run_id: string | null; // 唯一运行槽当前占用者。
+}
+
+/** 桌面设置的公开部分；密钥只返回存在标记，会话令牌不进入前端状态。 */
+export interface DesktopSettings {
+  downloads_directory: string; // 已保存的绝对下载目录，默认优先使用 D 盘。
+  data_directory: string; // 公开配置、日志与缓存根目录，只读展示。
+  credential_source: 'electron_safe_storage'; // 密钥由 Electron 使用操作系统加密，页面不能回读正文。
+}
+
+/** 桌面跨启动保存的运行设置；不含技能选择、内部策略和任何凭据。 */
+export interface DesktopRunSettings {
+  requested_model: string; // 后续任务默认使用的模型。
+  tools: ToolName[]; // 默认工具权限。
+  limits: Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_timeout_seconds'>; // 三项总体预算。
 }
 
 /** 本浏览器下一次提交的配置；不修改服务器全局设置。 */

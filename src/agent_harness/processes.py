@@ -183,6 +183,7 @@ class ProcessRunner:
                         _windows_taskkill(), "/PID", str(process.pid), "/T", "/F",
                         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
                         stderr=asyncio.subprocess.DEVNULL, env=_child_environment(),
+                        creationflags=0x08000000,  # 隐藏桌面应用的清理辅助控制台。
                     )
                     helper_code = await helper.wait()
                     if helper_code != 0:
@@ -303,7 +304,8 @@ class ProcessRunner:
         cleanup_deadline: float | None = None
         spawn_unconfirmed = False
         try:
-            options = {"creationflags": 0x00000200} if os.name == "nt" else {"start_new_session": True}
+            # Windows 桌面任务使用独立进程组并隐藏辅助控制台；输出仍完整保存在运行证据中。
+            options = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(
                 *argv, cwd=cwd, env=child_env, stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=65536, **options,

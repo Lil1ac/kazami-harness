@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import subprocess
 import shlex
+from collections.abc import Callable
 from uuid import UUID, uuid4
 
 import httpx
@@ -177,9 +178,11 @@ class WebRunManager:
         *,
         model_client: ModelClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        key_provider: Callable[[RunConfig], str] | None = None,
     ) -> None:
         """固定宿主配置和 runs_root；可选 client/transport 仅供测试注入，None 用真实实现。
 
+        key_provider 为宿主凭据读取器，None 使用 CLI 环境变量；返回值只传 Runner。
         构造不创建运行或调用模型，返回 None；路径解析失败由服务启动层处理。
         """
         self.web_config = web_config  # 宿主工作区和验收器白名单。
@@ -189,6 +192,7 @@ class WebRunManager:
         self.folder_picker = FolderPicker()  # 独立原生选择器，读取页面不创建窗口。
         self._model_client = model_client  # 离线注入；默认无客户端，共用 Runner 创建逻辑。
         self._transport = transport  # 可选 HTTP 测试传输，不在配置或响应序列化。
+        self._key_provider = key_provider  # 桌面凭据来自 Windows 凭据库，不进入运行配置。
         self._lock = asyncio.Lock()  # 提交和关停争用同一槽，避免同时创建两个任务。
         self._submission: asyncio.Task[RunView] | None = None  # 服务持有准备任务；页面断开不遗失 Git 归属。
         self._active: ActiveRun | None = None  # 只有仍执行的任务持有槽位。
@@ -223,13 +227,17 @@ class WebRunManager:
             "folder_picker_available": self.folder_picker.available,
             "config": self.run_config,
             "skills": SkillCatalog(self.run_config.skill_roots).discover(),
-            "key_configured": bool(os.environ.get(self.run_config.api_key_env)),
+            "key_configured": bool(self.api_key(self.run_config)),
             "verifiers": [
                 {"id": item.id, "label": item.label, "description": item.description}
                 for item in self.web_config.verifiers
             ],
             "busy_run_id": self.busy_run_id,
         }
+
+    def api_key(self, config: RunConfig) -> str:
+        """按 config 取得宿主凭据并返回；默认从环境读取，桌面注入凭据库，不记录值。"""
+        return self._key_provider(config) if self._key_provider is not None else os.environ.get(config.api_key_env, "")
 
     def _project_option(self, preset: ProjectPreset) -> dict:
         """只读探测 preset 的固定 HEAD 与 dirty 标记；复用有界 Git，异常仅使该项目不可用。"""
@@ -315,7 +323,7 @@ class WebRunManager:
                 required = request.mode == "plan" or config.planning_policy == "required"
                 planning = PlanningState(phase="planning", reason="宿主要求先批准计划" if config.planning_policy == "required" else "用户选择先规划") if required else PlanningState()
                 manifest = RunManifest(run_id=identifier, task=task, config=config, session_id=identifier, origin=origin, planning=planning)
-                api_key = os.environ.get(config.api_key_env, "")
+                api_key = self.api_key(config)
                 validate_execution(manifest, api_key)
                 if config.auto_repair and (preset is None or not preset.test_argv):
                     validate_auto_repair(manifest)  # 缺少公开测试先拒绝，避免为无效修复请求创建工作树。

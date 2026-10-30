@@ -1,0 +1,62 @@
+{
+  "name": "agent-harness-desktop",
+  "version": "0.1.0",
+  "description": "Agent Harness 本地代码任务工作台",
+  "author": "Agent Harness",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && electron .",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "package": "npm run build && electron-builder --win",
+    "package:dir": "npm run build && electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "local.agentharness.desktop",
+    "productName": "Agent Harness",
+    "artifactName": "AgentHarness-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "../dist/desktop"
+    },
+    "files": [
+      "dist/**/*.js",
+      "!dist/tests/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../.runtime/backend-dist/harness-backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "5.9",
+    "undici": "^7.30.1"
+  }
+}

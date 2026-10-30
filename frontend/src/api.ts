@@ -10,7 +10,41 @@ import type {
   ProjectReview,
   OptionsResponse,
   RunView,
+  DesktopRunSettings,
 } from './types';
+
+/** 保存桌面默认设置并返回最新能力；只影响之后提交的任务，不改变活动任务快照。 */
+export function saveDesktopSettings(
+  config: DesktopRunSettings,
+  downloadsDirectory: string,
+): Promise<OptionsResponse> {
+  return request('/api/desktop/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config, downloads_directory: downloadsDirectory }),
+  });
+}
+
+/** 将 secret 交给桌面宿主进行系统加密保存；空字符串明确清除，返回值不包含密钥正文。 */
+export function saveDesktopCredential(secret: string): Promise<{ key_configured: boolean }> {
+  return request('/api/desktop/credential', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret }),
+  });
+}
+
+/** 由原生宿主处理用户点击的 url；下载/定位仅接受已登记产物，外链只开放网页与邮件。 */
+export function desktopAction(
+  action: 'download' | 'reveal' | 'external',
+  url: string,
+): Promise<{ filename?: string; path?: string; opened?: boolean }> {
+  return request(`/api/desktop/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+}
 
 /** HTTP 请求失败；message 使用后端受控文案，code 用于稳定分类。 */
 export class ApiError extends Error {

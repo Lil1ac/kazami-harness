@@ -8,7 +8,6 @@ import math
 import os
 import platform
 import stat
-import sys
 
 from .schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, SkillSnapshot, TaskSpec
 from .planning import PlanningController, project_plan_history
@@ -120,12 +119,20 @@ class ContextBuilder:
         项目约定和所选技能放入同一条有标识的 user 前缀，宿主 system 明确其不能覆盖权限或预算。
         history 默认为 None，表示首轮；非空时在当前项目前缀后继承已核验的完整消息，
         最后追加本次要求。每次返回独立列表，不修改冻结快照；指令失败时不得请求模型。
+        Python 提示只使用当轮执行快照，不能把打包后的宿主 EXE 当成项目解释器。
         """
+        execution = self._task.python_execution  # Runner 接纳时固定，与命令工具实际使用的解释器一致。
+        if execution is None:
+            python_description = "项目 Python 解释器尚未准备；不得把宿主程序当作 Python 执行。"
+        elif execution.executable is None:
+            python_description = "本轮未找到项目 Python 解释器；run_command 的 python 别名不可用，需要时请用户配置项目解释器。"
+        else:
+            python_description = f"项目 Python 解释器：{execution.executable}；run_command 的 python 别名使用此解释器。"
         messages = [{
             "role": "system",
             "content": self._config.system_prompt
             + f"\n操作系统：{platform.system()}；工作区：{self._task.workspace}。"
-            + f"Python 解释器：{sys.executable}；run_command 的 python 别名也会使用此解释器。"
+            + python_description
             + "仅使用本轮声明的工具。读取 UTF-8 文件时按 next_offset 分页到 eof=true。"
             + "搜索结果截断时不要声称已检索全部内容。写入默认不覆盖，修改已有文件需 overwrite=true。"
             + "命令使用 argv 数组，不隐式解析管道和重定向；优先使用 Python 处理文件。"

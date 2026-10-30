@@ -202,7 +202,7 @@ class ConversationService:
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
-                api_key = os.environ.get(config.api_key_env, '')
+                api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)
             except (ConfigurationError, ValidationError) as error:
                 raise SessionError('invalid_run', str(error) if isinstance(error, ConfigurationError) else '追加任务配置无效。') from None

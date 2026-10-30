@@ -279,9 +279,10 @@ class ProjectCatalog:
                 raise CatalogError("project_git_unavailable", "此目录属于 Git 项目，但本机无法调用 Git。")
             if program is not None:
                 flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                # 桌面后台的 stdin 是与 Electron 的控制管道，Git 探测必须与之隔离，避免等待输入。
                 found = subprocess.run(
                     [program, "-C", str(root), "rev-parse", "--show-toplevel"],
-                    capture_output=True, timeout=10, env=_child_environment(), **flags,
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=10, env=_child_environment(), **flags,
                 )
                 if found.returncode == 0:
                     git_root = Path(found.stdout.decode("utf-8").strip()).resolve()
@@ -290,7 +291,7 @@ class ProjectCatalog:
                     kind = "project"
                 else:
                     bare = subprocess.run([program, "-C", str(root), "rev-parse", "--is-bare-repository"],
-                        capture_output=True, timeout=10, env=_child_environment(), **flags)
+                        stdin=subprocess.DEVNULL, capture_output=True, timeout=10, env=_child_environment(), **flags)
                     if bare.returncode == 0 and bare.stdout.strip() == b"true":
                         raise CatalogError("project_bare_unsupported", "请选择带工作目录的 Git 项目，当前选择的是裸仓库。")
                     if marker is not None:

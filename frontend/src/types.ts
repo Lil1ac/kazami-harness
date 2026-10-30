@@ -276,11 +276,19 @@ export interface DiffResponse {
   size_bytes: number; // 完整补丁 UTF-8 字节数。
 }
 
-/** 用户明确打开的本机目录；Git元数据仅在kind=project时存在。 */
+/** 原生文件夹选择的临时草稿；确认创建前不写项目登记。 */
+export interface ProjectSelection {
+  selection_id: string; // 10分钟内可确认一次，重启后失效；页面不提交自由路径。
+  label: string; // 新目录的默认名称或已绑定项目名称。
+  path: string; // 由原生选择器核验的绝对目录，仅展示。
+  existing_project_id: string | null; // 非空表示目录已绑定，确认时复用已有项目及名称。
+}
+
+/** 用户命名并绑定本机目录的项目；Git元数据仅在kind=project时存在。 */
 export interface LocalProjectOption {
   python_executable?: string | null; // 用户明确设置的解释器；空值按 PATH，不执行程序。
   id: string; // 后续任务只提交这个稳定编号。
-  label: string; // 用户可读的文件夹名称。
+  label: string; // 用户可编辑的项目名称，独立于文件夹名称。
   path: string; // 真实本机路径，仅作展示。
   kind: 'project' | 'workspace'; // Git项目或普通目录。
   last_opened_at?: string | null; // 用户最后明确打开的时间，读取页面不更新。

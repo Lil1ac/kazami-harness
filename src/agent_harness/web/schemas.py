@@ -166,6 +166,18 @@ class EventPage(DataModel):
     last_seq: int  # 当前有效事件前缀的最大序号，不是本页最后序号。
 
 
+class ProjectNameRequest(DataModel):
+    """用户明确填写的项目名称；目录绑定不允许通过名称修改接口改变。"""
+
+    label: str = Field(min_length=1, max_length=100)  # 去除首尾空白后由目录登记层校验有效名称。
+
+
+class CreateProjectRequest(ProjectNameRequest):
+    """确认原生文件夹选择后创建项目；只接受短期选择凭据，不接受自由输入的宿主路径。"""
+
+    selection_id: str = Field(pattern=r"^[a-f0-9]{32}$")  # 原生选择成功返回的10分钟凭据，重启后失效。
+
+
 # 用户明确保存的后续项目测试设置，不属于模型可修改的任务参数。
 class ProjectSettingsRequest(DataModel):
     """用户明确保存的项目运行设置；保存只校验，不执行模型、测试或解释器。"""

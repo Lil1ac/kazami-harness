@@ -187,7 +187,9 @@ it('从另一个项目新建对话固定正确来源，不沿用浏览器上次�
   await within(main).findByRole('heading', { name: /Beta 项目/ });
   await user.click(within(main).getByRole('link', { name: '新建对话' }));
   const prompt = await screen.findByRole('textbox', { name: '任务描述' });
-  expect(screen.getByRole('button', { name: 'Beta 项目' })).toBeInTheDocument();
+  expect(
+    screen.getByRole('combobox', { name: '选择项目' }).closest('.project-select'),
+  ).toHaveTextContent('Beta 项目');
   await user.click(prompt);
   await user.paste('检查Beta的输入');
   await user.click(screen.getByRole('button', { name: '开始执行' }));

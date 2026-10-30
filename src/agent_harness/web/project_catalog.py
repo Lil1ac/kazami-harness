@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
 from uuid import uuid4
 
 from pydantic import Field, ValidationError, model_validator
@@ -36,7 +37,7 @@ class LocalProject(DataModel):
     """用户已明确选择的目录；登记本身不创建工作树或调用模型。"""
 
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")  # 路径去重后的稳定编号。
-    label: str = Field(min_length=1, max_length=100)  # 默认采用目录名。
+    label: str = Field(min_length=1, max_length=100)  # 用户命名的项目；未命名的内部登记默认采用目录名。
     path: Path  # 选择时固定的规范绝对目录。
     kind: Literal["project", "workspace"]  # Git 根目录或普通文件目录。
     last_opened_at: UtcDatetime  # 用户最后明确打开时间，读取页面不更新。
@@ -104,6 +105,72 @@ class ProjectCatalog:
         self.path = self.root / "catalog.json"  # 只原子替换此文件。
         self.config = config  # TOML 作为初始登记来源。
         self._lock = threading.RLock()  # 同进程目录与设置更新串行。
+        self._selections: dict[str, tuple[Path, float]] = {}  # 凭据映射至（规范目录、单调时钟失效秒数）；仅保留10分钟，不落盘。
+
+    def select_directory(self, selected: Path) -> dict:
+        """为原生选择的 selected 返回创建草稿（凭据、名称、路径与已有项目ID），不写登记。
+
+        凭据有效600秒；仅宿主能传入新路径，页面确认创建时必须引用此凭据。
+        目录无效抛 CatalogError；最多保存100份待确认选择，旧选择按到期时间淘汰。
+        """
+        with self._lock:
+            root, _ = self._inspect_directory(selected)
+            existing = next((item for item in self.recent() if os.path.normcase(item["path"]) == os.path.normcase(str(root))), None)
+            now = time.monotonic()
+            self._selections = {key: value for key, value in self._selections.items() if value[1] > now}
+            if len(self._selections) >= 100:
+                self._selections.pop(next(iter(self._selections)))
+            token = uuid4().hex
+            self._selections[token] = (root, now + 600)
+            return {"selection_id": token, "path": str(root), "label": existing["label"] if existing else (root.name or str(root))[:100],
+                    "existing_project_id": existing["id"] if existing else None}
+
+    def create(self, selection_id: str, label: str) -> str:
+        """确认 selection_id 指向的目录并以 label 创建项目，返回稳定ID；重复目录复用已有名称。
+
+        label 去除首尾空白后须为1..100字符。过期/重启丢失凭据时要求重新选择；
+        保存成功才消耗凭据，失败可重试，不修改目录内容。
+        """
+        with self._lock:
+            selection = self._selections.get(selection_id)
+            if selection is None or selection[1] <= time.monotonic():
+                self._selections.pop(selection_id, None)
+                raise CatalogError("project_selection_expired", "文件夹选择已失效，请重新选择。")
+            try:
+                unchanged = selection[0].resolve(strict=True) == selection[0]
+            except (OSError, RuntimeError):
+                unchanged = False  # 目录移动、删除或循环链接都必须重新选择，避免返回原始系统错误。
+            if not unchanged:
+                raise CatalogError("project_selection_changed", "所选目录路径发生变化，请重新选择文件夹。")
+            identifier = self.register(selection[0], label=label)
+            self._selections.pop(selection_id, None)
+            return identifier
+
+    def rename(self, identifier: str, label: str) -> None:
+        """把 identifier 项目重命名为去空白的 label（1..100字符），返回None。
+
+        只更新登记名称，保留ID、绑定目录、运行设置与最近时间；目录暂不可访问时仍可命名。
+        未登记项目或无效名称抛 CatalogError，不改写已有会话。
+        """
+        with self._lock:
+            label = self._name(label)
+            projects, workspaces, _ = self.snapshot()
+            source = next((item for item in (*projects, *workspaces) if item.id == identifier), None)
+            if source is None:
+                raise CatalogError("unknown_project", "该项目尚未登记，请重新选择文件夹。", 404)
+            entries = self._read()
+            old = next((item for item in entries if item.id == identifier), None)
+            values = old.model_dump() if old else {**source.model_dump(), "kind": "project" if isinstance(source, ProjectPreset) else "workspace", "last_opened_at": datetime.now(UTC)}
+            record = LocalProject(**{**values, "label": label})
+            self._write([record, *(item for item in entries if item.id != identifier)])
+
+    @staticmethod
+    def _name(label: str) -> str:
+        """返回去首尾空白的项目 label；仅允许1..100字符且无控制字符，否则抛 CatalogError。"""
+        label = label.strip()
+        if not label or len(label) > 100 or any(ord(char) < 32 or ord(char) == 127 for char in label):
+            raise CatalogError("project_name_invalid", "项目名称须为1至100个字符，且不能包含控制字符。")
+        return label
 
     def _check_path(self) -> None:
         """核对登记路径没有链接或重解析点；异常抛 CatalogError，不创建目录。"""
@@ -193,49 +260,64 @@ class ProjectCatalog:
         """返回同一次登记快照的最近列表；读取页面不改变最近打开时间。"""
         return self.snapshot()[2]
 
-    def register(self, selected: Path) -> str:
-        """核验用户选择的 selected 并登记，返回稳定编号；只读识别 Git，不执行代码或模型。"""
+    def _inspect_directory(self, selected: Path) -> tuple[Path, str]:
+        """只读核验原生 selected，返回规范绝对目录及Git/普通目录类型；无效时抛 CatalogError。
+
+        拒绝运行记录目录、Git子目录及裸仓库；不登记、不初始化Git、不调用模型。
+        """
+        try:
+            root = selected.resolve(strict=True)
+            if not root.is_dir():
+                raise ValueError("not directory")
+            # 运行记录不得变成任务来源，避免模型读到其他会话证据。
+            if root.is_relative_to(self.root.parent):
+                raise CatalogError("project_records_forbidden", "请选择运行记录目录以外的项目文件夹。")
+            marker = next((parent / ".git" for parent in (root, *root.parents) if (parent / ".git").exists()), None)
+            kind = "workspace"
+            program = shutil.which("git")
+            if program is None and marker is not None:
+                raise CatalogError("project_git_unavailable", "此目录属于 Git 项目，但本机无法调用 Git。")
+            if program is not None:
+                flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                found = subprocess.run(
+                    [program, "-C", str(root), "rev-parse", "--show-toplevel"],
+                    capture_output=True, timeout=10, env=_child_environment(), **flags,
+                )
+                if found.returncode == 0:
+                    git_root = Path(found.stdout.decode("utf-8").strip()).resolve()
+                    if git_root != root:
+                        raise CatalogError("project_root_required", "请选择 Git 仓库根目录，当前选择的是仓库内的子文件夹。")
+                    kind = "project"
+                else:
+                    bare = subprocess.run([program, "-C", str(root), "rev-parse", "--is-bare-repository"],
+                        capture_output=True, timeout=10, env=_child_environment(), **flags)
+                    if bare.returncode == 0 and bare.stdout.strip() == b"true":
+                        raise CatalogError("project_bare_unsupported", "请选择带工作目录的 Git 项目，当前选择的是裸仓库。")
+                    if marker is not None:
+                        raise CatalogError("project_git_invalid", "Git 仓库无法识别，请检查所选目录。")
+            return root, kind
+        except CatalogError:
+            raise
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            raise CatalogError("project_directory_unavailable", "无法打开所选文件夹，请确认目录存在且可以访问。") from None
+
+    def register(self, selected: Path, *, label: str | None = None) -> str:
+        """核验 selected 并登记，返回稳定编号；label=None使用目录名，重复目录保留已有名称与设置。"""
         with self._lock:
             try:
-                root = selected.resolve(strict=True)
-                if not root.is_dir():
-                    raise ValueError("not directory")
-                # 运行记录不得变成任务来源，避免模型读到其他会话证据。
-                if root.is_relative_to(self.root.parent):
-                    raise CatalogError("project_records_forbidden", "请选择运行记录目录以外的项目文件夹。")
-                marker = next((parent / ".git" for parent in (root, *root.parents) if (parent / ".git").exists()), None)
-                kind = "workspace"
-                program = shutil.which("git")
-                if program is None and marker is not None:
-                    raise CatalogError("project_git_unavailable", "此目录属于 Git 项目，但本机无法调用 Git。")
-                if program is not None:
-                    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-                    found = subprocess.run(
-                        [program, "-C", str(root), "rev-parse", "--show-toplevel"],
-                        capture_output=True, timeout=10, env=_child_environment(), **flags,
-                    )
-                    if found.returncode == 0:
-                        git_root = Path(found.stdout.decode("utf-8").strip()).resolve()
-                        if git_root != root:
-                            raise CatalogError("project_root_required", "请选择 Git 仓库根目录，当前选择的是仓库内的子文件夹。")
-                        kind = "project"
-                    else:
-                        bare = subprocess.run([program, "-C", str(root), "rev-parse", "--is-bare-repository"],
-                            capture_output=True, timeout=10, env=_child_environment(), **flags)
-                        if bare.returncode == 0 and bare.stdout.strip() == b"true":
-                            raise CatalogError("project_bare_unsupported", "请选择带工作目录的 Git 项目，当前选择的是裸仓库。")
-                        if marker is not None:
-                            raise CatalogError("project_git_invalid", "Git 仓库无法识别，请检查所选目录。")
+                root, kind = self._inspect_directory(selected)
+                label = self._name(label) if label is not None else None
                 candidates = self.recent()
                 existing = next((item for item in candidates if os.path.normcase(item["path"]) == os.path.normcase(str(root))), None)
                 identifier = existing["id"] if existing else "local-" + hashlib.sha256(os.path.normcase(str(root)).encode("utf-8")).hexdigest()[:24]
                 entries = self._read()
                 old = next((item for item in entries if item.id == identifier), None)
-                preset = next((item for item in self.project_presets() if item.id == identifier), None)
+                projects, workspaces, _ = self.snapshot()
+                preset = next((item for item in (*projects, *workspaces) if item.id == identifier), None)
                 values = old.model_dump() if old else {}
                 if preset is not None and old is None:
                     values.update(preset.model_dump())
-                values.update(id=identifier, label=existing["label"] if existing else (root.name or str(root))[:100], path=root, kind=kind, last_opened_at=datetime.now(UTC))
+                values.update(id=identifier, label=existing["label"] if existing else (label or (root.name or str(root))[:100]), path=root, kind=kind, last_opened_at=datetime.now(UTC))
                 entry = LocalProject(**values)
                 updated = [entry, *(item for item in entries if item.id != identifier and os.path.normcase(str(item.path)) != os.path.normcase(str(root)))]
                 if len(updated) > 100:

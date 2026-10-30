@@ -3,7 +3,7 @@ import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getOptions, saveProjectSettings, createRun } from '../api';
+import { getOptions, renameProject, saveProjectSettings, createRun } from '../api';
 import { ConfigDraftProvider } from '../config';
 import { options, projectOption } from '../test/fixtures';
 import type { LocalProjectOption } from '../types';
@@ -14,6 +14,7 @@ vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   getOptions: vi.fn(),
   saveProjectSettings: vi.fn(),
+  renameProject: vi.fn(),
   createRun: vi.fn(),
   getConversations: vi.fn(
     /* 导航与配置均不创建执行记录。 */ async () => ({ items: [], total: 0, busy_run_id: null }),
@@ -117,5 +118,26 @@ it('普通目录只保存解释器，保存失败保留输入且允许重试', a
       expect(screen.getByRole('status')).toHaveTextContent('项目设置已保存'),
   );
   expect(saveProjectSettings).toHaveBeenLastCalledWith('plain', '', 30, 'D:/env/python.exe');
+  expect(createRun).not.toHaveBeenCalled();
+});
+
+it('项目名称独立保存，项目标题同步更新且绑定文件夹只读', async () => {
+  // 名称保存不依赖运行环境表单，也不能借改名改变会话目录。
+  const user = setup();
+  vi.mocked(renameProject).mockImplementation(
+    /* 保存后查询读取同一真实名称，模拟服务端持久化。 */ async () => {
+      const updated = { ...projectOption, label: '订单服务' };
+      vi.mocked(getOptions).mockResolvedValue({ ...options, recent_projects: [updated] });
+      return updated;
+    },
+  );
+  const name = await screen.findByLabelText('项目名称');
+  await user.clear(name);
+  await user.paste('订单服务');
+  expect(screen.getByLabelText('绑定文件夹')).toHaveAttribute('readonly');
+  await user.click(screen.getByRole('button', { name: '保存项目名称' }));
+  expect(await screen.findByRole('heading', { name: '订单服务' })).toBeInTheDocument();
+  expect(renameProject).toHaveBeenCalledWith(projectOption.id, '订单服务');
+  expect(saveProjectSettings).not.toHaveBeenCalled();
   expect(createRun).not.toHaveBeenCalled();
 });

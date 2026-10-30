@@ -196,7 +196,7 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
               ),
             )
           ) : (
-            <p className="sidebar-empty">打开文件夹后，项目会显示在这里。</p>
+            <p className="sidebar-empty">在首页新建项目并绑定文件夹。</p>
           )
         ) : (
           <p className="sidebar-empty">读取项目…</p>

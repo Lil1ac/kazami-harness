@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Alert, Button, Checkbox, Form, Input, Select } from 'antd';
-import {
-  ArrowUpOutlined,
-  FolderOpenOutlined,
-  BranchesOutlined,
-  SettingOutlined,
-} from '@ant-design/icons';
+import { ArrowUpOutlined, BranchesOutlined, SettingOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
-import { createRun, errorMessage, pickProject } from '../api';
+import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
 import type { LocalProjectOption, OptionsResponse } from '../types';
 import { SkillSelector } from './SkillSelector';
+import { ProjectSelector } from './ProjectSelector';
 
 /** 新任务的可编辑内容；项目来源由用户明确选择，不从示例默认推断。 */
 interface TaskValues {
@@ -57,7 +53,7 @@ function lastProject(): string {
   }
 }
 
-/** 首页主输入区；目录选择与发送分别产生明确请求，项目导航交由侧栏。 */
+/** 首页主输入区；项目选择、确认绑定与发送各自独立，切换保留任务文字。 */
 export function TaskForm({
   options,
   busyId,
@@ -73,6 +69,7 @@ export function TaskForm({
   const [initialDraft] = useState(() => taskDraft(draftKey)); // 调整配置后返回或刷新时恢复本标签页文字。
   const [selectedId, setSelectedId] = useState(() => initialProjectId || lastProject()); // 持久化的编号只用于定位当前可访问登记。
   const [opened, setOpened] = useState<LocalProjectOption | null>(null); // 目录POST返回后立即可用，等待选项刷新。
+  const [projectBusy, setProjectBusy] = useState(false); // 项目切换或创建弹窗期间防止向旧目录发送。
   const [autoRepair, setAutoRepair] = useState(false); // 本次明确开启，不从其他项目或文字草稿恢复。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
@@ -84,7 +81,11 @@ export function TaskForm({
     (opened?.id === selectedId ? opened : undefined);
   const repairAvailable = selected?.kind === 'project' && Boolean(selected.test_argv?.length); // 只使用已保存的公开测试，不取未保存的命令草稿。
   useEffect(
-    /* 换项目必须重新选择，避免把旧项目的自动修复授权带到其他目录。 */ () => setAutoRepair(false),
+    /* 换项目必须重新选择，避免把旧项目的自动修复授权带到其他目录。 */ () => {
+      setAutoRepair(false);
+      setCreateWorktree(false);
+      form.setFieldValue('base_ref', 'HEAD');
+    },
     [selected?.id],
   );
   const mutation = useMutation({
@@ -103,10 +104,10 @@ export function TaskForm({
   });
 
   /** 更新当前已明确打开的目录；返回void，只保存编号，任务文字保持。 */
-  function acceptProject(project: LocalProjectOption, resetMode = false): void {
+  function acceptProject(project: LocalProjectOption): void {
     setOpened(project);
     setSelectedId(project.id);
-    if (resetMode) setCreateWorktree(false); // 打开新目录回到原目录执行，保存测试设置不切换位置。
+    setCreateWorktree(false); // 切换或新建项目都回到原目录执行，隔离须再次明确选择。
     saveTaskDraft(form.getFieldsValue(), draftKey);
     try {
       localStorage.setItem('harness-selected-project', project.id);
@@ -115,12 +116,6 @@ export function TaskForm({
     }
     void cache.invalidateQueries({ queryKey: ['options'] });
   }
-  const picker = useMutation({
-    mutationFn: pickProject,
-    onSuccess: /* 用户取消原生窗口时保持原项目和草稿。 */ (value) => {
-      if (value.project) acceptProject(value.project, true);
-    },
-  });
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
     if (!selected) return;
@@ -136,8 +131,7 @@ export function TaskForm({
       config: { ...draft, auto_repair: repairAvailable && autoRepair },
     });
   }
-  const projectBusy = picker.isPending; // 打开目录期间防止误发给前一个项目。
-  const error = picker.error || mutation.error;
+  const error = mutation.error;
   return (
     <section className="task-start" aria-labelledby="new-task-heading">
       <div className="task-start-heading">
@@ -168,6 +162,13 @@ export function TaskForm({
       {error && (
         <Alert type="error" showIcon title="操作未完成" description={errorMessage(error)} />
       )}
+      <ProjectSelector
+        projects={choices}
+        value={selected}
+        pickerAvailable={options.folder_picker_available}
+        onChange={acceptProject}
+        onBusyChange={setProjectBusy}
+      />
       <Form
         form={form}
         layout="vertical"
@@ -194,15 +195,6 @@ export function TaskForm({
             />
           </Form.Item>
           <div className="start-input-toolbar">
-            <Button
-              className="project-open-button"
-              aria-label={selected?.label || '选择项目文件夹'}
-              icon={<FolderOpenOutlined />}
-              onClick={/* 只有明确点击才显示系统选择框。 */ () => picker.mutate()}
-              loading={picker.isPending}
-            >
-              {selected?.label || '选择项目文件夹'}
-            </Button>
             <div className="start-send-area">
               <span className="start-model" title={config.requested_model}>
                 {config.requested_model}
@@ -224,25 +216,7 @@ export function TaskForm({
               />
             </div>
           </div>
-          {selected && (
-            <div className="selected-project-context">
-              <span className="selected-project-path" title={selected.path}>
-                {selected.path}
-              </span>
-              <Link
-                className="project-settings-link"
-                to={'/projects/' + encodeURIComponent(selected.id) + '?settings=1'}
-              >
-                项目设置
-              </Link>
-            </div>
-          )}
         </div>
-        {picker.isPending && (
-          <p className="project-open-status" role="status">
-            请在系统窗口中选择文件夹；取消后会保留当前输入。
-          </p>
-        )}
         {selected?.available === false && (
           <Alert type="error" title={selected.error || '项目暂不可用，请检查目录与 Git 状态。'} />
         )}

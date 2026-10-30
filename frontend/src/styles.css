@@ -449,22 +449,54 @@ pre {
 .start-input-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   padding: 12px 16px 16px;
 }
-.project-open-button.ant-btn {
-  max-width: 68%;
-  border: 1px solid var(--line);
-  background: transparent;
-  box-shadow: none;
-  font-size: 12px;
-  border-radius: 8px;
+/* 项目先于任务输入呈现：下拉选择已有登记，新建只处理名称与目录绑定。 */
+.project-selector {
+  margin-bottom: 22px;
 }
-.project-open-button > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.project-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.project-select {
+  flex: 1;
+  min-width: 0;
+}
+.project-select-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 0;
+}
+.project-select-option strong {
+  font-weight: 500;
+}
+.project-select-option span,
+.project-select-option small {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.project-selection-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+.project-folder-choice {
+  display: flex;
+  gap: 8px;
+}
+.project-folder-choice .ant-input {
+  min-width: 0;
+}
+.project-identity-form {
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
 }
 .start-send-area {
   display: flex;
@@ -489,8 +521,7 @@ pre {
   display: flex;
   gap: 16px;
   justify-content: space-between;
-  padding: 11px 20px;
-  border-top: 1px solid var(--line);
+  padding: 10px 0 0;
   align-items: center;
   font-size: 11px;
   color: var(--muted);
@@ -505,8 +536,7 @@ pre {
   flex-shrink: 0;
   color: var(--accent);
 }
-.project-mode-note,
-.project-open-status {
+.project-mode-note {
   color: var(--muted);
   font-size: 12px;
   margin: 12px 4px;
@@ -1784,11 +1814,8 @@ pre {
   .start-input-toolbar {
     padding: 10px 12px 12px;
   }
-  .project-open-button.ant-btn {
-    max-width: 80%;
-  }
   .selected-project-context {
-    padding: 10px 14px;
+    padding: 10px 0 0;
     gap: 12px;
   }
   .recent-history {

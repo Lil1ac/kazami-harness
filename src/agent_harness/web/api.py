@@ -19,7 +19,7 @@ from ..schemas import RunConfig
 from ..sessions import SessionError
 from ..store import StorageError
 from .config import WebConfig
-from .schemas import ConversationPage, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
+from .schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
 from .project_catalog import CatalogError
 
@@ -128,13 +128,26 @@ def create_app(
 
     @app.post("/api/projects/pick")
     async def pick_project() -> dict:
-        """打开本机原生选择框；取消不登记，选择成功返回目录信息，不启动任务。"""
+        """打开原生选择框，返回取消状态或待确认的目录草稿；不登记、不创建任务。"""
         selected = await manager.folder_picker.choose()
         if selected is None:
-            return {"cancelled": True, "project": None}
-        identifier = await asyncio.to_thread(manager.catalog.register, selected)
+            return {"cancelled": True, "selection": None}
+        selection = await asyncio.to_thread(manager.catalog.select_directory, selected)
+        return {"cancelled": False, "selection": selection}
+
+    @app.post("/api/projects", status_code=201)
+    async def create_project(body: CreateProjectRequest) -> dict:
+        """按 body 名称与原生选择凭据保存项目绑定，返回登记；重复目录选用已有项目。"""
+        identifier = await asyncio.to_thread(manager.catalog.create, body.selection_id, body.label)
         options = await asyncio.to_thread(manager.options)
-        return {"cancelled": False, "project": next(item for item in options["recent_projects"] if item["id"] == identifier)}
+        return next(item for item in options["recent_projects"] if item["id"] == identifier)
+
+    @app.patch("/api/projects/{project_id}")
+    async def rename_project(project_id: str, body: ProjectNameRequest) -> dict:
+        """保存 body 项目名称并返回项目；不改绑定路径、执行设置或历史运行。"""
+        await asyncio.to_thread(manager.catalog.rename, project_id, body.label)
+        options = await asyncio.to_thread(manager.options)
+        return next(item for item in options["recent_projects"] if item["id"] == project_id)
 
     @app.post("/api/projects/{project_id}/open")
     async def open_project(project_id: str) -> dict:

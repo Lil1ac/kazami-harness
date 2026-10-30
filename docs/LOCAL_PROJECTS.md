@@ -1,12 +1,12 @@
 # 打开本机项目
 
-首页以“打开文件夹、输入任务、发送”为主流程。当前面向与 Python 服务同机的 Windows 单用户；不是上传本机文件到远程服务。首次使用不需要编辑 TOML 登记项目。
+首页以“选择或新建项目、输入任务、发送”为主流程。项目具有可编辑名称和稳定编号，并绑定一个本机文件夹；Git 与普通目录的差异只影响执行能力。当前面向与 Python 服务同机的 Windows 单用户；不是上传本机文件到远程服务。首次使用不需要编辑 TOML 登记项目。
 
 ## 1. 使用流程
 
 1. 按 README 构建前端并启动 `harness serve --config harness.example.toml`。
-2. 点击“选择项目文件夹”，在系统窗口选择真实目录。取消保留已输入文字，不登记目录、不创建运行、不调用模型。
-3. 输入框附近显示目录名、实际路径和执行方式；Git 分支和提交收在高级设置。侧栏点击项目进入会话列表，再新建或继续已有对话；读取列表不改变打开时间。
+2. 从“选择项目”搜索已有项目，或点击“新建项目”，填写名称并在系统窗口选择真实目录。确认“创建项目”后保存绑定；选择文件夹和取消弹窗都不登记、不创建运行。重复目录显示已有项目名称，确认后选用该项目，不覆盖原名称和设置。
+3. 项目选择器显示名称，下一行显示绑定路径及项目设置；项目设置可单独保存名称，绑定路径只读。切换项目保留任务文字，并重置独立工作树与自动修复授权；Git 分支和提交收在高级设置。侧栏点击项目进入会话列表，再新建或继续已有对话；读取列表不改变打开时间。
 4. 输入任务后发送，直接修改所选目录。高级设置可选择技能和自动修复；测试命令与解释器在项目设置保存；Git 项目可明确选择“创建独立 Git 工作树（更换目录）”，此时才显示提交基线。执行位置不从文字草稿恢复。
 5. 在会话中查看工具轨迹、产物、测试与代码差异，并继续发送要求。原目录修改已经生效；隔离 Git 会话共用一个工作树，仅最新轮提供保留/丢弃，旧轮证据只读。
 
@@ -63,16 +63,20 @@ TOML 的 projects/workspaces 仍可作为初始配置；明确打开的同路径
 | 方法与路径 | 请求与响应 |
 | --- | --- |
 | `GET /api/options` | 返回 `recent_projects`、`folder_picker_available`，以及默认配置、验收器、技能和忙碌状态；项目来源统一使用 recent_projects，不再返回 projects/workspaces；列表属于同一次登记快照 |
-| `POST /api/projects/pick` | 无需路径请求体，等待系统窗口；成功返回 `{cancelled:false,project:LocalProjectOption}`，取消返回 `{cancelled:true,project:null}` |
+| `POST /api/projects/pick` | 等待系统窗口；成功返回 `{cancelled:false,selection:{selection_id,label,path,existing_project_id}}`，取消返回 `{cancelled:true,selection:null}`；只生成草稿，不登记 |
+| `POST /api/projects` | `{selection_id,label}` 确认绑定；凭据有效600秒且成功后消耗，名称去首尾空白后1..100字符，拒绝控制字符；返回201及项目，同目录复用已有登记 |
+| `PATCH /api/projects/{id}` | `{label}` 保存名称；ID、路径、设置与历史证据不变，目录暂不可访问时仍可命名；返回更新后的项目 |
 | `POST /api/projects/{id}/open` | 只接受已登记编号，重新检查目录并更新最近时间；返回 `LocalProjectOption` |
-| `PUT /api/projects/{id}/settings` | JSON：`test_command`（最多 4096 字符，可空）与 `test_timeout_seconds`（默认 30）；只支持 Git 项目，返回更新后的 `LocalProjectOption` |
+| `PUT /api/projects/{id}/settings` | JSON：`python_executable`（空白/null按PATH）、`test_command`（最多4096字符，可空）与 `test_timeout_seconds`（默认30）；普通目录可保存解释器，项目测试限Git项目，返回更新后的 `LocalProjectOption` |
 | `POST /api/runs` | `project_id` / `workspace_id` 二选一，`execution_mode=local/isolated`；原目录不接受其他 Git 基线，不接受任意宿主路径或验收命令 |
+
+原生选择凭据仅保存在当前服务内存中（最多100份），不会写入持久记录；服务重启或超时后须重新选择。项目创建接口不接受页面提供的自由宿主路径。
 
 `LocalProjectOption` 包含 `id/label/path/kind/available/error/last_opened_at`。Git 项目增加分支、HEAD、未提交标记、测试参数、回显命令与超时。选目录和重新打开不会创建工作树、执行测试或调用模型。
 
 选择器由独立标准库 GUI 子进程提供，同一服务最多一个窗口，等待上限 180 秒。Windows 直接启动基础 Python 解释器，超时或请求协程取消后终止并等待 GUI 进程；辅助控制台隐藏，系统选择框正常显示。专用环境仅补齐 Shell 路径变量，不继承模型密钥或 Python 注入变量；工作目录固定为系统临时目录，Agent 工具的受限进程环境保持原规则。
 
-不可用环境返回 `folder_picker_unavailable/503`，已有窗口 `folder_picker_busy/409`，等待超时 `folder_picker_timeout/408`，其他窗口故障 `folder_picker_failed/503`。目录原因包括 `project_root_required`、`project_bare_unsupported`、`project_records_forbidden` 等；记录损坏或写入失败是 503。不存在的最近项目、坏命令或程序不可用均明确反馈并保留输入。
+不可用环境返回 `folder_picker_unavailable/503`，已有窗口 `folder_picker_busy/409`，等待超时 `folder_picker_timeout/408`，其他窗口故障 `folder_picker_failed/503`。目录原因包括 `project_name_invalid`、`project_selection_expired`、`project_selection_changed`、`project_root_required`、`project_bare_unsupported`、`project_records_forbidden` 等；记录损坏或写入失败是 503。不存在的最近项目、坏命令或程序不可用均明确反馈并保留输入。
 
 ## 5. 验收与参考
 

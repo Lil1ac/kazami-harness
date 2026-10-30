@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfigDraftProvider } from '../config';
-import { createRun, pickProject } from '../api';
+import { createProject, createRun, openProject, pickProject } from '../api';
 import { makeRun, options, projectOption } from '../test/fixtures';
 import { TaskForm } from './TaskForm';
 import type { LocalProjectOption, OptionsResponse } from '../types';
@@ -13,6 +13,7 @@ vi.mock(
   '../api',
   /* 所有目录选择和任务请求只模拟HTTP边界。 */ () => ({
     createRun: vi.fn(),
+    createProject: vi.fn(),
     openProject: vi.fn(),
     pickProject: vi.fn(),
     errorMessage: (error: unknown) => (error instanceof Error ? error.message : '操作失败'),
@@ -67,15 +68,35 @@ beforeEach(
   },
 );
 
-it('首次无项目时只提供打开本机文件夹入口', async () => {
+it('新建项目确认绑定后才能发送，任务只引用登记编号', async () => {
   // 实际打开接口返回后采用真实目录，打开本身不提交任务。
-  vi.mocked(pickProject).mockResolvedValue({ cancelled: false, project: folder });
+  vi.mocked(pickProject).mockResolvedValue({
+    cancelled: false,
+    selection: {
+      selection_id: 'a'.repeat(32),
+      path: folder.path,
+      label: folder.label,
+      existing_project_id: null,
+    },
+  });
+  vi.mocked(createProject).mockResolvedValue(folder);
   const user = setup({ recent_projects: [] }, false);
   expect(screen.getByRole('button', { name: '开始执行' })).toBeDisabled();
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('分析我的文件');
-  await user.click(screen.getByRole('button', { name: '选择项目文件夹' }));
-  expect(await screen.findByRole('button', { name: '我的项目' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '新建项目' }));
+  await user.click(screen.getByRole('button', { name: '选择文件夹' }));
+  expect(await screen.findByLabelText('项目名称')).toHaveValue(folder.label);
+  expect(createProject).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '创建项目' }));
+  await waitFor(
+    /* 确认创建后才写入绑定。 */ () =>
+      expect(createProject).toHaveBeenCalledWith('a'.repeat(32), folder.label),
+  );
+  await waitFor(
+    /* 创建完成且弹窗关闭后允许向新项目发送。 */ () =>
+      expect(screen.getByRole('button', { name: '开始执行' })).toBeEnabled(),
+  );
   expect(createRun).not.toHaveBeenCalled();
   expect(screen.getByLabelText('任务描述')).toHaveValue('分析我的文件');
   expect(localStorage.getItem('harness-selected-project')).toBe('mine');
@@ -95,14 +116,88 @@ it('首次无项目时只提供打开本机文件夹入口', async () => {
 
 it('取消原生窗口保留当前项目和任务草稿', async () => {
   // 不把取消误判成清空目录或开始执行。
-  vi.mocked(pickProject).mockResolvedValue({ cancelled: true, project: null });
+  vi.mocked(pickProject).mockResolvedValue({ cancelled: true, selection: null });
   const user = setup();
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('保留草稿');
-  await user.click(screen.getByRole('button', { name: '我的项目' }));
+  await user.click(screen.getByRole('button', { name: '新建项目' }));
+  await user.click(screen.getByRole('button', { name: '选择文件夹' }));
   await waitFor(/* 等待取消响应完成。 */ () => expect(pickProject).toHaveBeenCalledOnce());
-  expect(screen.getByRole('button', { name: '我的项目' })).toBeInTheDocument();
+  expect(createProject).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '取消新建项目' }));
+  expect(localStorage.getItem('harness-selected-project')).toBe('mine');
   expect(screen.getByLabelText('任务描述')).toHaveValue('保留草稿');
+  expect(createRun).not.toHaveBeenCalled();
+});
+
+it('选择已有项目保留草稿并重置隔离执行与自动修复授权', async () => {
+  // 切换只核验登记编号，发送使用新项目；旧目录的执行选择不能泄漏。
+  const other = {
+    ...gitProject,
+    id: 'other',
+    label: '另一个项目',
+    path: 'D:/other',
+    test_argv: ['python', '-m', 'pytest'],
+  };
+  vi.mocked(openProject).mockResolvedValue(other);
+  const user = setup({
+    recent_projects: [{ ...gitProject, test_argv: ['python', '-m', 'pytest'] }, other],
+  });
+  fireEvent.click(screen.getByText(/高级设置/));
+  await user.click(screen.getByLabelText('执行目录'));
+  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
+  // 预置旧项目的授权与文字，核心切换和发送仍使用完整用户交互；避免把前置输入耗时混进本例。
+  fireEvent.click(screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' }));
+  fireEvent.change(screen.getByLabelText('任务描述'), { target: { value: '保留切换前的要求' } });
+  await user.click(screen.getByRole('combobox', { name: '选择项目' }));
+  await user.click(screen.getByText('另一个项目', { selector: 'strong' }));
+  await waitFor(
+    /* 服务端核验后持久化新项目ID。 */ () =>
+      expect(localStorage.getItem('harness-selected-project')).toBe('other'),
+  );
+  expect(openProject).toHaveBeenCalledWith('other', expect.anything());
+  expect(pickProject).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('任务描述')).toHaveValue('保留切换前的要求');
+  expect(screen.queryByLabelText('提交基线')).not.toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' })).not.toBeChecked();
+  await user.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(
+    /* 任务明确提交新项目与原目录模式。 */ () => expect(createRun).toHaveBeenCalledOnce(),
+  );
+  expect(vi.mocked(createRun).mock.calls[0][0]).toMatchObject({
+    project_id: 'other',
+    execution_mode: 'local',
+    config: { auto_repair: false },
+  });
+});
+
+it('绑定已有目录时使用已有项目，保存失败保留选择并允许重试', async () => {
+  // 原生选择只是草稿；失败后继续用同一凭据重试，避免用户丢失任务要求。
+  vi.mocked(pickProject).mockResolvedValue({
+    cancelled: false,
+    selection: {
+      selection_id: 'b'.repeat(32),
+      path: folder.path,
+      label: folder.label,
+      existing_project_id: folder.id,
+    },
+  });
+  vi.mocked(createProject)
+    .mockRejectedValueOnce(new Error('登记暂不可写'))
+    .mockResolvedValueOnce(folder);
+  const user = setup();
+  await user.click(screen.getByRole('button', { name: '新建项目' }));
+  await user.click(screen.getByRole('button', { name: '选择文件夹' }));
+  expect(await screen.findByLabelText('项目名称')).toHaveValue(folder.label);
+  await user.click(screen.getByRole('button', { name: '使用已有项目' }));
+  expect(await screen.findByText('登记暂不可写')).toBeInTheDocument();
+  expect(screen.getByLabelText('绑定文件夹')).toHaveValue(folder.path);
+  await user.click(screen.getByRole('button', { name: '使用已有项目' }));
+  await waitFor(
+    /* 重试成功后解除发送阻塞。 */ () =>
+      expect(screen.getByRole('button', { name: '开始执行' })).toBeEnabled(),
+  );
+  expect(createProject).toHaveBeenCalledTimes(2);
   expect(createRun).not.toHaveBeenCalled();
 });
 

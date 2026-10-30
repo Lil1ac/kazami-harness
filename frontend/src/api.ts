@@ -142,9 +142,30 @@ export function createFollowup(runId: string, body: FollowupRequest): Promise<Ru
   });
 }
 
-/** 由用户点击后打开系统目录窗口；取消返回null，不创建任务或上传目录。 */
-export function pickProject(): Promise<{ cancelled: boolean; project: LocalProjectOption | null }> {
+/** 打开原生目录窗口，返回临时selection草稿或取消；不会立即登记项目或创建任务。 */
+export function pickProject(): Promise<{
+  cancelled: boolean;
+  selection: import('./types').ProjectSelection | null;
+}> {
   return request('/api/projects/pick', { method: 'POST' });
+}
+
+/** 用10分钟内的selectionId确认绑定并保存label；同目录复用已有项目，失败保留表单。 */
+export function createProject(selectionId: string, label: string): Promise<LocalProjectOption> {
+  return request('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selection_id: selectionId, label }),
+  });
+}
+
+/** 把id项目重命名为label；只修改名称，保留绑定目录、运行设置和会话归属。 */
+export function renameProject(id: string, label: string): Promise<LocalProjectOption> {
+  return request('/api/projects/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
 }
 
 /** 重新核验已登记项目id并更新最近时间；只读打开，不调用模型。 */

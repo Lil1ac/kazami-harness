@@ -15,6 +15,7 @@ vi.mock(
   /* 页面编辑不启动模型，提交使用可检查请求体的离线替身。 */ () => ({
     getOptions: vi.fn(),
     createRun: vi.fn(),
+    createProject: vi.fn(),
     openProject: vi.fn(),
     pickProject: vi.fn(),
     saveProjectSettings: vi.fn(),

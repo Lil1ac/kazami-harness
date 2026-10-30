@@ -14,6 +14,7 @@ vi.mock(
     getOptions: vi.fn(),
     getConversations: vi.fn(),
     createRun: vi.fn(),
+    createProject: vi.fn(),
     openProject: vi.fn(),
     pickProject: vi.fn(),
     saveProjectSettings: vi.fn(),

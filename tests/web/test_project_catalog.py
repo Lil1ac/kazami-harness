@@ -87,6 +87,92 @@ def test_directory_registration_reuses_id_and_survives_restart(tmp_path: Path):
     assert (selected / "app.py").read_text(encoding="utf-8") == "value = 1\n"
 
 
+def test_named_binding_confirmation_deduplication_and_expiry(tmp_path: Path, monkeypatch):
+    """选择不落盘，确认后持久命名；同目录保留设置，过期凭据与非法名称不改登记。"""
+    selected = tmp_path / "普通目录"
+    selected.mkdir()
+    catalog = ProjectCatalog(tmp_path / "runs", configuration(tmp_path))
+    clock = [100.0]  # 可控单调秒数，覆盖600秒失效边界且无需等待。
+    def current_time():
+        """返回可控单调秒数，不修改真实时钟；无参数与副作用。"""
+        return clock[0]
+    monkeypatch.setattr("agent_harness.web.project_catalog.time.monotonic", current_time)
+    draft = catalog.select_directory(selected)
+    assert draft["existing_project_id"] is None and not catalog.path.exists()
+    identifier = catalog.create(draft["selection_id"], "  订单服务  ")
+    assert catalog.recent()[0]["label"] == "订单服务"
+    before = catalog.path.read_bytes()
+    with pytest.raises(CatalogError, match="失效"):
+        catalog.create(draft["selection_id"], "重复确认")
+    assert catalog.path.read_bytes() == before
+    duplicate = catalog.select_directory(selected)
+    assert duplicate["existing_project_id"] == identifier
+    assert catalog.create(duplicate["selection_id"], "另一个名称") == identifier
+    assert len(catalog.recent()) == 1 and catalog.recent()[0]["label"] == "订单服务"
+    expired = catalog.select_directory(selected)
+    clock[0] += 600
+    with pytest.raises(CatalogError, match="失效"):
+        catalog.create(expired["selection_id"], "过期")
+    before = catalog.path.read_bytes()
+    for label in ("   ", "x" * 101, "包含\n换行"):
+        with pytest.raises(CatalogError, match="名称"):
+            catalog.rename(identifier, label)
+    assert catalog.path.read_bytes() == before
+    unavailable = catalog.select_directory(selected)
+    selected.rmdir()
+    with pytest.raises(CatalogError, match="路径发生变化"):
+        catalog.create(unavailable["selection_id"], "目录已被移走")
+    assert catalog.path.read_bytes() == before
+    catalog.rename(identifier, "账单服务")
+    restarted = ProjectCatalog(tmp_path / "runs", configuration(tmp_path))
+    assert restarted.recent()[0]["label"] == "账单服务"
+    assert restarted.recent()[0]["id"] == identifier
+
+
+def test_project_api_binding_rename_run_and_restart(tmp_path: Path, monkeypatch):
+    """普通项目创建、改名、原地执行和重启查询贯通；路径不能由页面伪造，历史归属稳定。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-binding")
+    selected = tmp_path / "source"
+    selected.mkdir()
+    (selected / "app.py").write_text("value = 1\n", encoding="utf-8")
+
+    async def scenario():
+        """通过真实ASGI接口确认绑定并运行文件工具，验证改名后会话归属与重启持久化，返回None。"""
+        async with client_for(tmp_path) as (client, manager):
+            async def choose():
+                """返回本例原生选择路径；仅替换GUI，后续校验与写入真实执行。"""
+                return selected
+            manager.folder_picker.choose = choose
+            draft = (await client.post("/api/projects/pick")).json()["selection"]
+            assert (await client.get("/api/options")).json()["recent_projects"] == []
+            assert not manager.catalog.path.exists()
+            assert (await client.post("/api/projects", json={"path": str(selected), "label": "伪造"})).status_code == 422
+            assert (await client.post("/api/projects", json={"selection_id": "f" * 32, "label": "无效凭据"})).status_code == 400
+            assert (await client.post("/api/projects", json={"selection_id": draft["selection_id"], "label": " "})).status_code == 400
+            response = await client.post("/api/projects", json={"selection_id": draft["selection_id"], "label": "  文件项目  "})
+            assert response.status_code == 201
+            project = response.json()
+            identifier = project["id"]
+            assert project["label"] == "文件项目" and project["kind"] == "workspace"
+            response = await client.post("/api/runs", json={"workspace_id": identifier, "prompt": "修改文件"})
+            assert response.status_code == 202
+            result = await finish(client, response.json()["run_id"])
+            assert result["result"]["execution_status"] == "completed"
+            assert (selected / "app.py").read_text(encoding="utf-8") == "value = 2\n"
+            evidence = (manager.runs_root / result["run_id"] / "events.jsonl").read_bytes()
+            response = await client.patch("/api/projects/" + identifier, json={"label": "新名称"})
+            assert response.status_code == 200 and response.json()["path"] == str(selected)
+            summary = (await client.get("/api/conversations", params={"project_id": identifier})).json()
+            assert summary["total"] == 1 and summary["items"][0]["source"]["label"] == "新名称"
+            assert (manager.runs_root / result["run_id"] / "events.jsonl").read_bytes() == evidence
+            assert (await client.patch("/api/projects/" + identifier, json={"label": "跨源"}, headers={"Origin": "https://other.invalid"})).status_code == 403
+        async with client_for(tmp_path) as (client, manager):
+            reopened = (await client.post("/api/projects/" + identifier + "/open")).json()
+            assert reopened["id"] == identifier and reopened["label"] == "新名称"
+            assert (await client.get("/api/conversations", params={"project_id": identifier})).json()["total"] == 1
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("kind,code", [("missing", "project_directory_unavailable"),
                                        ("file", "project_directory_unavailable"),
                                        ("subdirectory", "project_root_required"),
@@ -119,7 +205,7 @@ def test_picker_cancel_and_cross_origin_do_not_register(tmp_path: Path):
                 calls.append(True)
                 return None
             manager.folder_picker.choose = cancel
-            assert (await client.post("/api/projects/pick")).json() == {"cancelled": True, "project": None}
+            assert (await client.post("/api/projects/pick")).json() == {"cancelled": True, "selection": None}
             assert (await client.post("/api/projects/pick", headers={"Origin": "https://other.invalid"})).status_code == 403
             assert len(calls) == 1 and not manager.catalog.path.exists()
             assert (await client.get("/api/conversations")).json()["total"] == 0
@@ -139,7 +225,12 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
             manager.folder_picker.choose = choose
             result = await client.post("/api/projects/pick")
             assert result.status_code == 200
-            project = result.json()["project"]
+            selection = result.json()["selection"]
+            assert not manager.catalog.path.exists()
+            result = await client.post("/api/projects", json={"selection_id": selection["selection_id"], "label": "我的后端项目"})
+            assert result.status_code == 201
+            project = result.json()
+            assert project["label"] == "我的后端项目"
             assert project["kind"] == "project" and project["available"] and project["test_argv"] == []
             assert project["branch"]
             assert (await client.get("/api/conversations")).json()["total"] == 0

@@ -9,10 +9,12 @@ from pydantic import Field, model_validator
 from ..schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from ..projects import ProjectReview, ProjectWorkspace
 from ..local_execution import LocalChangeView
+from ..schemas import MemorySelection
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
 class RunConfigPatch(DataModel):
+    memory: MemorySelection | None = None  # None 继承，只开放使用和候选选择，不允许页面修改宿主限额。
     auto_repair: bool | None = None  # None继承；显式开启要求宿主公开项目测试，首版最多两次修复。
     requested_model: str | None = Field(default=None, min_length=1, max_length=200)  # None 沿用宿主模型。
     tools: list[ToolName] | None = Field(default=None, min_length=1)  # None 沿用宿主工具。

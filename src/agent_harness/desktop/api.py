@@ -27,7 +27,7 @@ class CredentialRequest(DataModel):
 
 
 class UrlRequest(DataModel):
-    """用户明确点击的链接；下载接口仅接受当前应用已登记的产物相对 URL。"""
+    """用户明确点击的链接；下载接口仅接受宿主可核验的产物或项目记忆导出相对 URL。"""
 
     url: str = Field(min_length=1, max_length=16384)  # 根据原生操作分别校验地址范围。
 

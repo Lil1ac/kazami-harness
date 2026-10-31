@@ -50,12 +50,14 @@ export function desktopAction(
 export class ApiError extends Error {
   readonly code: string; // 后端稳定错误码或 network_error。
   readonly status: number; // HTTP 状态，网络错误为 0。
+  readonly details: { conflicts?: import('./types').MemoryConflict[] } | null; // 同项目冲突审阅信息，其他错误为空。
   /** 根据安全提示与状态构建错误；参数不应包含密钥，返回 Error 实例。 */
-  constructor(message: string, code: string, status: number) {
+  constructor(message: string, code: string, status: number, details: ApiError['details'] = null) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -76,6 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body?.error?.message || '请求未完成，请稍后重试。',
       body?.error?.code || 'http_error',
       response.status,
+      body?.error?.details || null,
     );
   }
   return response.json() as Promise<T>;
@@ -242,4 +245,21 @@ export function getConversations(
   if (filters.projectId) query.set('project_id', filters.projectId);
   if (filters.status) query.set('status', filters.status);
   return request('/api/conversations?' + query, { signal });
+}
+
+/** 读取 scope 绑定的当前项目列表或当前运行候选；只读，不启动执行。 */
+export function getMemories(scope: string, params = ''): Promise<import('./types').MemoryPage> {
+  return request('/api/' + scope + '/memories' + params);
+}
+
+/** 保存或更新 scope 的记忆；body 发送后保持编号及载荷一致，返回服务端修订。 */
+export function mutateMemory(scope: string, id: string | null, body: object): Promise<import('./types').MemoryEntry> {
+  return request('/api/' + scope + '/memories' + (id ? '/' + encodeURIComponent(id) : ''), {
+    method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+
+/** 读取 scope 中 id 的不可变修订；仅供人工追溯，不把旧正文注入活动运行。 */
+export function getMemoryRevisions(scope: string, id: string): Promise<{ items: import('./types').MemoryEntry[] }> {
+  return request('/api/' + scope + '/memories/' + encodeURIComponent(id) + '/revisions');
 }

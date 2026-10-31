@@ -171,3 +171,10 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_compression_fixture.py -
 所选 SKILL.md 在启动时完整加载并固定于项目约定所在的 user 前缀；即使没有 AGENTS.md，只要有技能就仍有这条前缀。续轮移除旧宿主/项目/技能前缀，依据本轮选择重新读取，不在原历史中反复附加旧正文。压缩器按本轮前缀长度映射继承摘要，支持选择、清空及再次选择时的 2↔1 条前缀变化。
 
 context_prepared 新增 skills 与 skill_error，RunView.context 原样聚合；正文与工具定义一起计量，不能被输出外置、遮蔽或摘要替换。加载失败保存受控原因并在调用模型前停止。宿主目录、快照字段、选择继承和大小限制见 [任务技能](SKILLS.md)。
+
+
+## 项目长期记忆联动（2026-10-31）
+
+项目知识通过 MemoryController 在实际执行时固定，ContextBuilder 将少量相关条目与已有规则、技能共用固定 user 前缀，修订固定而类型视图随宿主阶段和工具路径重新选择；无可用记忆时不额外创建前缀。自动正文、工具声明和显式回读全部计入原整体预算，正文按条减少，不能放宽上限。跨轮前缀映射使用统一 has_fixed_context；旧轮 memory_search/get/propose 成功结果不重复作为当前知识输入，包含这些结果的旧摘要不直接继承，原始日志保持。
+
+memory_prepared/selected/read/proposed 在 ContextView.memory 聚合当轮真正注入、回读、候选和跳过原因。此处是固定证据，候选当前人工决定另从项目记忆 API 读取。运行仍通过 POST /api/runs 接纳，config.memory 仅允许 use/capture 两个选择；宿主限额在接纳时冻结，内容版本在出队时取得。type 现驱动结构、触发和呈现；首次路径约定命中可暂停尚未执行的变更并先交回模型重审。uses 保存各次实际输入，不能把仅可检索知识冒充已注入。完整协议和验收见[项目记忆](MEMORY.md)。

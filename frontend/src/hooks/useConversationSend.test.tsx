@@ -96,6 +96,7 @@ it('续轮选择默认继承当前真实配置，清空覆盖不会恢复旧首�
   );
   expect(vi.mocked(createFollowup).mock.calls[0][1].config).toEqual({
     auto_repair: false,
+    memory: { use: true, capture: true }, // 记忆选择随请求冻结。
     skills: [],
     limits: { max_model_turns: 7 },
   });

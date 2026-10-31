@@ -1,0 +1,80 @@
+.memory-panel {
+  min-width: 0;
+}
+.memory-toolbar,
+.memory-actions,
+.memory-source {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.memory-toolbar {
+  margin-bottom: 20px;
+}
+.memory-toolbar > .ant-input {
+  flex: 1 1 180px;
+}
+.memory-toolbar > .ant-select {
+  min-width: 120px;
+}
+.memory-row {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border-color, #e6e9ed);
+}
+.memory-row h3 {
+  margin: 0 0 10px;
+}
+.memory-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.memory-source {
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.memory-editor {
+  display: grid;
+  gap: 16px;
+}
+.memory-editor label:not(.ant-checkbox-wrapper),
+.memory-editor details {
+  display: grid;
+  gap: 6px;
+}
+.memory-editor .ant-select {
+  width: 100%;
+}
+.memory-editor details[open] {
+  display: block;
+}
+.memory-editor details label {
+  margin-top: 12px;
+}
+.memory-snapshot pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
+.memory-details {
+  margin: 12px 0;
+}
+.memory-details > div {
+  margin: 10px 0;
+}
+.memory-details dt {
+  color: var(--text-secondary, #667085);
+  font-size: 12px;
+}
+.memory-details dd {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.memory-editor pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

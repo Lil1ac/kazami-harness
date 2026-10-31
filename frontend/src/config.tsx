@@ -30,5 +30,6 @@ export function effectiveConfig(base: RunConfig, draft: ConfigOverrides): RunCon
     limits: { ...base.limits, ...draft.limits },
     // 后端返回完整策略；浏览器只合并明确覆盖，内部默认值由宿主唯一维护。
     context: { ...base.context, ...draft.context },
+    memory: { ...base.memory, ...draft.memory },
   };
 }

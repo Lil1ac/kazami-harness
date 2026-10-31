@@ -123,7 +123,7 @@ class ContextCompressor:
         old_prefix = starts[0].payload.get("conversation_start")
         if old_prefix not in (1, 2):
             raise AgentStopped("failed", "context_projection_unverified")
-        new_prefix = 2 if self.builder.instruction.status == "loaded" or self.builder.skills else 1
+        new_prefix = 2 if self.builder.has_fixed_context else 1
         delta = new_prefix - old_prefix
         effective = {}  # 只复用最终仍生效的区间，已被新摘要覆盖的中间版本不重复导入。
         try:

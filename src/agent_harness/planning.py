@@ -77,10 +77,11 @@ PLANNING_TOOLS = {
 _PLAN_STATE_TOOLS = frozenset({"enter_plan_mode", "submit_plan", "update_plan"})
 
 
-def project_plan_history(messages: list[dict]) -> list[dict]:
+def project_plan_history(messages: list[dict], state_tools: frozenset[str] = _PLAN_STATE_TOOLS) -> list[dict]:
     """返回 messages 的规划历史阅读投影，不修改原文、失败结果或非规划工具配对。
 
-    完整批次中成功的规划状态写操作由最新宿主状态替代；问题和显式 read_plan 保留。
+    state_tools 默认规划状态写工具；可指定旧记忆工具以在续轮排除旧知识投影。
+    完整批次中成功的指定操作由宿主状态替代；问题和默认显式 read_plan 保留。
     混合批次仅移除对应调用及结果，调用编号可跨批次复用；不完整批次抛 ValueError。
     """
     result = []
@@ -88,7 +89,7 @@ def project_plan_history(messages: list[dict]) -> list[dict]:
     while index < len(messages):
         message = deepcopy(messages[index])
         calls = message.get("tool_calls") or []
-        if message.get("role") != "assistant" or not any(call.get("function", {}).get("name") in _PLAN_STATE_TOOLS for call in calls):
+        if message.get("role") != "assistant" or not any(call.get("function", {}).get("name") in state_tools for call in calls):
             result.append(message)
             index += 1
             continue
@@ -96,7 +97,7 @@ def project_plan_history(messages: list[dict]) -> list[dict]:
         identifiers = {call["id"] for call in calls}
         if len(batch) != len(calls) or len(identifiers) != len(calls) or any(item.get("role") != "tool" for item in batch) or {item.get("tool_call_id") for item in batch} != identifiers:
             raise ValueError("incomplete planning tool batch")
-        removable = {call["id"] for call in calls if call.get("function", {}).get("name") in _PLAN_STATE_TOOLS}
+        removable = {call["id"] for call in calls if call.get("function", {}).get("name") in state_tools}
         successful = set()
         for item in batch:
             try:
@@ -241,7 +242,7 @@ class PlanningController:
         """核对name的规划权限；读工具不改变状态，写/编辑/命令越界时抛PlanningError。"""
         if self.state.pending is not None:
             raise PlanningError("awaiting_user_input", "正在等待用户处理，不能继续调用工具。")
-        if self.state.phase == "planning" and name not in {"list_files", "read_file", "search_files", "read_context", *PLANNING_TOOLS}:
+        if self.state.phase == "planning" and name not in {"memory_search", "memory_get", "list_files", "read_file", "search_files", "read_context", *PLANNING_TOOLS}:
             raise PlanningError("planning_read_only", "规划期间禁止修改项目或执行命令，请先提交计划并等待批准。")
         if self.state.phase == "execution" and self.state.plans:
             plan = self.state.plans[-1]

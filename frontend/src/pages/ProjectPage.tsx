@@ -5,6 +5,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { errorMessage, getOptions } from '../api';
 import { ConversationHistory } from '../components/ConversationHistory';
 import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel';
+import { MemoryPanel } from '../components/MemoryPanel';
 
 /** 一个项目的会话入口；新建与继续使用不同路由，读取本页不会发起任务。 */
 export function ProjectPage() {
@@ -15,6 +16,12 @@ export function ProjectPage() {
     const next = new URLSearchParams(params);
     if (open) next.set('settings', '1');
     else next.delete('settings');
+    setParams(next, { replace: true });
+  }
+  /** 显式打开项目记忆抽屉；open=false 只关闭，不保存或发起运行，返回 void。 */
+  function showMemory(open: boolean): void {
+    const next = new URLSearchParams(params);
+    if (open) next.set('memory', '1'); else next.delete('memory');
     setParams(next, { replace: true });
   }
   const options = useQuery({
@@ -51,6 +58,7 @@ export function ProjectPage() {
           <p className="project-workspace-path">{project.path}</p>
         </div>
         <div className="workspace-actions">
+          <Button onClick={/* 读取记忆不启动模型。 */ () => showMemory(true)}>项目记忆</Button>
           <Button
             icon={<SettingOutlined />}
             onClick={/* 明确打开当前项目设置。 */ () => showSettings(true)}
@@ -80,6 +88,9 @@ export function ProjectPage() {
         />
       )}
       <ConversationHistory key={projectId} projectId={projectId} />
+      <Drawer title="项目记忆" open={params.get('memory') === '1'} onClose={/* 关闭不更改知识。 */ () => showMemory(false)} destroyOnHidden styles={{ wrapper: { width: 'min(100vw, 720px)' } }}>
+        {params.get('memory') === '1' && <MemoryPanel projectId={projectId} />}
+      </Drawer>
       <Drawer
         title="项目设置"
         open={params.get('settings') === '1'}

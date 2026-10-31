@@ -11,6 +11,7 @@ from ..planning import PLANNING_TOOLS, PlanningController, PlanningError
 from ..execution import PythonExecutionError, prepare_python_execution, validate_python_execution
 from ..schemas import PythonExecution, RunConfig
 from ..store import StorageError
+from ..memory import MEMORY_TOOLS, MemoryController, MemoryError
 from ..workspace import WorkspaceError
 from .command import RunCommandArguments, run_command
 from .listing import ListFilesArguments, list_files
@@ -19,6 +20,7 @@ from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, 
 
 
 _TOOL_SPECS = {
+    **MEMORY_TOOLS,
     **PLANNING_TOOLS,
     "list_files": (ListFilesArguments, "只读列举工作区目录的直接子项，无需执行命令。不递归；对子目录继续传directory。offset/limit分页，next_offset为空表示无下一页；truncated或skipped表示并非完整目录。"),
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
@@ -56,6 +58,8 @@ class ToolExecutor:
         self.cancelled_result: dict | None = None
         self.context_archive: ContextArchive | None = None  # 压缩启用时绑定本轮证据归档，只开放只读引用。
         self.planning: PlanningController | None = None  # Runner绑定后开放规划工具并执行宿主只读限制。
+        self.memory: MemoryController | None = None  # 当前项目固定读取集，模型只能提出候选。
+        self.memory_phase = "execution"  # 宿主在模型请求前更新，验收修复阶段为 verification。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -93,6 +97,11 @@ class ToolExecutor:
             names.extend(PLANNING_TOOLS)
             if "read_file" in names:
                 names.append("list_files")
+        if self.memory is not None:
+            if self.config.memory.use:
+                names.extend(["memory_search", "memory_get"])
+            if self.config.memory.capture:
+                names.append("memory_propose")
         return names
 
     @property
@@ -152,11 +161,17 @@ class ToolExecutor:
                 if name in PLANNING_TOOLS:
                     data = self.planning.execute(name, arguments)
                     return {"ok": True, "data": data, "error": None, "truncated": name == "read_plan" and not data["eof"]}
+            if self.memory is not None:
+                phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
+                self.memory.before_tool(name, arguments, phase)
             if name == "read_context":
                 if self.context_archive is None:
                     return _error("context_not_ready", "历史证据尚未绑定。")
                 data = self.context_archive.read(arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": not data["eof"]}
+            if name in MEMORY_TOOLS and self.memory is not None:
+                data = self.memory.execute(name, arguments)
+                return {"ok": True, "data": data, "error": None, "truncated": name == "memory_get" and not data["eof"]}
             if name == "list_files":
                 data = list_files(self.workspace, self.runs_root, arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": data["truncated"]}
@@ -184,6 +199,8 @@ class ToolExecutor:
             raise
         except StorageError:
             raise
+        except MemoryError as error:
+            return _error(error.code, error.message)
         except PlanningError as error:
             return _error(error.code, error.message)
         except PythonExecutionError as error:

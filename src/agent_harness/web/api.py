@@ -23,6 +23,8 @@ from .config import WebConfig
 from .schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
 from .project_catalog import CatalogError
+from ..memory import MemoryError
+from .memory import install_memory_routes
 
 if TYPE_CHECKING:
     from ..desktop.host import DesktopHost
@@ -70,6 +72,14 @@ def create_app(
 
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
+    install_memory_routes(app, manager)
+
+    @app.exception_handler(MemoryError)
+    async def memory_error(request: Request, error: MemoryError) -> JSONResponse:
+        """将 request 的记忆 error 映射为安全响应；存储503，不存在404，版本与归属冲突409。"""
+        status = 503 if error.code == "memory_storage_error" else 404 if error.code == "memory_not_found" else 409
+        return JSONResponse(status_code=status, content={"error": {"code": error.code, "message": error.message, "details": error.details}})
+
 
     @app.middleware("http")
     async def same_origin(request: Request, call_next) -> Response:

@@ -85,8 +85,12 @@ class DesktopHost:
             self._picker_active = False
 
     async def artifact(self, relative_url: str) -> Path:
-        """将产物或补丁 relative_url 核对为固定文件路径；拒绝任意文件和网络地址。"""
+        """将产物、补丁或记忆导出 relative_url 核对为固定路径；拒绝任意文件和网络地址。"""
         url = urlsplit(relative_url)
+        memory = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]{1,64})/memories/export", url.path)
+        if memory is not None and self.manager is not None and not (url.scheme or url.netloc or url.query or url.fragment):
+            from ..web.memory import export_project_memory
+            return export_project_memory(self.manager, memory[1])
         match = re.fullmatch(r"/api/runs/([0-9a-fA-F-]{36})/(artifacts|patch)", url.path)
         if url.scheme or url.netloc or url.fragment or match is None or self.manager is None:
             raise WebServiceError(400, "invalid_artifact", "请选择当前任务中已登记的产物。")

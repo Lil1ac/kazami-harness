@@ -8,6 +8,7 @@ from agent_harness.planning import PlanningController
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.workspace import Workspace
+from agent_harness.memory import MemoryController
 
 
 def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[dict], list[dict]]:
@@ -23,6 +24,8 @@ def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[
 
     planning = PlanningController(value.planning, value.task.workspace, emit)
     executor.bind_planning(planning)
+    executor.memory = MemoryController(root, value, emit)
+    builder.memory = executor.memory
     messages = builder.initial_messages()
     builder.bind_planning(planning, messages[0]["content"])
     messages[0]["content"] += planning.instructions()

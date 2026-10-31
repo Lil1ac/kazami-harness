@@ -45,6 +45,7 @@ function setup(desktop: boolean) {
       </a>
       <a href="https://example.com/docs">外部文档</a>
       <a href="/runs">内部页面</a>
+      <a href="/api/projects/sample/memories/export" download>导出项目记忆</a>
     </QueryClientProvider>,
   );
   return cache;
@@ -75,4 +76,14 @@ it('网页模式不触发原生接口', () => {
   screen.getByText('下载结果').dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false);
   expect(desktopAction).not.toHaveBeenCalled();
+});
+
+it('项目记忆导出复用原生下载入口', async () => {
+  setup(true);
+  fireEvent.click(screen.getByText('导出项目记忆'));
+  await waitFor(
+    /* 实际 DOM 点击由统一附件协议承接，正文权限由宿主重新核验。 */ () =>
+      expect(desktopAction).toHaveBeenCalledWith('download', '/api/projects/sample/memories/export'),
+  );
+  expect(desktopAction).toHaveBeenCalledTimes(1);
 });

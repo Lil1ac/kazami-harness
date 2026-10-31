@@ -184,7 +184,7 @@ it('发送实际载荷，服务确认前显示发送中，确认后交付真实�
   expect(createFollowup).toHaveBeenCalledWith('run-a', {
     request_id: expect.stringMatching(/^[a-f0-9-]{36}$/),
     prompt: '补充类型提示',
-    config: { auto_repair: false },
+    config: { auto_repair: false, memory: { use: true, capture: true } },
   });
   accept(makeRun({ run_id: 'run-b' }));
   await waitFor(

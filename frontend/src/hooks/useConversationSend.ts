@@ -79,6 +79,8 @@ export function useConversationSend(
   const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 只决定下一轮入口，不解除已存在的规划限制。
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
   const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
+  const [memoryChoice, setMemoryChoice] = useState<{ parentId: string; use: boolean; capture: boolean } | null>(null); // 选择绑定最新父轮，重试保留已发送载荷。
+  const memory = memoryChoice?.parentId === conversation.latest_run_id ? { use: memoryChoice.use, capture: memoryChoice.capture } : { use: run?.config.memory.use ?? true, capture: run?.config.memory.capture ?? true };
   const autoRepair =
     repairChoice?.parentId === conversation.latest_run_id
       ? repairChoice.enabled
@@ -161,7 +163,7 @@ export function useConversationSend(
   /** 发送新要求或确认原请求；返回 void，忙碌和空输入直接忽略，不制造新编号。 */
   function send(): void {
     if (inFlight.current || !canSend) return;
-    const { skills: _previousTaskSkills, auto_repair: _previousRepairChoice, ...overrides } = draft;
+    const { skills: _previousTaskSkills, auto_repair: _previousRepairChoice, memory: _previousMemoryChoice, ...overrides } = draft;
     const submission = pending || {
       parentId: conversation.latest_run_id,
       body: {
@@ -171,6 +173,7 @@ export function useConversationSend(
         // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
         config: structuredClone({
           ...overrides,
+          memory,
           ...(autoRepair !== undefined ? { auto_repair: autoRepair } : {}),
           ...(skills !== undefined ? { skills } : {}),
         }),
@@ -202,6 +205,8 @@ export function useConversationSend(
     mutation.mutate(submission);
   }
   return {
+    memory,
+    setMemory: /* 仅影响下一条普通消息，当前 Run 与原请求重试保持原值。 */ (choice: { use: boolean; capture: boolean }) => setMemoryChoice({ parentId: conversation.latest_run_id, ...choice }),
     mode,
     setMode,
     canDecide,

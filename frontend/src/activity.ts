@@ -10,6 +10,9 @@ export interface ActivityStep {
   errorMessage: string | null; // 局部编辑的真实失败说明；无失败或字段无法核对时为空。
 }
 const toolLabels: Record<string, string> = {
+  memory_search: '搜索项目记忆',
+  memory_get: '回读项目记忆',
+  memory_propose: '提出记忆候选',
   read_file: '读取文件',
   list_files: '列举目录',
   search_files: '搜索内容',

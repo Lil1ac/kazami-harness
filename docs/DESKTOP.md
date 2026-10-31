@@ -94,3 +94,6 @@ npm.cmd --prefix frontend test
 - 刚打包的后台从非源码临时目录启动，未认证请求返回403，认证后能力与界面资源正常，空凭据可查看工作台，正常退出码为0；没有创建模型任务。
 
 本次未执行安装或卸载。代码、测试、公开设置与锁文件一并提交；依赖、缓存、运行记录、测试日志和发布二进制仍按仓库忽略规则保存。原始日志为 `.runtime/desktop-commit-backend-full.txt`、`.runtime/desktop-commit-frontend-full.txt`、`.runtime/desktop-commit-electron-tests.txt`、`.runtime/desktop-commit-native-smoke.txt`、`.runtime/desktop-commit-backend-package.txt`、`.runtime/desktop-commit-package.txt`；独立打包启动检查见 `.runtime/desktop-commit-20261030/packaged-smoke.json`。
+
+
+项目记忆 Markdown 导出沿用统一 `/api/desktop/download` 入口，宿主重新核验项目登记与受保护缓存后交给原生下载，使用已配置目录。跨源地址、附加查询及目录穿越拒绝；记忆的来源和运行快照协议见[项目记忆](MEMORY.md)。本轮只做宿主协议和组件联动回归，没有把这些证据写成安装包验收。

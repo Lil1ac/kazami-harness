@@ -2,6 +2,8 @@ import { Alert, Tag } from 'antd';
 import { CompressionActions } from './CompressionActions';
 import { formatContextBytes, instructionErrorLabel, instructionStatusLabels } from '../context';
 import type { ContextView } from '../types';
+import { memoryPhaseLabels } from '../memory';
+import { MemoryBody, MemorySource } from './MemoryPanel';
 
 /** 从持久化聚合快照展示项目规则与最新输入检查；null 或旧接口缺省都保持“未记录”。 */
 export function ContextPanel({
@@ -152,6 +154,79 @@ export function ContextPanel({
         )}
       </section>
       <CompressionActions context={context} />
+      {context.memory && (
+        <section className="memory-snapshot">
+          <h3>本轮项目记忆</h3>
+          <p>
+            读取{context.memory.use ? '开启' : '关闭'} · 候选
+            {context.memory.capture ? '开启' : '关闭'} · 固定版本 {context.memory.sequence}
+          </p>
+          {context.memory.selected.map(
+            /* 使用当轮正文，不回查当前库。 */ (item) => (
+              <details key={item.id}>
+                <summary>
+                  {item.title} · v{item.revision}
+                </summary>
+                <MemoryBody item={item} />
+                <MemorySource item={item} />
+              </details>
+            ),
+          )}
+          {context.memory.uses && context.memory.uses.length > 0 && (
+            <details>
+              <summary>各次模型输入 · {context.memory.uses.length} 次</summary>
+              {context.memory.uses.map(
+                /* 严格使用该次真实输入，不回查当前库。 */ (use) => (
+                  <div key={use.model_turn}>
+                    <p>
+                      模型请求 {use.model_turn} · {memoryPhaseLabels[use.phase]} ·{' '}
+                      {use.paths.join('、') || '项目范围'}
+                    </p>
+                    {use.selected.map(
+                      /* 保存类型呈现及采用原因。 */ (item) => (
+                        <details key={item.id}>
+                          <summary>
+                            {item.title} · {item.presentation}
+                          </summary>
+                          <pre>{item.usage_text}</pre>
+                          <MemorySource item={item} />
+                        </details>
+                      ),
+                    )}
+                  </div>
+                ),
+              )}
+            </details>
+          )}
+          {context.memory.reads.length > 0 && (
+            <details>
+              <summary>实际回读 · {context.memory.reads.length} 页</summary>
+              {context.memory.reads.map(
+                /* 保留真正返回的页与指纹。 */ (read, index) => (
+                  <div key={index}>
+                    <code>
+                      {read.id} · v{read.revision} · {read.sha256}
+                    </code>
+                    <pre>{read.content}</pre>
+                  </div>
+                ),
+              )}
+            </details>
+          )}
+          {context.memory.skipped.length > 0 && (
+            <details>
+              <summary>跳过的记忆</summary>
+              {context.memory.skipped.map(
+                /* 仅说明宿主确定的原因。 */ (item) => (
+                  <p key={item.id}>
+                    {item.title}：{item.reason}
+                  </p>
+                ),
+              )}
+            </details>
+          )}
+        </section>
+      )}
       <section className="context-instruction" aria-labelledby="instruction-heading">
         <div className="section-heading">
           <h3 id="instruction-heading">项目指令快照</h3>

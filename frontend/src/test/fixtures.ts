@@ -9,6 +9,7 @@ import type {
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {
+  memory: { use: true, capture: true, max_input_bytes: 16384, max_entries: 6 }, // 与宿主默认一致。
   planning_policy: 'auto', // 默认由Agent判断；强制规划由宿主TOML配置。
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
   provider: 'deepseek',

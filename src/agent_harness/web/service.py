@@ -98,6 +98,8 @@ def _context_view(events: list[RunEvent]) -> ContextView | None:
             view = ContextView.model_validate(event.payload)
         elif event.type == "context_checked" and view is not None:
             view.last_check = ContextCheck.model_validate(event.payload)
+        elif event.type in {"memory_prepared", "memory_selected", "memory_read", "memory_proposed"} and view is not None:
+            view.memory = event.payload["memory"]
         elif event.type == "context_action" and view is not None:
             view.actions.append(ContextAction.model_validate(event.payload))
             view.actions = view.actions[-50:]
@@ -301,8 +303,8 @@ class WebRunManager:
             prepared: ProjectReview | None = None  # 已创建但尚未交给 Runner，预检失败时可安全清理。
             try:
                 merged = self.run_config.model_dump(mode="python")
-                patch = request.config.model_dump(exclude_none=True)
-                for section in ("limits", "context"):
+                patch = request.config.model_dump(exclude_none=True, exclude_unset=True)
+                for section in ("limits", "context", "memory"):
                     if section in patch:
                         merged[section] = {**merged[section], **patch.pop(section)}
                 merged.update(patch)
@@ -508,6 +510,7 @@ class WebRunManager:
         else:
             result = _unfinished_result(history)
         warnings = [*history.warnings, *self._warnings.get(identifier, [])]
+        warnings.extend(event.payload["message"] for event in history.events if event.type == "memory_failed" and isinstance(event.payload.get("message"), str))
         try:
             context_view = _context_view(history.events)
         except ValidationError:

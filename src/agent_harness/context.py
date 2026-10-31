@@ -107,6 +107,12 @@ class ContextBuilder:
         self.instruction = load_project_instructions(workspace, self._config.context)  # 本次运行固定的项目指令快照。
         self.planning: PlanningController | None = None  # Runner 绑定的可信状态，每次实际输入读取最新快照。
         self._planning_base: str | None = None  # 不含规划动态状态的原系统正文，刷新时替换而非反复追加。
+        self.memory = None  # 固定修订的记忆控制器；输入投影随实际动作选择，不回查新修订。
+
+    @property
+    def has_fixed_context(self) -> bool:
+        """返回当前是否使用固定 user 前缀；供跨轮压缩索引映射使用，不访问文件。"""
+        return self.instruction.status == "loaded" or bool(self.skills) or bool(self.memory and self.memory.input_text())
 
     def bind_planning(self, planning: PlanningController, base_instructions: str) -> None:
         """绑定 planning 与原系统正文 base_instructions，返回 None，不修改持久消息或请求模型。"""
@@ -145,6 +151,8 @@ class ContextBuilder:
             fixed_context.append("以下是本次运行固定的工作区根 AGENTS.md 项目约定：\n<project_instructions>\n" + (self.instruction.content or "") + "\n</project_instructions>")
         for skill in self.skills:
             fixed_context.append("以下是本轮手动选择的技能 " + skill.name + "（流程指导）：\n<selected_skill>\n" + skill.content + "\n</selected_skill>")
+        if self.memory is not None and self.memory.input_text():
+            fixed_context.append(self.memory.input_text())
         if fixed_context:
             messages.append({"role": "user", "content": "\n\n".join(fixed_context)})
         if history:
@@ -180,6 +188,13 @@ class ContextBuilder:
         摘要请求始终不注入执行权限状态，原消息和工具结果不被覆盖。
         """
         frozen_messages = deepcopy(messages)
+        if purpose == "execution" and self.memory is not None:
+            # 替换已有固定前缀中的记忆片段，保持消息索引稳定；原始 run_started 不被改写。
+            for message in frozen_messages[:2]:
+                if message.get("role") == "user" and "<project_memory>" in message.get("content", ""):
+                    start = message["content"].index("<project_memory>")
+                    end = message["content"].index("</project_memory>", start) + len("</project_memory>")
+                    message["content"] = message["content"][:start] + self.memory.input_text() + message["content"][end:]
         if apply_planning and purpose == "execution" and self.planning is not None:
             frozen_messages = project_plan_history(frozen_messages)
             if not frozen_messages or frozen_messages[0].get("role") != "system" or self._planning_base is None:

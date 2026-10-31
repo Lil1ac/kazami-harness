@@ -35,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--model", help="覆盖 requested_model")
     run.add_argument("--max-model-turns", type=int, help="覆盖模型轮次上限")
     run.add_argument("--auto-repair", action="store_true", default=None, help="公开项目测试失败后最多修复两次；验收清单须声明kind=project_tests")
+    run.add_argument("--use-memory", action=argparse.BooleanOptionalAction, default=None, help="使用本项目已确认记忆；--no-use-memory 只关闭读取")
+    run.add_argument("--capture-memory", action=argparse.BooleanOptionalAction, default=None, help="允许模型提出记忆候选；--no-capture-memory 关闭候选")
     run.add_argument("--json", action="store_true", help="输出 JSON，便于脚本读取")
 
     show = commands.add_parser("show", help="只读查看历史运行")
@@ -146,6 +148,9 @@ def _run(args: argparse.Namespace) -> int:
         overrides["limits"] = {"max_model_turns": args.max_model_turns}
     if args.auto_repair is not None:
         overrides["auto_repair"] = args.auto_repair
+    memory = {key: value for key, value in {"use": args.use_memory, "capture": args.capture_memory}.items() if value is not None}
+    if memory:
+        overrides["memory"] = memory
     config = load_config(args.config, overrides)
     task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, python_executable=args.python_executable)
     manifest = RunManifest(run_id=uuid4(), task=task, config=config)

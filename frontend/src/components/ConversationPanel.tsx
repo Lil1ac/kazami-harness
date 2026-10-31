@@ -7,6 +7,7 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
 import { PlanningPanel } from './PlanningPanel';
+import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
@@ -94,6 +95,7 @@ function TurnMessage({
           </p>
         )}
         <div className="message-actions">
+          {turn.final_answer && <SaveMemoryButton runId={turn.run_id} text={turn.final_answer} />}
           <span>
             {turnStatus(
               turn.execution_status,
@@ -218,6 +220,7 @@ export function ConversationPanel({
               <div className="user-message-body">{send.pending!.body.prompt}</div>
             </div>
           )}
+          {run?.context?.memory?.proposals?.length ? <MemoryPanel runId={run.run_id} /> : null}
           {run && (
             <PlanningPanel
               runId={run.run_id}
@@ -258,12 +261,10 @@ export function ConversationPanel({
               {conversation.continuation_notice}
             </p>
           )}
-          {(skills.length > 0 ||
-            send.skills.length > 0 ||
-            run?.verification_kind === 'project_tests') && (
+          {run && (
             <details className="composer-skills">
               <summary>
-                {run?.verification_kind === 'project_tests' ? '下一轮设置' : '下一轮技能'} ·{' '}
+                下一轮设置 ·{' '}
                 {send.skills.length ? send.skills.join('、') : '未选择'}
               </summary>
               <SkillSelector
@@ -273,6 +274,8 @@ export function ConversationPanel({
                 onChange={send.setSkills}
                 disabled={!run}
               />
+              <Checkbox checked={send.memory.use} onChange={/* 下一轮读取选择不改变当前快照。 */ (event) => send.setMemory({ ...send.memory, use: event.target.checked })}>使用项目记忆</Checkbox>
+              <Checkbox checked={send.memory.capture} onChange={/* 候选仍需人工确认。 */ (event) => send.setMemory({ ...send.memory, capture: event.target.checked })}>允许提出记忆候选</Checkbox>
               {run?.verification_kind === 'project_tests' && (
                 <Checkbox
                   checked={send.autoRepair}

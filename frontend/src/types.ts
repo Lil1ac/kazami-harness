@@ -164,6 +164,7 @@ export interface SkillFailure {
 
 /** 后端从完整轨迹聚合的上下文快照，不依赖浏览器当前保留的事件窗口。 */
 export interface ContextView {
+  memory?: MemorySnapshot | null; // 本轮固定记忆及真实回读；缺失时不从当前库猜测。
   instruction: ProjectInstructionSnapshot; // 本次实际加载的项目规则及错误。
   last_check: ContextCheck | null; // 最近一次预算检查，尚未检查时为 null。
   serialization: 'json_utf8_v1'; // 输入大小度量协议版本。
@@ -176,6 +177,7 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  memory: MemoryPolicy; // 独立控制本轮读取与候选，宿主预算只读。
   planning_policy: 'auto' | 'required'; // 宿主只读策略，required时自动入口也必须先批准，浏览器不能覆盖。
   auto_repair: boolean; // 公开项目测试失败时最多自动修复两次，默认关闭，不重置预算。
   provider: 'deepseek'; // 当前宿主配置的供应商。
@@ -383,6 +385,7 @@ export interface DesktopRunSettings {
 
 /** 本浏览器下一次提交的配置；不修改服务器全局设置。 */
 export interface ConfigOverrides {
+  memory?: Pick<MemoryPolicy, 'use' | 'capture'>; // 下一 Run 的两个选择，不允许修改内部记忆预算。
   auto_repair?: boolean; // 本轮明确开启/关闭自动修复；缺省继承宿主或前轮。
   requested_model?: string; // 缺省沿用宿主模型。
   tools?: ToolName[]; // 缺省沿用宿主工具。
@@ -503,4 +506,111 @@ export interface LocalChangeView {
   files: { path: string; status: 'added' | 'modified' | 'deleted'; binary: boolean }[]; // 完整变化清单。
   patch_available: boolean; // 固定文本差异可读取；二进制仅列变化。
   warnings: string[]; // 超出范围或损坏时的受控提示。
+}
+
+/** 宿主记忆策略；只有 use/capture 允许页面覆盖，大小单位为 UTF-8 字节。 */
+export interface MemoryPolicy {
+  use: boolean; // 是否使用已确认项目知识。
+  capture: boolean; // 是否允许 Agent 提出待审阅候选。
+  max_input_bytes: number; // 自动注入总字节上限。
+  max_entries: number; // 自动正文条数上限。
+}
+
+/** 类型决定结构、适用及呈现，不决定权限或确认状态。 */
+export type MemoryType = 'rule' | 'decision' | 'fact' | 'reference' | 'experience';
+
+/** 类型专属内容；后端再次验证它与 type 的对应关系。 */
+export type MemoryDetails =
+  | { topic: string; behavior: string; reason: string; exceptions: string } // 行为约定及例外。
+  | { topic: string; choice: string; rationale: string; revisit_when: string } // 方案选择及原因。
+  | { subject: string; attribute: string; value: string; observed_at: string | null } // 有来源的对象属性。
+  | { target: string; purpose: string; consult_when: string } // 按需查阅入口。
+  | { situation: string; action: string; outcome: string; limitations: string }; // 历史案例及边界。
+
+/** 由宿主确定性核对的触发范围；空数组不限对应维度。 */
+export interface MemoryScope {
+  paths: string[]; // 工作区相对 glob，不捕获指纹。
+  phases: ('planning' | 'execution' | 'verification')[]; // 宿主阶段。
+  platforms: ('win32' | 'linux' | 'darwin')[]; // 实际执行平台。
+}
+
+/** 原子替代目标，必须显式选择且版本仍匹配。 */
+export interface MemoryReplacement {
+  id: string; // 同项目旧条目编号。
+  revision: number; // 人工审阅时旧版本。
+}
+
+/** 可人工审阅的同主题冲突；仅保证确定性键与保守范围检查。 */
+export interface MemoryConflict extends MemoryReplacement {
+  title: string; // 旧条目的主题。
+  type: MemoryType; // 旧主张的字段语义，不能随编辑草稿改类型。
+  details: MemoryDetails; // 与新值对照的旧主张。
+  applies_to: MemoryScope; // 判断范围是否需要收窄。
+  branch: string | null; // 旧主张分支范围。
+  commit: string | null; // 旧主张提交范围。
+  expires_at: string | null; // 旧主张明确到期条件。
+}
+
+/** 人工内容草稿；来源证据和确认状态由宿主决定。 */
+export interface MemoryContent {
+  title: string; // 简短主题。
+  content: string; // 可选补充说明，reference 不自动展开。
+  type: MemoryType; // 专属处理策略。
+  details: MemoryDetails; // 类型结构化主值。
+  origin: 'user_correction' | 'user_confirmation' | 'tool_observation' | 'run_experience'; // 形成方式，不代表可信级别。
+  tags: string[]; // 检索关键词。
+  applies_to: MemoryScope; // 适用范围，与证据分开。
+  evidence: string[]; // 需捕获指纹的相对文件。
+  branch: string | null; // null 不限实际分支。
+  commit: string | null; // null 不限实际 HEAD。
+  expires_at: string | null; // null 不按时间失效。
+}
+
+/** 一个不可变修订的项目知识，当前可用性和冲突是只读派生值。 */
+export interface MemoryEntry extends MemoryContent {
+  id: string; // 项目内稳定编号。
+  revision: number; // 修改必须匹配的版本。
+  status: 'active' | 'proposed' | 'rejected' | 'deleted'; // 确认生命周期。
+  evidence_refs: { path: string; sha256: string }[]; // 保存时证据指纹；仅事实据此阻止旧断言使用。
+  source: { kind: string; run_id?: string; seq?: number | null; sha256?: string }; // 宿主核验来源。
+  replacements: MemoryReplacement[]; // 明确选择的替代目标。
+  conflicts?: MemoryConflict[]; // 当前同主题冲突，候选审阅使用。
+  content_sha256: string; // 内容和条件稳定摘要。
+  created_at: string; // UTC 创建时间。
+  updated_at: string; // 当前修订时间。
+  unavailable_reason?: string | null; // 当前不可用原因，不改写历史。
+  match_reasons?: string[]; // 当次采用的真实触发信号。
+  presentation?: string; // 模型接收的类型呈现方式。
+  usage_text?: string; // 实际供模型使用的中文类型说明，不堆叠存储元数据。
+}
+
+/** 当前项目列表响应；会话候选列表可不带分页字段。 */
+export interface MemoryPage {
+  scope_id: string; // 宿主绑定的项目归属。
+  sequence: number; // 当前已提交序号。
+  items: MemoryEntry[]; // 本页条目。
+  total?: number; // 项目查询的总数。
+  next_offset?: number | null; // 下一页位置，null 为结束。
+}
+
+/** 一次运行真正采用的固定依据，刷新历史不会查询当前记忆。 */
+export interface MemorySnapshot {
+  scope_id: string | null; // 两个选择都关闭时为空。
+  sequence: number; // 出队执行时的读取版本界限。
+  use: boolean; // 本轮读取选择。
+  capture: boolean; // 本轮候选选择。
+  selected: MemoryEntry[]; // 最近一次输入的类型视图，reference 补充正文不展开。
+  uses?: { model_turn: number; phase: string; paths: string[]; selected: MemoryEntry[]; input_text: string; exposed_rule_ids: string[] }[]; // 各次实际输入及完整可见约定，包含显式回读。
+  skipped: { id: string; title: string; reason: string }[]; // 跳过原因。
+  reads: { id: string; revision: number; content: string; sha256: string; size_bytes: number; next_offset: number | null; eof: boolean }[]; // 实际读取的 UTF-8 分页。
+  proposals?: MemoryEntry[]; // 本轮提出的候选事实，当前决定通过管理接口读取。
+}
+
+/** 发送后保持编号和载荷不变的人工变更请求。 */
+export interface MemoryMutation {
+  request_id: string; // 同一操作重试沿用此编号。
+  expected_revision?: number; // 新增省略，修改必须填写。
+  action?: 'edit' | 'accept' | 'reject' | 'delete'; // 新增省略，其余为明确用户决定。
+  content?: MemoryContent; // edit 必填，accept 可先编辑。
+  replacements?: MemoryReplacement[]; // 明确的冲突替代选择，省略沿用候选建议。
 }

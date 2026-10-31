@@ -214,6 +214,7 @@ class SkillFailure(DataModel):
 
 # API 从事件派生的上下文视图；旧运行没有对应事件时整体视图可为 None。
 class ContextView(DataModel):
+    memory: dict[str, JsonValue] | None = None  # 本轮固定记忆及实际回读；None 表示尚未记录，不读取当前数据库补造。
     instruction: ProjectInstructionSnapshot  # 本次运行固定的项目约定快照。
     skills: list[SkillSnapshot] = Field(default_factory=list)  # 本轮真正加载的完整技能快照，旧记录默认为空。
     skill_error: SkillFailure | None = None  # 加载失败时保存原因；没有选择或加载成功时为空。
@@ -228,8 +229,21 @@ class ContextView(DataModel):
 ToolName = Literal["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
 
+# 记忆的公开选择；use 与 capture 独立，关闭读取不等于停止提出候选。
+class MemorySelection(DataModel):
+    use: bool = True  # 使用当前项目已确认记忆，首次无条目时正常继续。
+    capture: bool = True  # 允许执行阶段提出候选，候选须人工确认后跨会话生效。
+
+
+# 宿主记忆预算；大小均为 UTF-8 字节，不增加整体输入或工具额度。
+class MemoryPolicy(MemorySelection):
+    max_input_bytes: int = Field(default=16384, ge=512, le=65536)  # 自动注入的总字节上限。
+    max_entries: int = Field(default=6, ge=0, le=20)  # 自动正文条数，0 表示只提供搜索入口。
+
+
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
 class RunConfig(DataModel):
+    memory: MemoryPolicy = Field(default_factory=MemoryPolicy)  # 每轮冻结使用/学习选择及宿主注入限额。
     planning_policy: Literal["auto", "required"] = "auto"  # 宿主策略：auto由Agent判断；required在新任务开始即只读，网页不能覆盖。
     provider: Literal["deepseek"] = "deepseek"
     requested_model: str = Field(default="deepseek-flash", min_length=1)

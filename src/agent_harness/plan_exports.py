@@ -44,22 +44,32 @@ def materialize_plan_export(run_directory: Path, plan: PlanRevision) -> Path:
     相同内容复用哈希目录；正文或进度变化产生新目录，不覆盖旧下载来源。写入使用原子替换，
     拒绝目录链接及缓存损坏。只写运行内派生缓存，失败抛 StorageError，不修改运行事实或项目。
     """
+    return materialize_text_export(run_directory, render_plan_markdown(plan).encode("utf-8"), ".plan-exports", f"plan-v{plan.version}.md")
+
+
+def materialize_text_export(directory: Path, content: bytes, cache_directory: str, filename: str) -> Path:
+    """把 content 存到 directory 内的哈希缓存并返回路径；缓存名和文件名只能是单层宿主名称。
+
+    缓存复用前核验完整字节，路径链接、名称越界和缓存篡改抛 StorageError；只写派生文件。
+    """
+    run_directory = directory
     temporary: Path | None = None
     try:
         if run_directory.is_symlink() or run_directory.is_junction():
             raise ValueError("linked run")
         root = run_directory.resolve(strict=True)
-        content = render_plan_markdown(plan).encode("utf-8")
+        if Path(cache_directory).name != cache_directory or Path(filename).name != filename or cache_directory in {".", ".."} or filename in {".", ".."}:
+            raise ValueError("invalid export name")
         fingerprint = hashlib.sha256(content).hexdigest()
         parent = root
-        for part in (".plan-exports", fingerprint):
+        for part in (cache_directory, fingerprint):
             parent = parent / part
             if parent.is_symlink() or parent.is_junction():
                 raise ValueError("linked export directory")
             parent.mkdir(exist_ok=True)
             if not parent.resolve(strict=True).is_relative_to(root):
                 raise ValueError("export outside run")
-        target = parent / f"plan-v{plan.version}.md"
+        target = parent / filename
         if target.is_symlink() or target.is_junction():
             raise ValueError("linked export file")
         if target.exists():

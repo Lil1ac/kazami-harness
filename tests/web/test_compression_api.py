@@ -1,5 +1,7 @@
 """从真实HTTP任务到压缩、继续、SSE及重启读取的联动回归。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -118,7 +120,7 @@ def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypa
         app = create_app(config, host, tmp_path / "runs", model_client=model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", trust_env=False) as client:
-                created = await client.post("/api/runs", json={"workspace_id": "code", "prompt": "保留 USER_CONSTRAINT，连续修改验证压缩。"})
+                created = await submit_run(client, json={"workspace_id": "code", "prompt": "保留 USER_CONSTRAINT，连续修改验证压缩。"})
                 assert created.status_code == 202, created.text
                 first = await _finished(client, created.json()["run_id"])
                 assert first["result"]["execution_status"] == "completed", first
@@ -128,7 +130,7 @@ def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypa
                 fingerprints = {name: hashlib.sha256((directory / name).read_bytes()).hexdigest() for name in ("run.json", "events.jsonl", "summary.json")}
                 stream = await client.get("/api/runs/" + first["run_id"] + "/stream")
                 assert "context_action" in stream.text and "context_compaction_started" in stream.text
-                appended = await client.post("/api/runs/" + first["run_id"] + "/followups", json={
+                appended = await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json={
                     "request_id": str(uuid4()), "prompt": "第二轮继续保留 USER_CONSTRAINT，重新检查代码。",
                 })
                 assert appended.status_code == 202, appended.text

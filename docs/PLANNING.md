@@ -23,7 +23,7 @@ planning_policy = "required"
 | `enter_plan_mode` | `reason` 说明复杂度、重大选择或范围变化 | 进入只读规划，撤销旧版执行授权；不会请求用户再次批准“进入规划”本身 |
 | `ask_user_question` | 自包含 `question` 和最多6项建议 `options`；允许自由回答 | 保存问题并等待，后续同批工具不执行；没有默认答案或超时批准 |
 | `submit_plan` | `title`、目标架构 `summary`、`scope`、`steps`、`verification` | 创建新版本，绑定实际目录及对象身份，进入待批准；提交本身不授予权限 |
-| `update_plan` | 当前 `version`、一基 `step` 编号、进度 `status` | 只能更新已批准方案的已有步骤；最多一个步骤进行中；完成进度不等于独立检查通过 |
+| `task_update` | 工作项编号、当前 revision、状态、完成说明及证据引用 | 批准步骤由宿主幂等导入任务，执行进度统一投影；旧 update_plan 工具已移除；完成不等于检查通过 |
 | `read_plan` | `section=plan/history/decisions`、可选版本、字节偏移及正文指纹 | 只读当前或旧版完整方案、版本目录和决定原文；默认每页4096字节，最多16384，跨页内容变化时要求重读 |
 | `list_files` | 工作区 `directory`、零基 `offset`、每页 `limit` | 只读列举直接子项；不跟随链接或junction，不公开运行记录；最多扫描10000项，跳过或截断明确标记 |
 
@@ -154,3 +154,7 @@ Markdown 包含版本、当轮批准状态、执行目录、完整正文、步�
 - 桌面及390×844手机实际检查导出入口。最终手机布局另以显式重新规划产生待审阅v3 `5bd09657-d2d5-4e0b-b78f-baea8600d366` 核对，标题位于可见消息区内，三项审批操作同排，文档宽度390无横向溢出；没有批准该布局检查版本。证据：[桌面导出](../output/playwright/plan-context-20261030/01-export-desktop.png)、[Markdown文件](../output/playwright/plan-context-20261030/plan-v2.md)、[批准后结果](../output/playwright/plan-context-20261030/03-completed-mobile.png)、[最终手机布局](../output/playwright/plan-context-20261030/04-mobile-layout.png)。
 
 该迭代验证机制与界面联动，不计作真实供应商成功率或 Harness 候选公平比较。实现、回归及文档已完成，Git提交仍需用户明确批准。
+
+## Agent Tasks 联动（2026-10-31）
+
+步骤新增稳定编号；批准后幂等生成工作项，四个任务工具共用宿主事务校验，独立进度写入通路移除。每次请求重建任务概览，任务与规划投影在运行事件及终态保留快照，中断只读有效前缀。当前会话面板从最新任务读取进度，历史详情和 Markdown 使用当轮固定状态。统一作业入口接纳回答、批准及普通续轮，排队不授予新权限。完整边界见[任务协议](TASKS.md)。

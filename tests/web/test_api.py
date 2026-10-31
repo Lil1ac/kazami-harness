@@ -1,5 +1,7 @@
 """通过真实 Runner 和离线模型验证本地控制台 API 的持久化与生命周期契约。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -114,7 +116,7 @@ async def api_client(config: WebConfig, model: FinalModel | None = None) -> Asyn
 
 async def submit(client: httpx.AsyncClient, **overrides) -> dict:
     """合并 overrides 到最小合法任务并提交；要求接纳为202，返回 RunView JSON。"""
-    response = await client.post("/api/runs", json={"prompt": "执行离线任务", "workspace_id": "sample", **overrides})
+    response = await submit_run(client, json={"prompt": "执行离线任务", "workspace_id": "sample", **overrides})
     assert response.status_code == 202, response.text
     return response.json()
 
@@ -175,8 +177,8 @@ def test_submit_finishes_in_background_and_persists_unverified(web_config: WebCo
     asyncio.run(scenario())
 
 
-def test_busy_rejects_second_submission_without_second_record(web_config: WebConfig, monkeypatch):
-    """首任务等待时第二次提交返回409且没有额外记录；取消首任务后正常收尾，返回 None。"""
+def test_busy_queues_second_submission_without_second_record(web_config: WebConfig, monkeypatch):
+    """首任务等待时第二请求排队且没有额外 Run；取消排队项后正常收尾，返回 None。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
 
     async def scenario():
@@ -185,9 +187,10 @@ def test_busy_rejects_second_submission_without_second_record(web_config: WebCon
         async with api_client(web_config, model) as (client, app):
             first = await submit(client)
             await asyncio.wait_for(model.entered.wait(), 5)
-            response = await client.post("/api/runs", json={"prompt": "第二个任务", "workspace_id": "sample"})
-            assert response.status_code == 409
-            assert response.json()["error"]["code"]
+            response = await submit_run(client, json={"prompt": "第二个任务", "workspace_id": "sample"})
+            assert response.status_code == 202
+            assert response.json()["status"] == "queued"
+            await client.post('/api/jobs/' + response.json()['id'] + '/cancel')
             assert len([path for path in (web_config.project_dir / "records").iterdir() if path.is_dir() and (path / "run.json").is_file()]) == 1
             model.release.set()
             await finished(client, first["run_id"])
@@ -237,7 +240,7 @@ def test_invalid_submission_has_safe_error_and_no_record(web_config: WebConfig, 
     async def scenario():
         """提交非法字段或预置ID，并检查统一错误包装和记录根目录的零副作用。"""
         async with api_client(web_config) as (client, app):
-            response = await client.post("/api/runs", json={"prompt": "离线任务", "workspace_id": "sample", **payload})
+            response = await submit_run(client, json={"prompt": "离线任务", "workspace_id": "sample", **payload})
             assert response.status_code in {400, 404, 422}
             assert set(response.json()) == {"error"}
             assert set(response.json()["error"]) >= {"code", "message"}
@@ -256,7 +259,7 @@ def test_missing_key_is_rejected_before_record_creation(web_config: WebConfig, m
         """读取脱敏选项后尝试提交，再确认运行根目录没有任务文件。"""
         async with api_client(web_config) as (client, app):
             assert (await client.get("/api/options")).json()["key_configured"] is False
-            response = await client.post("/api/runs", json={"prompt": "离线任务", "workspace_id": "sample"})
+            response = await submit_run(client, json={"prompt": "离线任务", "workspace_id": "sample"})
             assert response.status_code in {400, 422, 503}
             assert response.json()["error"]["code"]
             root = web_config.project_dir / "records"
@@ -469,7 +472,7 @@ def test_static_spa_fallback_never_masks_api_or_asset_errors(web_config: WebConf
     async def scenario():
         """读取真实静态文件和深层页面，再检查两个不应触发SPA回退的路径。"""
         async with api_client(web_config) as (client, app):
-            for path in ["/", "/runs/example", "/settings", "/projects/nav-alpha"]:
+            for path in ["/", "/runs/example", "/jobs", "/jobs/queued-example", "/settings", "/projects/nav-alpha"]:
                 response = await client.get(path)
                 assert response.status_code == 200
                 assert "test-console" in response.text
@@ -597,7 +600,7 @@ def test_current_navigation_contract_has_one_project_list_and_no_retired_routes(
             options = (await client.get("/api/options")).json()
             assert isinstance(options["recent_projects"], list)
             assert "projects" not in options and "workspaces" not in options
-            assert (await client.get("/api/runs")).status_code == 405
+            assert (await client.get("/api/runs")).status_code == 404
             for path in ("/tasks", f"/tasks/{uuid4()}"):
                 assert (await client.get(path)).status_code == 404
 
@@ -639,12 +642,12 @@ def test_cross_origin_or_foreign_host_cannot_create_task(web_config: WebConfig, 
                 ({"Origin": "http://localhost", "Sec-Fetch-Site": "cross-site"}, 403),
                 ({"Host": "untrusted.example"}, 400),
             ]:
-                response = await client.post("/api/runs", headers=headers, json={"prompt": "不应启动", "workspace_id": "sample"})
+                response = await submit_run(client, headers=headers, json={"prompt": "不应启动", "workspace_id": "sample"})
                 assert response.status_code == status
                 assert set(response.json()) == {"error"}
                 root = web_config.project_dir / "records"
                 assert not root.exists() or not list(root.iterdir())
-            response = await client.post("/api/runs", headers={"Origin": "http://localhost"}, json={"prompt": "同源请求", "workspace_id": "sample"})
+            response = await submit_run(client, headers={"Origin": "http://localhost"}, json={"prompt": "同源请求", "workspace_id": "sample"})
             assert response.status_code == 202
             await finished(client, response.json()["run_id"])
 

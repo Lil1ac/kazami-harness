@@ -11,6 +11,8 @@ import type {
   OptionsResponse,
   RunView,
   DesktopRunSettings,
+  JobView,
+  TaskSnapshot,
 } from './types';
 
 /** 保存桌面默认设置并返回最新能力；只影响之后提交的任务，不改变活动任务快照。 */
@@ -89,12 +91,49 @@ export function getOptions(signal?: AbortSignal): Promise<OptionsResponse> {
   return request('/api/options', { signal });
 }
 
-/** 提交新任务，返回已登记视图；失败时调用方保留表单内容。 */
-export function createRun(body: CreateRunRequest): Promise<RunView> {
-  return request('/api/runs', {
-    method: 'POST',
+/** 读取作业状态；只观察，不重新投递或调用模型。 */
+export function getJob(id: string): Promise<JobView> {
+  return request('/api/jobs/' + encodeURIComponent(id));
+}
+
+/** 返回后台清单与暂停状态，供后台中心刷新。 */
+export function getJobs(): Promise<{ items: JobView[]; paused: boolean }> {
+  return request('/api/jobs');
+}
+
+/** 明确执行作业 action；resolve 表示用户已核对进程及目录。 */
+export function jobAction(id: string, action: 'cancel' | 'resolve'): Promise<JobView> {
+  return request(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+}
+
+/** 明确恢复重启后保留的队列，待核对项存在时后端拒绝。 */
+export function resumeQueue(): Promise<{ paused: boolean }> {
+  return request('/api/queue/resume', { method: 'POST' });
+}
+
+/** 读取任务；historical 为 true 时只读当轮固定快照。 */
+export function getTasks(runId: string, historical = false): Promise<TaskSnapshot> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/tasks?historical=${historical}`);
+}
+
+/** 人工任务变更；body 携带稳定请求编号及编辑时的任务版本，返回精简回执。 */
+export function mutateTask(runId: string, body: object, create = false): Promise<object> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/tasks`, {
+    method: create ? 'POST' : 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+  });
+}
+
+/** 提交新任务，返回已登记视图；失败时调用方保留表单内容。 */
+export function createRun(
+  body: CreateRunRequest,
+  requestId: string = crypto.randomUUID(),
+): Promise<JobView> {
+  return request('/api/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, create: body }),
   });
 }
 
@@ -176,11 +215,11 @@ export function getConversation(runId: string, signal?: AbortSignal): Promise<Co
 }
 
 /** 幂等追加新要求，成功返回新轮或原请求对应运行；禁止自动换请求编号重试。 */
-export function createFollowup(runId: string, body: FollowupRequest): Promise<RunView> {
-  return request(`/api/runs/${encodeURIComponent(runId)}/followups`, {
+export function createFollowup(runId: string, body: FollowupRequest): Promise<JobView> {
+  return request('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ request_id: body.request_id, parent_run_id: runId, followup: body }),
   });
 }
 

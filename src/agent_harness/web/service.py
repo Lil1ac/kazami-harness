@@ -127,6 +127,8 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     verifier_pending = False  # 宿主验收已启动而未得到清理结论。
     cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
     for event in history.events:
+        if event.type == "tasks_snapshot":
+            result.tasks = event.payload["state"]
         if event.type == "tool_started" and event.payload.get("name") == "run_command":
             pending_commands.add(str(event.payload.get("call_id")))
         elif event.type == "tool_result" and event.payload.get("name") == "run_command":
@@ -188,6 +190,7 @@ class WebRunManager:
         构造不创建运行或调用模型，返回 None；路径解析失败由服务启动层处理。
         """
         self.web_config = web_config  # 宿主工作区和验收器白名单。
+        self._queued_memory_policy = None  # 队列接纳时固定的宿主记忆策略，直接提交为空。
         self.run_config = run_config.model_copy(deep=True)  # 页面只能读取，不原地修改默认配置。
         self.runs_root = runs_root.resolve()  # 独立运行记录根目录。
         self.catalog = ProjectCatalog(self.runs_root, web_config)  # 明确打开目录的持久登记，首轮与续轮共用。
@@ -207,6 +210,10 @@ class WebRunManager:
         self._closing = False  # 关停后永久拒绝新提交。
         self.conversation_index = ConversationIndex(self)  # 项目下按会话聚合的只读导航。
         self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
+        self._queued_run_id: UUID | None = None  # 出队时预分配的稳定 Run 编号，仅队列写入。
+        self._execution_lease = None  # 队列从项目准备到证据收尾一直持有的操作系统锁。
+        from .jobs import JobQueue
+        self.jobs = JobQueue(self)  # 同一管理器的唯一串行队列，重启默认暂停。
 
     @property
     def busy_run_id(self) -> UUID | None:
@@ -235,6 +242,8 @@ class WebRunManager:
                 for item in self.web_config.verifiers
             ],
             "busy_run_id": self.busy_run_id,
+            "queue_pending": sum(job["status"] == "queued" for job in self.jobs.list()),
+            "queue_paused": self.jobs.paused,
         }
 
     def api_key(self, config: RunConfig) -> str:
@@ -299,7 +308,7 @@ class WebRunManager:
                 if verifier is None:
                     raise WebServiceError(400, "unknown_verifier", "请选择已登记的验收器。")
                 verifier_path = verifier.path
-            identifier = uuid4()
+            identifier = self._queued_run_id or uuid4()
             prepared: ProjectReview | None = None  # 已创建但尚未交给 Runner，预检失败时可安全清理。
             try:
                 merged = self.run_config.model_dump(mode="python")
@@ -308,6 +317,8 @@ class WebRunManager:
                     if section in patch:
                         merged[section] = {**merged[section], **patch.pop(section)}
                 merged.update(patch)
+                if self._queued_memory_policy is not None:
+                    merged["memory"] = self._queued_memory_policy
                 config = load_config(overrides=merged)
                 source = preset.path if preset is not None else workspace.path
                 task = prepare_task(
@@ -417,6 +428,7 @@ class WebRunManager:
                 on_context=on_context,
                 file_changes=self.local_changes if item.manifest.origin is None or item.manifest.origin.execution_mode == 'local' else None,
                 project_manager=self.projects,
+                execution_lease=self._execution_lease,
             )
         except asyncio.CancelledError:
             item.startup_failed = item.context is None
@@ -580,6 +592,7 @@ class WebRunManager:
     async def shutdown(self) -> None:
         """停止接纳新任务，最多取消一次活动任务并等待 Runner 清理落盘；返回 None。"""
         self._closing = True
+        self.jobs.closed = True  # 先禁止下一项出队，再等待当前运行收尾。
         preparation = self._submission
         if preparation is not None and not preparation.done():
             try:
@@ -597,6 +610,8 @@ class WebRunManager:
         recoveries = [task for task in self._recovery_tasks.values() if not task.done()]
         if recoveries:
             await asyncio.gather(*(asyncio.shield(task) for task in recoveries), return_exceptions=True)
+        if self.jobs.worker is not None:
+            await asyncio.shield(self.jobs.worker)
 
     def artifact_path(self, run_id: UUID | str, location: str, path: str) -> Path:
         """仅解析已登记产物 path；location 为 run/workspace，越界、链接或未登记抛 404。

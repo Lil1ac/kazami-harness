@@ -1,5 +1,7 @@
 """真实 ASGI、Runner、文件与 Git 验证多轮交互、幂等和逐轮证据。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -94,7 +96,7 @@ async def finished(client: httpx.AsyncClient, identifier: str) -> dict:
 
 async def initial(client: httpx.AsyncClient, project: bool = False) -> dict:
     """project=True显式创建Git工作树，否则原地修改普通目录；返回首轮真实终态。"""
-    response = await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated' if project else 'local', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
+    response = await submit_run(client, json={'prompt': 'first', 'execution_mode': 'isolated' if project else 'local', **({'project_id': 'code'} if project else {'workspace_id': 'files'})})
     assert response.status_code == 202, response.text
     return await finished(client, response.json()['run_id'])
 
@@ -102,7 +104,7 @@ async def initial(client: httpx.AsyncClient, project: bool = False) -> dict:
 async def follow(client: httpx.AsyncClient, parent: dict, prompt: str = 'second', **extra) -> dict:
     """以parent为父提交新prompt，合并extra并等待结束；要求后端接纳为202。"""
     body = {'prompt': prompt, 'request_id': str(uuid4()), **extra}
-    response = await client.post(f'/api/runs/{parent["run_id"]}/followups', json=body)
+    response = await submit_followup(client, f'/api/runs/{parent["run_id"]}/followups', json=body)
     assert response.status_code == 202, response.text
     return await finished(client, response.json()['run_id'])
 
@@ -136,12 +138,12 @@ def test_file_followup_inherits_history_and_code_without_rewriting_parent(config
             assert [item['content'] for item in messages if item['role'] == 'user'] == ['first', 'second']
             assert any(item.get('reasoning_content') == '必须保留的历史字段' for item in messages)
             count = len(model.requests)
-            again = await client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'second'})
+            again = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'second'})
             assert again.status_code == 202 and again.json()['run_id'] == second['run_id']
             assert len(model.requests) == count
-            conflict = await client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'different'})
+            conflict = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'different'})
             assert conflict.status_code == 409 and conflict.json()['error']['code'] == 'request_conflict'
-            stale = await client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id': str(uuid4()), 'prompt': 'third'})
+            stale = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id': str(uuid4()), 'prompt': 'third'})
             assert stale.status_code == 409 and stale.json()['error']['code'] == 'session_stale_parent'
             conversation = (await client.get(f'/api/runs/{first["run_id"]}/conversation')).json()
             assert len(conversation['turns']) == 2 and conversation['latest_run_id'] == second['run_id'] and conversation['can_continue']
@@ -158,7 +160,7 @@ def test_session_survives_restart_and_does_not_duplicate_inherited_history(confi
             second = await follow(client, first, request_id=request_id)
         model = EditingModel()
         async with client_for(config, model) as (client, app):
-            again = await client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'second'})
+            again = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'second'})
             assert again.status_code == 202 and again.json()['run_id'] == second['run_id'] and model.requests == []
             third = await follow(client, second, 'third')
             assert third['turn_index'] == 3
@@ -213,18 +215,18 @@ def test_busy_and_concurrent_duplicate_submission(config: WebConfig):
         async with client_for(config, model) as (client, app):
             first = await initial(client)
             body = {'request_id': str(uuid4()), 'prompt': 'second'}
-            results = await asyncio.gather(*[client.post(f'/api/runs/{first["run_id"]}/followups', json=body) for _ in range(2)])
+            results = await asyncio.gather(*[submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json=body) for _ in range(2)])
             assert all(result.status_code == 202 for result in results), [result.text for result in results]
             assert results[0].json()['run_id'] == results[1].json()['run_id']
             await finished(client, results[0].json()['run_id'])
             assert len([path for path in app.state.manager.runs_root.iterdir() if path.name[0] != '.']) == 2
         blocking = EditingModel(gated=True)
         async with client_for(config, blocking) as (client, app):
-            response = await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': 'files'})
+            response = await submit_run(client, json={'prompt': 'first', 'workspace_id': 'files'})
             identifier = response.json()['run_id']
             await asyncio.wait_for(blocking.entered.wait(), 5)
-            busy = await client.post(f'/api/runs/{identifier}/followups', json={'request_id': str(uuid4()), 'prompt': 'second'})
-            assert busy.status_code == 409 and busy.json()['error']['code'] == 'run_busy'
+            busy = await submit_followup(client, f'/api/runs/{identifier}/followups', json={'request_id': str(uuid4()), 'prompt': 'second'})
+            assert busy.status_code == 409 and busy.json()['error']['code'] == 'session_busy'
             await client.post(f'/api/runs/{identifier}/cancel')
             await finished(client, identifier)
     asyncio.run(scenario())
@@ -247,7 +249,7 @@ def test_uncertain_submission_is_not_replayed_after_restart(config: WebConfig, c
         async with client_for(config, model) as (client, app):
             view = (await client.get(f'/api/runs/{first["run_id"]}/conversation')).json()
             assert not view['can_continue']
-            response = await client.post(f'/api/runs/{first["run_id"]}/followups', json=request.model_dump(mode='json'))
+            response = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json=request.model_dump(mode='json'))
             assert response.status_code == 409 and response.json()['error']['code'] == 'request_uncertain'
             assert model.requests == []
     asyncio.run(scenario())
@@ -326,7 +328,7 @@ def test_manual_edits_continue_but_discarded_workspace_blocks(project_config: We
             response = await client.post(f'/api/runs/{second["run_id"]}/review', json={"decision":"discard"})
             assert response.status_code == 200
             count = len(model.requests)
-            response = await client.post(f'/api/runs/{second["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"third"})
+            response = await submit_followup(client, f'/api/runs/{second["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"third"})
             assert response.status_code == 409 and response.json()["error"]["code"] == "project_already_decided"
             assert len(model.requests) == count
     asyncio.run(scenario())
@@ -352,7 +354,7 @@ def test_disconnected_followup_preparation_keeps_one_background_run(project_conf
         async with client_for(config, model) as (client, app):
             first = await initial(client, project=True)
             body = {'request_id':str(uuid4()), 'prompt':'second'}
-            pending = asyncio.create_task(client.post(f'/api/runs/{first["run_id"]}/followups', json=body))
+            pending = asyncio.create_task(submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json=body))
             assert await asyncio.to_thread(entered.wait, 5)
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -361,7 +363,7 @@ def test_disconnected_followup_preparation_keeps_one_background_run(project_conf
             created = await asyncio.wait_for(asyncio.shield(app.state.manager._submission), 10)
             second = await finished(client, str(created.run_id))
             before = len(model.requests)
-            again = await client.post(f'/api/runs/{first["run_id"]}/followups', json=body)
+            again = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json=body)
             assert again.status_code == 202 and again.json()['run_id'] == second['run_id']
             assert len(model.requests) == before
             assert '# second' in (Path(second['workspace']) / 'app.py').read_text(encoding='utf-8')
@@ -387,7 +389,7 @@ def test_shutdown_handles_failed_followup_preparation(project_config: WebConfig,
         async with client_for(config, model) as (client, app):
             first = await initial(client, project=True)
             count = len(model.requests)
-            pending = asyncio.create_task(client.post(f'/api/runs/{first["run_id"]}/followups', json={'request_id':str(uuid4()),'prompt':'second'}))
+            pending = asyncio.create_task(submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id':str(uuid4()),'prompt':'second'}))
             assert await asyncio.to_thread(entered.wait, 5)
             shutdown = asyncio.create_task(app.state.manager.shutdown())
             await asyncio.sleep(0)

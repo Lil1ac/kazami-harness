@@ -3,9 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { cancelRun, createFollowup, getConversation, getOptions, getRun } from '../api';
+import { cancelRun, createFollowup, getConversation, getOptions, getRun, getTasks } from '../api';
 import { ConfigDraftProvider } from '../config';
 import { makeRun, options } from '../test/fixtures';
+import { makeJob } from '../test/fixtures';
 import type { ConversationTurn, ConversationView, RunView } from '../types';
 import { RunDetailPage } from './RunDetailPage';
 
@@ -13,6 +14,7 @@ vi.mock(
   '../api',
   /* HTTP替身保留真实会话工作区、输入、路由、Markdown和检查器组件。 */ () => ({
     getRun: vi.fn(),
+    getTasks: vi.fn(),
     getOptions: vi.fn(),
     getConversation: vi.fn(),
     createFollowup: vi.fn(),
@@ -91,6 +93,7 @@ function show(initialPath = '/runs/run-a') {
 beforeEach(
   /* 每个用例从同一可信首轮开始，不共享草稿或前例的请求。 */ () => {
     vi.resetAllMocks();
+    vi.mocked(getTasks).mockResolvedValue({ revision: 0, items: [] });
     vi.mocked(getOptions).mockResolvedValue(options);
     sessionStorage.clear();
     runs.clear();
@@ -127,7 +130,7 @@ beforeEach(
         child.parent_run_id = parentId;
         runs.set(child.run_id, child);
         record = { ...record, latest_run_id: child.run_id, turns: [...record.turns, turn(child)] };
-        return child;
+        return makeJob(child);
       },
     );
   },

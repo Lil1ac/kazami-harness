@@ -1,5 +1,7 @@
 """用真实 Git、Runner、文件工具和测试进程验证项目任务与代码审阅 API。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -100,7 +102,7 @@ async def client_for(config: WebConfig, model: ProjectModel | None = None) -> As
 
 async def start(client: httpx.AsyncClient, **extra) -> dict:
     """向 client 提交固定项目修复任务并合并 extra；要求202，返回完整初始运行视图。"""
-    response = await client.post("/api/runs", json={"prompt": "修复 add 并新增说明", "project_id": "backend", "execution_mode": "isolated", **extra})
+    response = await submit_run(client, json={"prompt": "修复 add 并新增说明", "project_id": "backend", "execution_mode": "isolated", **extra})
     assert response.status_code == 202, response.text
     return response.json()
 
@@ -143,7 +145,7 @@ def test_project_options_probe_failure_does_not_break_ordinary_tasks(project_con
             options = (await client.get("/api/options")).json()
             assert options["recent_projects"][0]["available"] is False
             assert options["recent_projects"][0]["error"]
-            response = await client.post("/api/runs", json={"prompt": "普通任务", "workspace_id": "ordinary"})
+            response = await submit_run(client, json={"prompt": "普通任务", "workspace_id": "ordinary"})
             assert response.status_code == 202
             assert (await finished(client, response.json()["run_id"]))["project"] is None
     asyncio.run(scenario())
@@ -174,7 +176,7 @@ def test_missing_key_prevents_git_worktree_creation(project_config: WebConfig, m
     async def scenario():
         """提交无密钥任务并检查受控400响应，不产生后台任务。"""
         async with client_for(project_config) as (client, app):
-            response = await client.post("/api/runs", json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
+            response = await submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
             assert response.status_code == 400
             assert app.state.manager.busy_run_id is None
     asyncio.run(scenario())
@@ -256,7 +258,9 @@ def test_cancel_then_restart_keeps_partial_diff_reviewable(project_config: WebCo
             for suffix in ("review", "diff", "patch"):
                 assert (await client.get(f"/api/runs/{identifier}/{suffix}")).status_code == 409
             assert (await client.post(f"/api/runs/{identifier}/review", json={"decision": "discard"})).status_code == 409
-            assert (await client.post("/api/runs", json={"prompt": "第二项", "project_id": "backend", "execution_mode": "isolated"})).status_code == 409
+            queued = await submit_run(client, json={"prompt": "第二项", "project_id": "backend", "execution_mode": "isolated"})
+            assert queued.status_code == 202 and queued.json()['status'] == 'queued'
+            await client.post('/api/jobs/' + queued.json()['id'] + '/cancel')
             await client.post(f"/api/runs/{identifier}/cancel")
             view = await finished(client, identifier)
             assert view["result"]["execution_status"] == "cancelled"
@@ -297,8 +301,10 @@ def test_snapshot_keeps_slot_and_cannot_be_cancelled_mid_capture(project_config:
                 assert view["active"] is True and view["phase"] == "artifact_collection"
                 await client.post(f"/api/runs/{identifier}/cancel")
                 assert (await client.get(f"/api/runs/{identifier}")).json()["cancelling"] is False
-                response = await client.post("/api/runs", json={"prompt": "第二项", "project_id": "backend", "execution_mode": "isolated"})
-                assert response.status_code == 409
+                response = await submit_run(client, json={"prompt": "第二项", "project_id": "backend", "execution_mode": "isolated"})
+                assert response.status_code == 202 and response.json()['status'] == 'queued'
+                assert not (app.state.manager.runs_root / response.json()['run_id']).exists()  # 收尾未释放槽，不提前创建下一轮。
+                await client.post('/api/jobs/' + response.json()['id'] + '/cancel')
             finally:
                 release.set()
             assert (await finished(client, created["run_id"]))["project"]["snapshot_status"] == "ready"
@@ -322,7 +328,7 @@ def test_request_disconnect_during_prepare_remains_service_owned(project_config:
                 assert release.wait(5)
                 return original(*arguments)
             monkeypatch.setattr(app.state.manager.projects, "prepare", prepare)
-            request = asyncio.create_task(client.post("/api/runs", json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"}))
+            request = asyncio.create_task(submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"}))
             try:
                 assert await asyncio.to_thread(entered.wait, 5)
                 request.cancel()
@@ -358,7 +364,7 @@ def test_shutdown_during_prepare_creates_cancel_record_without_model(project_con
                 assert release.wait(5)
                 return original(*arguments)
             monkeypatch.setattr(app.state.manager.projects, "prepare", prepare)
-            request = asyncio.create_task(client.post("/api/runs", json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"}))
+            request = asyncio.create_task(submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"}))
             assert await asyncio.to_thread(entered.wait, 5)
             shutdown = asyncio.create_task(app.state.manager.shutdown())
             try:
@@ -392,7 +398,7 @@ def test_runner_start_failure_cleans_registered_worktree(project_config: WebConf
     async def scenario():
         """提交失败后等待后台完整收尾，Git登记中只剩源目录。"""
         async with client_for(project_config) as (client, app):
-            response = await client.post("/api/runs", json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
+            response = await submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
             assert response.status_code == 503
             await app.state.manager.wait_idle()
             registered = git(project_config.projects[0].path, "worktree", "list", "--porcelain")
@@ -498,7 +504,7 @@ def test_post_worktree_preflight_failure_removes_unstarted_copy(project_config: 
         """提交到副本创建后失败，检查400、模型零调用和源目录唯一Git登记。"""
         model = ProjectModel()
         async with client_for(project_config, model) as (client, app):
-            response = await client.post("/api/runs", json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
+            response = await submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
             assert response.status_code == 400
             assert model.calls == 0
             registered = git(project_config.projects[0].path, "worktree", "list", "--porcelain")

@@ -1,5 +1,7 @@
 """通过真实网页请求、Runner 与文件工具验证技能选择及逐轮冻结。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -102,17 +104,14 @@ async def finish(client: httpx.AsyncClient, identifier: str) -> dict:
 
 async def create_run(client: httpx.AsyncClient, **extra) -> dict:
     """提交普通工作区任务并等待收尾；extra 可覆盖网页请求字段，返回真实最终视图。"""
-    response = await client.post("/api/runs", json={"prompt": "first", "workspace_id": "files", **extra})
+    response = await submit_run(client, json={"prompt": "first", "workspace_id": "files", **extra})
     assert response.status_code == 202, response.text
     return await finish(client, response.json()["run_id"])
 
 
 async def continue_run(client: httpx.AsyncClient, parent: dict, prompt: str, **extra) -> dict:
     """以 parent 为最新轮提交 prompt 和可选配置覆盖，返回后台执行完毕后的网页视图。"""
-    response = await client.post(
-        f'/api/runs/{parent["run_id"]}/followups',
-        json={"request_id": str(uuid4()), "prompt": prompt, **extra},
-    )
+    response = await submit_followup(client, f'/api/runs/{parent["run_id"]}/followups', json={"request_id": str(uuid4()), "prompt": prompt, **extra})
     assert response.status_code == 202, response.text
     return await finish(client, response.json()["run_id"])
 
@@ -263,7 +262,7 @@ def test_unselected_skill_is_not_loaded_and_host_paths_cannot_be_overridden(skil
         model = SkillWritingModel()
         async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             for patch in ({"skill_roots": [str(roots)]}, {"skills": ["alpha"], "skill_content": "任意正文"}):
-                response = await client.post("/api/runs", json={"prompt": "first", "workspace_id": "files", "config": patch})
+                response = await submit_run(client, json={"prompt": "first", "workspace_id": "files", "config": patch})
                 assert response.status_code == 422, response.text
             assert model.requests == []
             assert not app.state.manager.runs_root.exists() or not list(app.state.manager.runs_root.glob("*/run.json"))

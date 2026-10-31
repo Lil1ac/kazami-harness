@@ -23,8 +23,12 @@ from .config import WebConfig
 from .schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from .service import WebRunManager, WebServiceError
 from .project_catalog import CatalogError
+from .jobs import JobRequest
+from ..tasks import TaskError, TaskService, TaskCreate, TaskUpdate
+from ..planning import PlanningError
 from ..memory import MemoryError
 from .memory import install_memory_routes
+from ..config import ConfigurationError
 
 if TYPE_CHECKING:
     from ..desktop.host import DesktopHost
@@ -80,6 +84,116 @@ def create_app(
         status = 503 if error.code == "memory_storage_error" else 404 if error.code == "memory_not_found" else 409
         return JSONResponse(status_code=status, content={"error": {"code": error.code, "message": error.message, "details": error.details}})
 
+    @app.exception_handler(TaskError)
+    @app.exception_handler(PlanningError)
+    async def task_error(request: Request, error: TaskError) -> JSONResponse:
+        """将 request 对应任务业务 error 转为安全响应；不存在返回404，其余冲突409。"""
+        status = 404 if error.code in {"task_not_found", "job_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
+        return _error(status, error.code, error.message)
+
+    @app.exception_handler(ConfigurationError)
+    async def job_configuration_error(request: Request, error: ConfigurationError) -> JSONResponse:
+        """将 request 接纳前的配置 error 映射为400；配置文案不携带密钥。"""
+        return _error(400, "invalid_run", str(error))
+
+    @app.post("/api/jobs", status_code=202)
+    async def enqueue(body: JobRequest) -> dict:
+        """持久接纳 body 运行请求并返回 JobView；页面断开不取消后台准备。"""
+        pending = asyncio.create_task(manager.jobs.enqueue(body))
+        return await asyncio.shield(pending)
+
+    @app.get("/api/jobs")
+    async def jobs() -> dict:
+        """返回后台作业及队列暂停状态；只读，不恢复执行。"""
+        return {"items": [manager.jobs.public(job) for job in manager.jobs.list()], "paused": manager.jobs.paused}
+
+    @app.get("/api/jobs/{job_id}")
+    async def job(job_id: UUID) -> dict:
+        """按 job_id 返回作业归属和真实状态；未建立 Run 时仍可展示。"""
+        return manager.jobs.public(manager.jobs.get(str(job_id)))
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    async def cancel_job(job_id: UUID) -> dict:
+        """取消 job_id 并等待真实清理；排队项不生成 Run 或文件副作用。"""
+        return await manager.jobs.cancel(str(job_id))
+
+    @app.post("/api/jobs/{job_id}/resolve")
+    async def resolve_job(job_id: UUID) -> dict:
+        """记录用户确认 job_id 进程已停止且工作区已核对；不重放原请求。"""
+        return manager.jobs.resolve(str(job_id))
+
+    @app.post("/api/queue/resume")
+    async def resume_queue() -> dict:
+        """明确恢复尚未执行队列；中断作业未核对时拒绝，返回暂停状态。"""
+        manager.jobs.resume()
+        return {"paused": manager.jobs.paused}
+
+    def task_service(run_id: UUID) -> TaskService:
+        """核对 run_id 并绑定其可信会话；返回人工管理入口，不启动执行。"""
+        view = manager.get_run(run_id)
+        return TaskService(manager.jobs.store, str(view.session_id or run_id))
+
+    @app.get("/api/runs/{run_id}/tasks")
+    async def tasks(run_id: UUID, historical: bool = False) -> dict:
+        """返回 run_id 会话最新清单；historical=True 只返回当轮固定快照。"""
+        view = manager.get_run(run_id)
+        return (view.result.tasks or {"revision": 0, "items": []}) if historical else task_service(run_id).store.snapshot(str(view.session_id or run_id))
+
+    @app.post("/api/runs/{run_id}/tasks")
+    async def create_task(run_id: UUID, body: TaskCreate) -> dict:
+        """人工创建 body 工作项；当前会话执行中时拒绝结构性变更，返回创建回执。"""
+        service = task_service(run_id)
+        active = manager._active
+        if active and str(active.manifest.session_id or active.manifest.run_id) == service.session:
+            raise TaskError("session_busy", "请先停止当前运行，再修改任务范围。")
+        return service.create(body)
+
+    @app.patch("/api/runs/{run_id}/tasks")
+    async def update_task(run_id: UUID, body: TaskUpdate) -> dict:
+        """人工更新 body 工作项；取消进行中项先停止其真实 Run，其他变更要求会话空闲。"""
+        service = task_service(run_id)
+        active = manager._active
+        if active and str(active.manifest.session_id or active.manifest.run_id) == service.session:
+            if body.status != "cancelled":
+                raise TaskError("session_busy", "请先停止当前运行，再修改任务范围。")
+            item = service.get(body.task_id)
+            if item["revision"] != body.expected_revision:
+                raise TaskError("task_revision_conflict", "任务已更新，请重新读取后操作。")
+            owned = item["active_run_id"]
+            items = {value["id"]: value for value in service.store.snapshot(service.session)["items"]}
+            for child in items.values():
+                parent = child["parent_task_id"]
+                while parent:
+                    if parent == item["id"] and child["active_run_id"]:
+                        owned = child["active_run_id"]
+                    parent = items[parent]["parent_task_id"]
+            if owned:
+                await manager.cancel(UUID(owned))
+                await manager.wait_idle()
+                body = body.model_copy(update={"expected_revision": service.get(body.task_id)["revision"]})
+        return service.update(body)
+
+    @app.get("/api/work-events")
+    async def work_events(after: int = Query(default=0, ge=0), scope: str | None = None) -> dict:
+        """从 after 游标补读任务和作业事件；scope=None 读取全部，最多一百项。"""
+        return {"items": manager.jobs.store.events(after, scope)}
+
+    @app.get("/api/work-stream")
+    async def work_stream(request: Request, after: int | None = Query(default=None, ge=0), scope: str | None = None):
+        """从 after 订阅 scope 的事务事件；断线游标可补读，只观察、不创建或恢复作业。"""
+        async def stream():
+            """逐批返回已提交事件；断开或关停结束，空闲发送心跳，返回 SSE 字节流。"""
+            previous = request.headers.get("last-event-id", "")
+            cursor = after if after is not None else int(previous) if previous.isdigit() and len(previous) < 20 else manager.jobs.store.latest_seq()
+            while not manager._closing and not await request.is_disconnected():
+                events = manager.jobs.store.events(cursor, scope)
+                for event in events:
+                    cursor = event["seq"]
+                    yield f"id: {cursor}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if not events:
+                    yield ": heartbeat\n\n"
+                await asyncio.sleep(1)
+        return StreamingResponse(stream(), media_type="text/event-stream")
 
     @app.middleware("http")
     async def same_origin(request: Request, call_next) -> Response:
@@ -191,11 +305,6 @@ def create_app(
         options = await asyncio.to_thread(manager.options)
         return next(item for item in options["recent_projects"] if item["id"] == project_id)
 
-    @app.post("/api/runs", status_code=202, response_model=RunView)
-    async def submit(request: CreateRunRequest) -> RunView:
-        """按 request 创建独立后台任务并返回初始视图；不等待模型完成，忙时 409。"""
-        return await manager.submit(request)
-
     @app.get("/api/conversations", response_model=ConversationPage)
     async def conversations(
         offset: int = Query(default=0, ge=0),
@@ -216,15 +325,6 @@ def create_app(
     async def conversation(run_id: UUID) -> ConversationView:
         """读取 run_id 所属会话和可继续原因；不启动模型或重新拍摄快照。"""
         return manager.conversations.view(run_id)
-
-    @app.post("/api/runs/{run_id}/followups", status_code=202, response_model=RunView)
-    async def followup(run_id: UUID, body: FollowupRequest) -> RunView:
-        """以 run_id 为父幂等追加 body；新运行继承必要历史和代码，但保留原轮证据。"""
-        manager.get_run(run_id)  # 先按现有规则处理不存在或不可读的运行编号。
-        try:
-            return await manager.conversations.submit(run_id, body)
-        except StorageError:
-            return _error(503, "run_unreadable", "前轮记录无法读取，尚未发起新的执行。")
 
 
     @app.post("/api/runs/{run_id}/cancel", response_model=RunView)
@@ -373,6 +473,8 @@ def create_app(
     @app.get("/")
     @app.get("/runs")
     @app.get("/runs/{run_id}")
+    @app.get("/jobs")
+    @app.get("/jobs/{job_id}")
     @app.get("/settings")
     @app.get("/projects/{project_id}")
     async def frontend_page() -> Response:

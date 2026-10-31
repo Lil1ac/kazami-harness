@@ -36,6 +36,7 @@ npm.cmd run format
 - `src/diff.ts` 与 `FileChangesPanel`：解析 Git/普通 unified diff，按文件分组并显示两侧行号；补丁始终按文本渲染。
 - `src/events.ts`：按运行 ID 和序号排序、去重、检测缺口的纯函数。
 - `src/hooks/useRunEvents.ts`：唯一 SSE 连接及历史补齐生命周期。
+- `src/hooks/useWorkEvents.ts`：任务清单和作业变更订阅，使当前规划、任务区与后台中心同步读取宿主状态。
 - `src/config.tsx`：本浏览器下一次提交的配置覆盖；刷新恢复宿主默认。
 
 ## 实时事件怎样处理
@@ -74,6 +75,10 @@ HTTP/SSE 入口位于 `src/agent_harness/web/api.py`，请求与运行视图位�
 详情采用持续会话工作区。`RunDetailPage.tsx` 以session_id固定消息区，`ConversationPanel.tsx` 展示消息与底部输入，服务确认后原地追加独立新轮；`RunInspector.tsx` 按所选轮次显示测试、上下文、轨迹与代码。代码页明确后续 diff 是相对会话原始基线的累计差异，新轮重新待审阅。
 
 每次明确提交生成 request_id，网络失败重试沿用同一编号和载荷；sessionStorage按会话保存当前标签页草稿及未确认请求的原父轮/载荷，刷新不自动提交。运行中可以编辑、不能新提交；回看旧轮只切换检查器，发送仍追加最新轮。审阅决定与快照恢复会刷新会话可继续条件。后端对应 `web/conversations.py`、`sessions.py` 和 `snapshots.py`；完整限制见 [多轮任务交互](../docs/MULTITURN_TASKS.md)。
+
+首轮与续轮统一通过 `/api/jobs` 接纳。其他会话占用执行槽时可以排队，同会话已有活动或排队请求时不能重复发送。新任务表单也保存未确认提交的固定载荷，刷新不重发；后台中心 `/jobs` 展示排队、执行、等待决定、待核对与检查结果。作业尚未建立 Run 时不提供运行链接。
+
+会话内 `TasksPanel` 展示持久工作项、依赖、完成条件、证据及人工操作；`PlanningPanel` 的当前进度来自同一清单。重开前置后，下游旧证据保留但不计当前完成。历史检查器读取当轮固定快照。协议及验收见 [Agent Tasks](../docs/TASKS.md)。
 
 
 `hooks/useConversationSend.ts`管理草稿与确认请求；网络不确定时“重试确认”固定原父轮和正文，即使输入已改成下一条也不改变原请求。`MarkdownMessage.tsx`使用react-markdown/remark-gfm展示回答，禁用原始HTML和危险协议，代码按用户点击复制，外部图片只显示替代文本。`TurnActivity.tsx`与activity.ts把实际工具/验收事件投影为可折叠过程，最新轮共享SSE，历史展开才读有界事件。主消息区统一纵向滚动，代码/表格可横向滚动；底部输入不随历史滚出视口，支持输入法及Enter/Shift+Enter。

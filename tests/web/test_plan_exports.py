@@ -1,5 +1,7 @@
 """验证计划 Markdown 是可信运行记录的派生附件，网页和桌面下载共用一条边界。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from pathlib import Path
 
@@ -23,7 +25,7 @@ def test_plan_exports_preserve_historical_bytes_and_do_not_execute_or_authorize(
         """通过真实 HTTP 请求生成两版计划和附件；返回 None，所有断言依据文件与后端状态。"""
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "先规划"}))
+                first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "先规划"}))
                 original = saved_files(config, first["run_id"])
                 url = "/api/runs/" + first["run_id"] + "/artifacts"
                 parameters = {"location": "run", "path": "plans/v1.md"}
@@ -34,7 +36,7 @@ def test_plan_exports_preserve_historical_bytes_and_do_not_execute_or_authorize(
                 assert "## 执行步骤" in document.text and "## 验收方式" in document.text
                 assert (await client.get(url, params=parameters)).content == document.content
                 assert saved_files(config, first["run_id"]) == original and len(model.requests) == 1
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json=decision(first, "revise")))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json=decision(first, "revise")))
                 current_url = "/api/runs/" + second["run_id"] + "/artifacts"
                 current = await client.get(current_url, params={"location": "run", "path": "plans/v2.md"})
                 assert current.status_code == 200 and "第二版交付方案" in current.text

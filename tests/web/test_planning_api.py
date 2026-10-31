@@ -1,5 +1,7 @@
 """真实API、文件与事件验证Agent主动规划、持久等待、用户决定和受控接续。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -116,7 +118,7 @@ def test_agent_enters_planning_waits_restarts_and_executes_only_approved_version
         app = application(config, first_model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "增加结果生成功能"}))
+                first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "增加结果生成功能"}))
                 assert first["result"]["execution_status"] == "waiting_input"
                 assert first["result"]["planning"]["phase"] == "planning"
                 assert first["result"]["validation_status"] == "unverified"
@@ -128,32 +130,30 @@ def test_agent_enters_planning_waits_restarts_and_executes_only_approved_version
                 assert len(first_model.requests) == 2
                 original = saved_files(config, first["run_id"])
         model = ScriptModel([reply(call("submit_plan", **PLAN)),
-                             reply(call("update_plan", version=1, step=1, status="in_progress"),
-                                   call("write_file", path="result.txt", content="真实交付")),
-                             reply(call("update_plan", version=1, step=1, status="completed")), reply()])
+                             reply(call("write_file", path="result.txt", content="真实交付")), reply()])
         restarted = application(config, model)
         async with restarted.router.lifespan_context(restarted):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://localhost") as client:
                 loaded = (await client.get("/api/runs/" + first["run_id"])).json()
                 assert loaded["result"]["planning"] == first["result"]["planning"] and not model.requests
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json=decision(first, "answer")))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json=decision(first, "answer")))
                 assert second["result"]["planning"]["pending"]["kind"] == "plan_approval"
                 assert sorted(item.name for item in root.iterdir()) == ["source.txt"]
                 bad = decision(second, "approve")
                 bad["decision"]["plan_version"] = 2
-                rejected = await client.post("/api/runs/" + second["run_id"] + "/followups", json=bad)
+                rejected = await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=bad)
                 assert rejected.status_code == 409 and rejected.json()["error"]["code"] == "plan_version_conflict"
                 approved = decision(second, "approve")
-                response = await client.post("/api/runs/" + second["run_id"] + "/followups", json=approved)
+                response = await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=approved)
                 final = await finished(client, response)
-                repeated = await client.post("/api/runs/" + second["run_id"] + "/followups", json=approved)
+                repeated = await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=approved)
                 assert repeated.status_code == 202 and repeated.json()["run_id"] == final["run_id"]
                 assert final["result"]["execution_status"] == "completed"
                 assert final["result"]["planning"]["plans"][-1]["status"] == "approved"
-                assert final["result"]["planning"]["plans"][-1]["steps"][0]["status"] == "completed"
+                assert final["result"]["planning"]["plans"][-1]["steps"][0]["status"] == "pending"  # 模型未更新工作项，文件写入不冒充步骤完成。
                 assert (root / "result.txt").read_text(encoding="utf-8") == "真实交付"
                 assert saved_files(config, first["run_id"]) == original
-                assert len(model.requests) == 4
+                assert len(model.requests) == 3
                 statuses = (await client.get("/api/conversations", params={"status": "completed"})).json()
                 assert statuses["total"] == 1
                 assert (root / "source.txt").read_text(encoding="utf-8") == "原始内容"
@@ -173,17 +173,17 @@ def test_plain_approval_revises_plan_and_rejection_runs_no_model(planning_config
         app = application(config, model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "先规划", "mode": "plan"}))
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "批准"}))
+                first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "先规划", "mode": "plan"}))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "批准"}))
                 assert second["result"]["planning"]["plans"][-1]["version"] == 2
                 assert not (config.workspaces[0].path / "forbidden.txt").exists()
-                stale = await client.post("/api/runs/" + second["run_id"] + "/followups", json=decision(first, "approve"))
+                stale = await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=decision(first, "approve"))
                 assert stale.status_code == 409 and stale.json()["error"]["code"] == "interaction_stale"
                 count = len(model.requests)
-                third = await finished(client, await client.post("/api/runs/" + second["run_id"] + "/followups", json=decision(second, "reject")))
+                third = await finished(client, await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=decision(second, "reject")))
                 assert third["result"]["stop_reason"] == "plan_rejected" and len(model.requests) == count
                 assert third["result"]["verification"] is None
-                fourth = await finished(client, await client.post("/api/runs/" + third["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "重新规划"}))
+                fourth = await finished(client, await submit_followup(client, "/api/runs/" + third["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "重新规划"}))
                 assert fourth["result"]["execution_status"] == "waiting_input"
                 assert len(model.requests) == count + 1
                 assert any(item.get("content") == "先规划" for item in model.requests[-1]["messages"])
@@ -200,7 +200,7 @@ def test_cancelled_planning_cannot_be_unlocked_by_auto_mode(planning_config) -> 
         app = application(config, model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                response = await client.post("/api/runs", json={"workspace_id": "files", "prompt": "实现复杂功能"})
+                response = await submit_run(client, json={"workspace_id": "files", "prompt": "实现复杂功能"})
                 await asyncio.wait_for(model.entered.wait(), 10)
                 await client.post("/api/runs/" + response.json()["run_id"] + "/cancel")
                 first = await finished(client, response)
@@ -209,7 +209,7 @@ def test_cancelled_planning_cannot_be_unlocked_by_auto_mode(planning_config) -> 
         restarted = application(config, continued)
         async with restarted.router.lifespan_context(restarted):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://localhost") as client:
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "继续", "mode": "auto"}))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json={"request_id": str(uuid4()), "prompt": "继续", "mode": "auto"}))
                 assert second["result"]["planning"]["phase"] == "planning"
                 assert second["result"]["stop_reason"] == "planning_complete"
                 assert not (config.workspaces[0].path / "forbidden.txt").exists()
@@ -226,13 +226,13 @@ def test_cancel_question_prevents_late_answer_and_preserves_history(planning_con
         app = application(config, model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "先询问业务规则", "mode": "plan"}))
+                first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "先询问业务规则", "mode": "plan"}))
                 original = saved_files(config, first["run_id"])
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json=decision(first, "cancel")))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json=decision(first, "cancel")))
                 assert second["result"]["execution_status"] == "cancelled"
                 assert second["result"]["stop_reason"] == "interaction_cancelled"
                 assert len(model.requests) == 1
-                late = await client.post("/api/runs/" + second["run_id"] + "/followups", json=decision(first, "answer"))
+                late = await submit_followup(client, "/api/runs/" + second["run_id"] + "/followups", json=decision(first, "answer"))
                 assert late.status_code == 409 and late.json()["error"]["code"] == "interaction_stale"
                 assert saved_files(config, first["run_id"]) == original
     asyncio.run(scenario())
@@ -248,7 +248,7 @@ def test_interrupted_wait_rebuilds_request_without_replaying_tools(planning_conf
         app = application(config, model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "提交方案", "mode": "plan"}))
+                first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "提交方案", "mode": "plan"}))
         directory = config.project_dir / "records" / first["run_id"]
         lines = (directory / "events.jsonl").read_bytes().splitlines(keepends=True)
         (directory / "events.jsonl").write_bytes(b"".join(line for line in lines if json.loads(line)["type"] != "run_finished"))
@@ -260,7 +260,7 @@ def test_interrupted_wait_rebuilds_request_without_replaying_tools(planning_conf
                 view = (await client.get("/api/runs/" + first["run_id"])).json()
                 assert view["interrupted"] and view["result"]["planning"]["pending"] == first["result"]["planning"]["pending"]
                 assert not continued.requests
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json=decision(view, "approve")))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json=decision(view, "approve")))
                 assert second["result"]["execution_status"] == "completed"
                 assert len(continued.requests) == 2
     asyncio.run(scenario())
@@ -279,9 +279,9 @@ def test_host_required_policy_guards_auto_entry_and_cannot_be_overridden(plannin
                          config.project_dir / "records", model_client=model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                invalid = await client.post("/api/runs", json={"workspace_id": "files", "prompt": "越权", "config": {"planning_policy": "auto"}})
+                invalid = await submit_run(client, json={"workspace_id": "files", "prompt": "越权", "config": {"planning_policy": "auto"}})
                 assert invalid.status_code == 422 and not model.requests
-                view = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "自动判断实现", "mode": "auto"}))
+                view = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "自动判断实现", "mode": "auto"}))
                 observations = [json.loads(item["content"]) for item in model.requests[-1]["messages"] if item["role"] == "tool"]
                 assert observations[0]["data"]["entries"] == [{"path": "source.txt", "kind": "file"}]
                 assert [item["error"]["code"] for item in observations[1:]] == ["planning_read_only"] * 2
@@ -304,10 +304,10 @@ def test_planning_skips_project_tests_until_explicit_approval(project_config, mo
         app = application(config, model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finished(client, await client.post("/api/runs", json={"project_id": "backend", "prompt": "生成交付", "execution_mode": mode, "mode": "plan"}))
+                first = await finished(client, await submit_run(client, json={"project_id": "backend", "prompt": "生成交付", "execution_mode": mode, "mode": "plan"}))
                 assert not (Path(first["workspace"]) / "TEST_RAN").exists()
                 assert first["result"]["verification_attempts"] == []
-                second = await finished(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json=decision(first, "approve")))
+                second = await finished(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json=decision(first, "approve")))
                 assert first["workspace"] == second["workspace"]
                 assert second["result"]["validation_status"] == "passed"
                 assert (Path(second["workspace"]) / "TEST_RAN").read_text() == "yes"

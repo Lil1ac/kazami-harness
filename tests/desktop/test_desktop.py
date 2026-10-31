@@ -1,5 +1,7 @@
 """验证 Electron 后台的公开设置、认证边界、标准流原生请求和父进程失联清理。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 import io
 import json
@@ -164,7 +166,7 @@ def test_parent_pipe_loss_cancels_active_run_and_exits(tmp_path: Path) -> None:
             web = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=root / "frontend/dist")
             from agent_harness.web.project_catalog import ProjectCatalog
             identifier = ProjectCatalog(tmp_path / "runs", web).register(tmp_path / "project")
-            response = client.post("/api/runs", json={"project_id": identifier, "prompt": "等待取消"})
+            response = client.post("/api/jobs", json={"request_id": str(__import__('uuid').uuid4()), "create": {"project_id": identifier, "prompt": "等待取消"}})
             assert response.status_code == 202, response.text
             run_id = response.json()["run_id"]
             deadline = time.monotonic() + 5

@@ -1,0 +1,52 @@
+.tasks-panel {
+  border-block: 1px solid var(--border-color, #e5e5e5);
+  margin: 12px 0;
+  padding: 12px 0;
+}
+.tasks-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.tasks-panel ol {
+  list-style: none;
+  padding: 0;
+}
+.task-row {
+  padding: 12px 0;
+  border-bottom: 1px solid #eee;
+  overflow-wrap: anywhere;
+}
+.task-row > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.task-row p {
+  margin: 8px 0;
+}
+.task-row span {
+  white-space: nowrap;
+  color: #666;
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.jobs-list {
+  list-style: none;
+  padding: 0;
+}
+.jobs-list li {
+  padding: 20px 0;
+  border-bottom: 1px solid #eee;
+  overflow-wrap: anywhere;
+}
+.jobs-list li > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-block: 8px;
+}

@@ -1,5 +1,7 @@
 """原目录默认执行、连续对话与逐轮固定证据的真实文件/Git/命令回归。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 import hashlib
@@ -96,7 +98,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
         async with client_for(config, model) as (client, manager):
             identifier = manager.catalog.register(selected)
             source = {'project_id' if kind == 'project' else 'workspace_id': identifier}
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', **source}))
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', **source}))
             assert first['execution_mode'] == 'local' and Path(first['workspace']) == selected
             assert Path(first['source_path']) == selected
             assert first['project'] is None
@@ -110,7 +112,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
             old_diff = (await client.get('/api/runs/' + first['run_id'] + '/diff')).json()
             assert '+first' in old_diff['content']
             (selected / 'result.txt').write_text(initial + 'first\n外部编辑\n', encoding='utf-8')
-            second = await finish(client, await client.post('/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())}))
+            second = await finish(client, await submit_followup(client, '/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())}))
             assert second['workspace'] == first['workspace'] and second['execution_mode'] == 'local'
             assert (selected / 'result.txt').read_text(encoding='utf-8') == initial + 'first\n外部编辑\nsecond\n'
             artifact = await client.get('/api/runs/' + first['run_id'] + '/artifacts', params={'location': 'workspace', 'path': 'result.txt', 'preview': True})
@@ -122,7 +124,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
             assert selected.exists() and not config.worktrees_root.exists() and not manager.projects.worktrees_root.exists()
         async with client_for(config, model) as (client, manager):
             assert (await client.get('/api/runs/' + second['run_id'] + '/conversation')).json()['can_continue']
-            third = await finish(client, await client.post('/api/runs/' + second['run_id'] + '/followups', json={'prompt': 'third', 'request_id': str(uuid4())}))
+            third = await finish(client, await submit_followup(client, '/api/runs/' + second['run_id'] + '/followups', json={'prompt': 'third', 'request_id': str(uuid4())}))
             assert third['turn_index'] == 3 and third['workspace'] == str(selected)
             assert model.command_directories == [str(selected)] * 3
             assert (selected / 'result.txt').read_text(encoding='utf-8').endswith('second\nthird\n')
@@ -149,7 +151,7 @@ def test_configured_directory_defaults_local_without_catalog_registration(tmp_pa
         model = LocalModel()
         async with client_for(config, model) as (client, manager):
             source = {'project_id': 'code'} if kind == 'project' else {'workspace_id': 'files'}
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', **source}))
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', **source}))
             assert first['execution_mode'] == 'local' and Path(first['workspace']) == selected
             assert model.command_directories == [str(selected)]
             assert 'first' in (selected / 'result.txt').read_text(encoding='utf-8')
@@ -167,7 +169,7 @@ def test_personal_folder_rejects_hidden_copy_execution(tmp_path: Path, monkeypat
         model = LocalModel()
         async with client_for(config, model) as (client, manager):
             identifier = manager.catalog.register(selected)
-            response = await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier, 'execution_mode': 'isolated'})
+            response = await submit_run(client, json={'prompt': 'first', 'workspace_id': identifier, 'execution_mode': 'isolated'})
             assert response.status_code == 400 and response.json()['error']['code'] == 'workspace_copy_not_supported'
             assert not model.command_directories and not config.worktrees_root.exists()
             assert (selected / 'result.txt').read_text(encoding='utf-8') == 'existing\n'
@@ -184,7 +186,7 @@ def test_explicit_worktree_does_not_modify_selected_directory(tmp_path: Path, mo
         """登记后显式请求isolated，核对来源及实际目录和已保存差异。"""
         async with client_for(config, LocalModel()) as (client, manager):
             identifier = manager.catalog.register(selected)
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'execution_mode': 'isolated', 'project_id': identifier}))
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', 'execution_mode': 'isolated', 'project_id': identifier}))
             assert first['execution_mode'] == 'isolated' and Path(first['workspace']) != selected
             assert first['local_changes'] is None
             assert (selected / 'result.txt').read_bytes() == before
@@ -201,13 +203,13 @@ def test_replaced_directory_is_not_silently_used_by_followup(tmp_path: Path, mon
         """首轮结束后替换目录对象，验证继续条件和提交均拒绝，模型调用数保持。"""
         async with client_for(config, model) as (client, manager):
             identifier = manager.catalog.register(selected)
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier}))
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', 'workspace_id': identifier}))
             selected.rename(tmp_path / '原文件保持')
             selected.mkdir()
             (selected / 'result.txt').write_text('无关目录\n', encoding='utf-8')
             view = (await client.get('/api/runs/' + first['run_id'] + '/conversation')).json()
             assert not view['can_continue'] and view['blocked_code'] == 'local_workspace_changed'
-            response = await client.post('/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())})
+            response = await submit_followup(client, '/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())})
             assert response.status_code == 409 and response.json()['error']['code'] == 'local_workspace_changed'
             assert model.command_directories == [str(selected)]
             assert (selected / 'result.txt').read_text(encoding='utf-8') == '无关目录\n'
@@ -226,7 +228,7 @@ def test_local_report_limit_does_not_force_a_copy_or_block_continuation(tmp_path
             manager.local_changes.before.MAX_BYTES = 128
             manager.local_changes.after.MAX_BYTES = 128
             identifier = manager.catalog.register(selected)
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'workspace_id': identifier}))
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', 'workspace_id': identifier}))
             assert first['local_changes']['status'] == 'error'
             assert not first['local_changes']['patch_available']
             assert Path(first['workspace']) == selected
@@ -234,7 +236,7 @@ def test_local_report_limit_does_not_force_a_copy_or_block_continuation(tmp_path
             artifact = await client.get('/api/runs/' + first['run_id'] + '/artifacts', params={'location': 'workspace', 'path': 'result.txt', 'preview': True})
             assert first['result']['artifact_status'] == 'incomplete' and first['result']['artifact_warnings']
             assert artifact.status_code == 404 and artifact.json()['error']['code'] == 'artifact_not_found'
-            second = await finish(client, await client.post('/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())}))
+            second = await finish(client, await submit_followup(client, '/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4())}))
             assert Path(second['workspace']) == selected and second['local_changes']['status'] == 'error'
             assert (selected / 'result.txt').read_text(encoding='utf-8') == 'existing\nfirst\nsecond\n'
     asyncio.run(scenario())
@@ -251,11 +253,11 @@ def test_execution_mode_validation_and_saved_diff_integrity(tmp_path: Path, monk
         async with client_for(config, model) as (client, manager):
             identifier = manager.catalog.register(selected)
             for extra in ({'execution_mode': 'other'}, {'execution_mode': 'local', 'base_ref': 'main'}):
-                response = await client.post('/api/runs', json={'prompt': 'first', 'project_id': identifier, **extra})
+                response = await submit_run(client, json={'prompt': 'first', 'project_id': identifier, **extra})
                 assert response.status_code == 422
             assert not model.command_directories
-            first = await finish(client, await client.post('/api/runs', json={'prompt': 'first', 'project_id': identifier}))
-            response = await client.post('/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4()), 'execution_mode': 'isolated'})
+            first = await finish(client, await submit_run(client, json={'prompt': 'first', 'project_id': identifier}))
+            response = await submit_followup(client, '/api/runs/' + first['run_id'] + '/followups', json={'prompt': 'second', 'request_id': str(uuid4()), 'execution_mode': 'isolated'})
             assert response.status_code == 422
             assert model.command_directories == [str(selected)]
             patch = manager.local_changes.patch_path(__import__('uuid').UUID(first['run_id']))

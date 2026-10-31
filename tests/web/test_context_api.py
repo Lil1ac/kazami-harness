@@ -1,5 +1,7 @@
 """通过真实 ASGI、Runner 和 Git 工作树验证上下文预算与指令快照的公开契约。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -85,7 +87,7 @@ async def completed(client: httpx.AsyncClient, run_id: str) -> dict:
 async def create_run(client: httpx.AsyncClient, **overrides) -> dict:
     """合并 overrides 到普通工作区任务并提交；要求 202，等待收尾后返回最终视图。"""
     payload = {"prompt": "按项目约定检查任务", "workspace_id": "sample", **overrides}
-    response = await client.post("/api/runs", json=payload)
+    response = await submit_run(client, json=payload)
     assert response.status_code == 202, response.text
     return await completed(client, response.json()["run_id"])
 
@@ -266,7 +268,7 @@ def test_invalid_context_configuration_is_safe_and_creates_no_records(context_we
         async with context_client(context_web_config, model) as client:
             initial = (await client.get("/api/options")).json()["config"]["context"]
             for policy in invalid:
-                response = await client.post("/api/runs", json={
+                response = await submit_run(client, json={
                     "prompt": "应在启动前拒绝", "workspace_id": "sample", "config": {"context": policy},
                 })
                 assert response.status_code in {400, 422}, response.text
@@ -304,7 +306,7 @@ def test_git_project_loads_instruction_from_fixed_worktree_not_dirty_source(cont
         """提交真实项目任务，核对基线规则与模型输入，再通过既有审阅接口丢弃测试工作树。"""
         model = RecordingModel()
         async with context_client(context_web_config, model) as client:
-            response = await client.post("/api/runs", json={"prompt": "只读核对项目规则", "project_id": "project", "execution_mode": "isolated"})
+            response = await submit_run(client, json={"prompt": "只读核对项目规则", "project_id": "project", "execution_mode": "isolated"})
             assert response.status_code == 202, response.text
             view = await completed(client, response.json()["run_id"])
             assert view["result"]["execution_status"] == "completed"

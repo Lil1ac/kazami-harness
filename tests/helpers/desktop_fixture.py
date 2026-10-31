@@ -35,7 +35,7 @@ class FixtureModel:
         if any(item.get("role") == "user" and "等待取消" in str(item.get("content", "")) for item in messages):
             await asyncio.Event().wait()
         # 成功的规划工具历史已经投影，由每次请求中的最新宿主状态确定是否已经有方案。
-        planning = json.loads(messages[0]["content"].rsplit("\n", 1)[-1])
+        planning = json.loads(messages[0]["content"].split("[宿主任务清单]")[0].rstrip().rsplit("\n", 1)[-1])
         if planning["current_plan"] is None:
             return self.responses[0]
         completed = {call.get("function", {}).get("name") for message in messages for call in message.get("tool_calls", [])}

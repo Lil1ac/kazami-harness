@@ -15,6 +15,7 @@ from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.schemas import RunManifest, RunResult
 from agent_harness.runner import CancellationState, RunOutcome, exit_code, run_task, validate_auto_repair
 from agent_harness.store import RunStore, StorageError
+from agent_harness.tasks import TaskError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -228,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         handlers = {"run": _run, "show": _show, "serve": _serve}
         return handlers[args.command](args)
-    except ConfigurationError as exc:
+    except (ConfigurationError, TaskError) as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2
     except StorageError as exc:

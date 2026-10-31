@@ -1,5 +1,7 @@
 """网页开启自动修复、Git/原目录、重启接续与逐次固定证据的真实API回归。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 import hashlib
 import json
@@ -45,7 +47,7 @@ def test_public_repair_and_followup_choice_survive_restart(project_config, monke
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                     if not restart:
-                        first = await finished(client, await client.post('/api/runs', json={
+                        first = await finished(client, await submit_run(client, json={
                             'project_id':'backend', 'execution_mode':mode, 'prompt':'生成首轮', 'config':{'auto_repair':True},
                         }))
                         assert first['result']['validation_status'] == 'passed' and first['result']['repair_attempts'] == 1
@@ -55,11 +57,11 @@ def test_public_repair_and_followup_choice_survive_restart(project_config, monke
                         references = first['result']['verification_attempts'][0]['result']['artifacts']
                         old_streams = {a['path']:(records/first['run_id']/a['path']).read_bytes() for a in references}
                     else:
-                        second = await finished(client, await client.post('/api/runs/'+first['run_id']+'/followups', json={
+                        second = await finished(client, await submit_followup(client, '/api/runs/'+first['run_id']+'/followups', json={
                             'request_id':str(uuid4()), 'prompt':'这轮关闭自动修复', 'config':{'auto_repair':False},
                         }))
                         assert second['result']['validation_status'] == 'failed' and second['result']['repair_attempts'] == 0
-                        third = await finished(client, await client.post('/api/runs/'+second['run_id']+'/followups', json={
+                        third = await finished(client, await submit_followup(client, '/api/runs/'+second['run_id']+'/followups', json={
                             'request_id':str(uuid4()), 'prompt':'重新开启修复', 'config':{'auto_repair':True},
                         }))
                         assert third['result']['validation_status'] == 'passed' and third['result']['repair_attempts'] == 1
@@ -92,7 +94,7 @@ def test_auto_repair_without_public_tests_rejected_before_model(project_config, 
         app = create_app(config, RunConfig(tools=['run_command']), records, model_client=model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
-                response = await client.post('/api/runs', json={'project_id':'backend','prompt':'错误请求','config':{'auto_repair':True}})
+                response = await submit_run(client, json={'project_id':'backend','prompt':'错误请求','config':{'auto_repair':True}})
                 assert response.status_code == 400 and '公开项目测试' in response.json()['error']['message']
                 assert not list(records.glob('*/run.json')) and not model.requests
     asyncio.run(scenario())
@@ -111,7 +113,7 @@ def test_interrupted_repair_keeps_check_history_and_can_continue_without_replay(
         app = create_app(config, RunConfig(tools=['run_command']), records, model_client=gated)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
-                response = await client.post('/api/runs', json={'project_id':'backend','prompt':'首轮修复','config':{'auto_repair':True}})
+                response = await submit_run(client, json={'project_id':'backend','prompt':'首轮修复','config':{'auto_repair':True}})
                 assert response.status_code == 202
                 await asyncio.wait_for(gated.entered.wait(), 10)
                 identifier = response.json()['run_id']
@@ -132,7 +134,7 @@ def test_interrupted_repair_keeps_check_history_and_can_continue_without_replay(
                 for reference in view['result']['verification_attempts'][0]['result']['artifacts']:
                     raw = await client.get('/api/runs/'+identifier+'/artifacts', params={'location':'run','path':reference['path']})
                     assert raw.status_code == 200
-                follow = await finished(client, await client.post('/api/runs/'+identifier+'/followups', json={
+                follow = await finished(client, await submit_followup(client, '/api/runs/'+identifier+'/followups', json={
                     'request_id':str(uuid4()), 'prompt':'核对后继续修复',
                 }))
                 assert follow['result']['validation_status'] == 'passed' and follow['config']['auto_repair']

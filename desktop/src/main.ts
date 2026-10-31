@@ -65,15 +65,18 @@ async function requestQuit(): Promise<void> {
   try {
     const state = backend
       ? await backend
-          .read<{ busy_run_id: string | null }>("/api/options")
+          .read<{ busy_run_id: string | null; queue_pending: number }>(
+            "/api/options",
+          )
           .catch(/* 后台已停止时仍允许退出窗口。 */ () => null)
       : null;
-    if (state?.busy_run_id && window) {
+    if ((state?.busy_run_id || state?.queue_pending) && window) {
       const answer = await dialog.showMessageBox(window, {
         type: "question",
         title: "退出 Agent Harness",
-        message: "任务仍在运行",
-        detail: "退出将取消任务，并等待进程清理和记录保存。",
+        message: "仍有运行或排队工作",
+        detail:
+          "退出将停止出队并取消活动运行，等待清理和记录保存；未执行请求保留，重启后手动恢复。",
         buttons: ["继续运行", "取消任务并退出"],
         defaultId: 0,
         cancelId: 0,

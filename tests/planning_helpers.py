@@ -8,11 +8,12 @@ from agent_harness.planning import PlanningController
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.workspace import Workspace
+from agent_harness.tasks import WorkStore, TaskController
 from agent_harness.memory import MemoryController
 
 
 def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[dict], list[dict]]:
-    """返回value当前协议下的builder、完整首轮消息和工具；root仅用于边界，不创建运行。"""
+    """返回value当前协议下的builder、消息和工具；root允许初始化宿主任务元数据，不创建Run或项目文件。"""
     # 与 Runner 一样先固定解释器，精确边界测试不能使用尚未准备的任务提示代替真实输入。
     execution = value.task.python_execution or prepare_python_execution(value.task.workspace)
     task = value.task.model_copy(update={"python_execution": execution})
@@ -24,8 +25,10 @@ def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[
 
     planning = PlanningController(value.planning, value.task.workspace, emit)
     executor.bind_planning(planning)
+    executor.tasks = TaskController(WorkStore(root), value.model_copy(update={"task": task}), planning)
     executor.memory = MemoryController(root, value, emit)
     builder.memory = executor.memory
+    builder.tasks = executor.tasks
     messages = builder.initial_messages()
     builder.bind_planning(planning, messages[0]["content"])
     messages[0]["content"] += planning.instructions()
@@ -36,7 +39,7 @@ def include_planning_overhead(config: RunConfig, workspace: Path, root: Path) ->
     """给测试config计入新增固定协议开销，返回None；不调整生产预算，也不放宽历史断言。
 
     原config的字节预算表示旧工具下可用的测试空间；仅增加当前新增系统正文/工具定义的精确
-    差额，并换算触发/目标比例，使留给工具历史的绝对空间与原用例一致。workspace/root不写入。
+    差额，并换算触发/目标比例，使留给工具历史的绝对空间与原用例一致；workspace只读，root只初始化宿主元数据。
     """
     from uuid import uuid4
     manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="计算固定协议开销", workspace=workspace, python_execution=prepare_python_execution(workspace)), config=config)

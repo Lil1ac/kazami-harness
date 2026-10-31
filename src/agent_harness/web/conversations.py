@@ -115,7 +115,7 @@ class ConversationService:
             turns.append(turn)
         busy = self.manager.busy_run_id
         preparing = self.manager._submission is not None and not self.manager._submission.done()
-        if busy is not None or preparing:
+        if busy == record.run_ids[-1] or (preparing and busy == record.run_ids[-1]):
             blocked = SessionError('run_busy', '已有任务正在准备、运行或保存快照，请等待完成或取消。')
         elif any(item.state == 'preparing' for item in record.requests.values()):
             blocked = SessionError('request_uncertain', '上次追加准备尚未确认，请核对本地状态；不会自动重新执行。')
@@ -191,6 +191,8 @@ class ConversationService:
                 if section in patch:
                     merged[section] = {**merged[section], **patch.pop(section)}
             merged.update(patch)
+            if self.manager._queued_memory_policy is not None:
+                merged["memory"] = self.manager._queued_memory_policy
             try:
                 config = load_config(overrides=merged)
                 if config.planning_policy == "required" and not (planning.plans and planning.plans[-1].status == "approved"):
@@ -198,7 +200,7 @@ class ConversationService:
                 prompt = request.prompt.strip()
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
-                identifier = uuid4()
+                identifier = self.manager._queued_run_id or uuid4()
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os

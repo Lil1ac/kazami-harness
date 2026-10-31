@@ -1,5 +1,7 @@
 """真实运行验证会话导航聚合、分页、项目隔离与坏记录保守展示。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -49,14 +51,14 @@ async def service(config: WebConfig, model: NavigationModel):
 
 async def start(client: httpx.AsyncClient, source: str, prompt: str) -> dict:
     """在source登记下真实创建首轮并等待结束，返回运行视图。"""
-    response=await client.post('/api/runs',json={'workspace_id':source,'prompt':prompt})
+    response=await submit_run(client, json={'workspace_id':source,'prompt':prompt})
     assert response.status_code==202,response.text
     return await finish(client,response.json()['run_id'])
 
 
 async def follow(client: httpx.AsyncClient, parent: dict, prompt: str) -> dict:
     """从parent末轮追加要求，返回已接纳视图；等待由调用者按场景决定。"""
-    response=await client.post('/api/runs/'+parent['run_id']+'/followups',json={'request_id':str(uuid4()),'prompt':prompt})
+    response=await submit_followup(client, '/api/runs/'+parent['run_id']+'/followups', json={'request_id':str(uuid4()),'prompt':prompt})
     assert response.status_code==202,response.text
     return response.json()
 

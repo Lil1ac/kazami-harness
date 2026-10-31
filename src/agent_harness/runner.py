@@ -21,6 +21,7 @@ from .local_execution import LocalChangeStore
 from .projects import ProjectError, ProjectManager
 from .snapshots import SnapshotError
 from .planning import PlanningController
+from .tasks import WorkStore, TaskController, ExecutionLease
 from .verifier import Verifier
 
 
@@ -66,6 +67,8 @@ class RunContext:
         保留原阶段与计数，禁止后续按“已开始”调度副作用。
         """
         self.event_count = self.store.append(kind, payload).seq
+        if kind == "tasks_snapshot" and payload is not None:
+            self.result.tasks = payload["state"]  # 已提交快照供实时视图与中断历史共同读取。
         phases = {
             "model_request_started": "model_request",
             "context_compaction_started": "context_compaction",
@@ -195,7 +198,7 @@ def _interrupted_verification(verifier: Verifier, reason: str, *, timed_out: boo
     return previous.model_copy(update={"status": "error", "reason": reason, "timed_out": timed_out, "cancelled": cancelled})
 
 
-async def run_task(
+async def _run_task(
     manifest: RunManifest,
     runs_root: Path,
     api_key: str,
@@ -270,8 +273,12 @@ async def run_task(
     deadline = started_at + manifest.config.limits.run_timeout_seconds
     context = RunContext(manifest, store, result, deadline, started_at=started_at)
     planning = PlanningController(manifest.planning, root, context.emit)
+    tasks = TaskController(WorkStore(runs_root), manifest, planning)
+    result.tasks = tasks.snapshot()
+    context.emit("tasks_snapshot", {"state": result.tasks})
     if hasattr(tool_executor, "bind_planning"):
         tool_executor.bind_planning(planning)
+        tool_executor.tasks = tasks
     verifier = Verifier(manifest.config.limits, store.run_dir) if manifest.task.verifier is not None else None
     from .agent import run_agent
 
@@ -384,6 +391,8 @@ async def run_task(
         context.emit("runtime_error", {"code": result.stop_reason, "error_type": type(error).__name__})
 
     _collect_tool_state(result, tool_executor)
+    tasks.service.release("前轮已结束，请核对现场后接续。" if result.execution_status != "completed" else "前轮尚未完成此项，请接续。")
+    result.tasks = tasks.snapshot()
     result.planning = planning.state.model_copy(deep=True)
     context.emit("artifact_collection_started")
     references, warnings = await _file_operation(_capture_artifacts, manifest, changes, projects, finalizing=True)
@@ -399,6 +408,26 @@ async def run_task(
     result.active_duration_seconds = context.active_duration()
     store.finalize(result)
     return RunOutcome(result, store.run_dir, context.event_count + 1)
+
+
+async def run_task(manifest: RunManifest, runs_root: Path, api_key: str, *, execution_lease: ExecutionLease | None = None, **options) -> RunOutcome:
+    """持有数据目录执行锁运行 manifest，返回固定结果；所有退出路径释放进程锁。
+
+    runs_root 为同宿主记录目录，api_key 仅传模型；options 接收 _run_task 的可选依赖、
+    取消来源与回调，None 行为沿用该函数。锁冲突在文件快照前抛 TaskError，不执行项目动作。
+    """
+    validate_execution(manifest, api_key)
+    validate_auto_repair(manifest)  # 无效配置在创建执行锁文件前拒绝。
+    lease = execution_lease or ExecutionLease(runs_root)
+    if execution_lease is None:
+        lease.acquire()
+    elif lease.root != runs_root.resolve() or lease.handle is None:
+        raise StorageError("宿主传入的执行锁不属于当前记录目录。")
+    try:
+        return await _run_task(manifest, runs_root, api_key, **options)
+    finally:
+        if execution_lease is None:
+            lease.release()
 
 
 def exit_code(result: RunResult) -> int:

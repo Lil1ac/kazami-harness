@@ -95,5 +95,9 @@ npm.cmd --prefix frontend test
 
 本次未执行安装或卸载。代码、测试、公开设置与锁文件一并提交；依赖、缓存、运行记录、测试日志和发布二进制仍按仓库忽略规则保存。原始日志为 `.runtime/desktop-commit-backend-full.txt`、`.runtime/desktop-commit-frontend-full.txt`、`.runtime/desktop-commit-electron-tests.txt`、`.runtime/desktop-commit-native-smoke.txt`、`.runtime/desktop-commit-backend-package.txt`、`.runtime/desktop-commit-package.txt`；独立打包启动检查见 `.runtime/desktop-commit-20261030/packaged-smoke.json`。
 
+## 任务和队列接入（2026-10-31）
+
+桌面与网页复用统一作业接纳和任务管理 API。主进程退出核对活动运行及未执行队列，先停止出队，再等待取消、进程清理和记录保存；未执行请求持久保留，重启后从后台中心明确恢复。任务完成和检查结果分别展示，任务/作业状态通过事务事件及只读轮询观察。相关协议及验收见[任务说明](TASKS.md)。
+
 
 项目记忆 Markdown 导出沿用统一 `/api/desktop/download` 入口，宿主重新核验项目登记与受保护缓存后交给原生下载，使用已配置目录。跨源地址、附加查询及目录穿越拒绝；记忆的来源和运行快照协议见[项目记忆](MEMORY.md)。本轮只做宿主协议和组件联动回归，没有把这些证据写成安装包验收。

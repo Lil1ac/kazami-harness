@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getTasks } from '../api';
 import { Alert, Button, Checkbox, Input, Select } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
 import { phaseLabel } from '../format';
@@ -7,7 +9,9 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
 import { PlanningPanel } from './PlanningPanel';
+import { TasksPanel } from './TasksPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
+import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
@@ -135,6 +139,32 @@ export function ConversationPanel({
   skills = [],
 }: ConversationPanelProps) {
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
+  const tasks = useQuery({
+    queryKey: ['tasks', run?.run_id || '', false],
+    queryFn: /* 与任务组件共享同一查询，不读取历史版本来推测当前状态。 */ () =>
+      getTasks(run!.run_id),
+    enabled: Boolean(run),
+    refetchInterval: 1500,
+  });
+  const planning = useMemo(
+    /* 当前方案进度统一投影自工作项；原始 Run 快照始终保持不可变。 */ () => {
+      if (!run) return undefined;
+      const state = structuredClone(run.result.planning);
+      if (tasks.data)
+        for (const plan of state.plans)
+          for (const step of plan.steps) {
+            const task = tasks.data.items.find(
+              /* 版本和稳定步骤编号必须同时匹配。 */ (item) =>
+                item.source?.plan_version === plan.version && item.source.step_id === step.id,
+            );
+            if (task)
+              step.status =
+                task.blocked_reason || task.status === 'cancelled' ? 'blocked' : task.status;
+          }
+      return state;
+    },
+    [run?.result.planning, tasks.data],
+  );
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
   const content = useRef<HTMLDivElement>(null); // 用尺寸变化补偿字体加载与过程展开。
   const atBottom = useRef(true); // 用户上翻后关闭跟随，不打断历史阅读。
@@ -220,11 +250,12 @@ export function ConversationPanel({
               <div className="user-message-body">{send.pending!.body.prompt}</div>
             </div>
           )}
+          {run && <TasksPanel runId={run.run_id} active={run.active} />}
           {run?.context?.memory?.proposals?.length ? <MemoryPanel runId={run.run_id} /> : null}
           {run && (
             <PlanningPanel
               runId={run.run_id}
-              state={run.result.planning}
+              state={planning!}
               disabled={!send.canDecide}
               onDecision={send.decide}
             />
@@ -238,6 +269,11 @@ export function ConversationPanel({
           </Button>
         )}
         <div className="composer-inner">
+          {send.queuedJob && (
+            <p role="status">
+              请求已接纳 · <Link to={'/jobs/' + send.queuedJob.id}>查看后台作业</Link>
+            </p>
+          )}
           {send.error && (
             <Alert
               type="error"

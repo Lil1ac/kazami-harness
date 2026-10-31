@@ -23,7 +23,7 @@ function pendingPlan(): PlanningState {
         title: '实现登录功能',
         summary: '前后端共同实现登录。',
         scope: ['认证接口与登录页'],
-        steps: [{ text: '实现并联调', status: 'pending' }],
+        steps: [{ id: 'step-1', text: '实现并联调', status: 'pending' }],
         verification: ['页面提交登录并核对会话'],
         workspace: 'D:/project',
         workspace_identity: [1, 2],
@@ -102,8 +102,8 @@ it('批准后收起长文并展示真实步骤进度，展开不会发送请求�
   state.pending = null;
   state.plans[0].status = 'approved';
   state.plans[0].steps = [
-    { text: '实现接口', status: 'completed' },
-    { text: '联调登录页面', status: 'in_progress' },
+    { id: 'step-2', text: '实现接口', status: 'completed' },
+    { id: 'step-3', text: '联调登录页面', status: 'in_progress' },
   ];
   const onDecision = vi.fn();
   const { rerender } = render(

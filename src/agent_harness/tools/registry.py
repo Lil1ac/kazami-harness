@@ -11,6 +11,7 @@ from ..planning import PLANNING_TOOLS, PlanningController, PlanningError
 from ..execution import PythonExecutionError, prepare_python_execution, validate_python_execution
 from ..schemas import PythonExecution, RunConfig
 from ..store import StorageError
+from ..tasks import TASK_TOOLS, TaskController, TaskError
 from ..memory import MEMORY_TOOLS, MemoryController, MemoryError
 from ..workspace import WorkspaceError
 from .command import RunCommandArguments, run_command
@@ -21,6 +22,7 @@ from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, 
 
 _TOOL_SPECS = {
     **MEMORY_TOOLS,
+    **TASK_TOOLS,
     **PLANNING_TOOLS,
     "list_files": (ListFilesArguments, "只读列举工作区目录的直接子项，无需执行命令。不递归；对子目录继续传directory。offset/limit分页，next_offset为空表示无下一页；truncated或skipped表示并非完整目录。"),
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
@@ -58,6 +60,7 @@ class ToolExecutor:
         self.cancelled_result: dict | None = None
         self.context_archive: ContextArchive | None = None  # 压缩启用时绑定本轮证据归档，只开放只读引用。
         self.planning: PlanningController | None = None  # Runner绑定后开放规划工具并执行宿主只读限制。
+        self.tasks: TaskController | None = None  # 当前会话工作项及宿主校验入口。
         self.memory: MemoryController | None = None  # 当前项目固定读取集，模型只能提出候选。
         self.memory_phase = "execution"  # 宿主在模型请求前更新，验收修复阶段为 verification。
 
@@ -97,6 +100,8 @@ class ToolExecutor:
             names.extend(PLANNING_TOOLS)
             if "read_file" in names:
                 names.append("list_files")
+        if self.tasks is not None:
+            names.extend(TASK_TOOLS)
         if self.memory is not None:
             if self.config.memory.use:
                 names.extend(["memory_search", "memory_get"])
@@ -172,6 +177,12 @@ class ToolExecutor:
             if name in MEMORY_TOOLS and self.memory is not None:
                 data = self.memory.execute(name, arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": name == "memory_get" and not data["eof"]}
+            if name in TASK_TOOLS and self.tasks is not None:
+                data = self.tasks.execute(name, arguments)
+                state = self.tasks.snapshot()
+                if name in {"task_create", "task_update"}:
+                    self.planning.emit("tasks_snapshot", {"state": state, "planning": self.planning.state.model_dump(mode="json")})
+                return {"ok": True, "data": data, "error": None, "truncated": False}
             if name == "list_files":
                 data = list_files(self.workspace, self.runs_root, arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": data["truncated"]}
@@ -201,6 +212,12 @@ class ToolExecutor:
             raise
         except MemoryError as error:
             return _error(error.code, error.message)
+        except TaskError as error:
+            result = _error(error.code, error.message)
+            if error.code == 'task_revision_conflict' and self.tasks is not None:
+                current = self.tasks.service.get(arguments.task_id)
+                result['data'] = {"current_task": {key: current[key] for key in ('id', 'revision', 'status', 'blocked_reason')}}
+            return result
         except PlanningError as error:
             return _error(error.code, error.message)
         except PythonExecutionError as error:

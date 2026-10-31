@@ -1,5 +1,7 @@
 """通过生产 API 验证模型命令、宿主测试、多轮和独立工作树使用当轮源码。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 import hashlib
@@ -115,14 +117,14 @@ def test_followups_share_current_sources_and_preserve_old_snapshot(tmp_path: Pat
     async def scenario() -> None:
         """提交首轮及真实追加，并核对配置、导入结果与旧记录不受新工作树影响。"""
         async with client_for(config, model) as (client, manager):
-            first = await finish(client, await client.post("/api/runs", json={"prompt": "first", "project_id": "code", "base_ref": "HEAD", "execution_mode": mode}))
+            first = await finish(client, await submit_run(client, json={"prompt": "first", "project_id": "code", "base_ref": "HEAD", "execution_mode": mode}))
             assert first["result"]["validation_status"] == "passed", first["result"]
             first_root = Path(first["workspace"])
             expected = [str(first_root), str(first_root / "src")]
             assert first["python_execution"]["python_paths"] == expected
             manifest = manager.runs_root / first["run_id"] / "run.json"
             digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
-            second = await finish(client, await client.post(f"/api/runs/{first['run_id']}/followups", json={"request_id": str(uuid4()), "prompt": "second"}))
+            second = await finish(client, await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json={"request_id": str(uuid4()), "prompt": "second"}))
             assert second["result"]["validation_status"] == "passed", second["result"]
             second_root = Path(second["workspace"])
             assert second_root == first_root  # 原目录和隔离会话均持续复用各自工作区。
@@ -148,7 +150,7 @@ def test_no_verifier_still_uses_selected_source(tmp_path: Path, monkeypatch, kin
         """通过真实提交链路验证无验收时的源码路径与命令观察。"""
         async with client_for(config, model) as (client, _):
             source = {"project_id": "code", "base_ref": "HEAD"} if kind == "project" else {"workspace_id": "folder"}
-            view = await finish(client, await client.post("/api/runs", json={"prompt": "first", **source}))
+            view = await finish(client, await submit_run(client, json={"prompt": "first", **source}))
             assert view["result"]["execution_status"] == "completed"
             assert view["result"]["validation_status"] == "unverified"
             assert all(Path(item["source"]).is_relative_to(Path(view["workspace"])) for item in model.observations)
@@ -166,7 +168,7 @@ def test_invalid_project_source_config_rejects_before_model(tmp_path: Path, monk
     async def scenario() -> None:
         """核对启动错误为受控响应，真实模型夹具没有收到任何执行观察。"""
         async with client_for(config, model) as (client, manager):
-            response = await client.post("/api/runs", json={"prompt": "first", "project_id": "code"})
+            response = await submit_run(client, json={"prompt": "first", "project_id": "code"})
             assert response.status_code == 400, response.text
             assert model.observations == []
             assert not list(manager.runs_root.glob("*/run.json"))
@@ -197,7 +199,7 @@ def test_project_settings_select_real_python_and_survive_restart(tmp_path: Path,
             assert response.json()["python_executable"] == str(executable)
             assert model.calls == 0 and not list(manager.runs_root.glob("*/run.json"))
             payload = {"prompt": "first", "project_id" if kind == "project" else "workspace_id": identifier}
-            view = await finish(client, await client.post("/api/runs", json=payload))
+            view = await finish(client, await submit_run(client, json=payload))
             assert view["python_execution"]["executable"] == str(executable)
             assert all(item["executable"] == str(executable) for item in model.observations)
             assert view["result"]["validation_status"] == ("passed" if kind == "project" else "unverified")
@@ -225,14 +227,14 @@ def test_interpreter_disappears_before_followup_preserves_shared_workspace(tmp_p
     async def scenario() -> None:
         """验证失败不删除会话目录、不调用模型、不污染旧证据，随后使用新请求编号继续。"""
         async with client_for(config, model) as (client, manager):
-            first = await finish(client, await client.post("/api/runs", json={"project_id":"code","execution_mode":"isolated","prompt":"first"}))
+            first = await finish(client, await submit_run(client, json={"project_id":"code","execution_mode":"isolated","prompt":"first"}))
             root = Path(first["workspace"])
             saved = (manager.runs_root / first["run_id"] / "run.json").read_bytes()
             count = model.calls
             backup = executable.with_name(executable.name + ".disabled")
             executable.rename(backup)
             try:
-                response = await client.post(f'/api/runs/{first["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"second"})
+                response = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"second"})
                 assert response.status_code == 409, response.text
                 assert model.calls == count and root.is_dir()
                 state = manager.projects.workspace(__import__("uuid").UUID(first["run_id"]))
@@ -240,7 +242,7 @@ def test_interpreter_disappears_before_followup_preserves_shared_workspace(tmp_p
                 assert (manager.runs_root / first["run_id"] / "run.json").read_bytes() == saved
             finally:
                 backup.rename(executable)
-            second = await finish(client, await client.post(f'/api/runs/{first["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"second"}))
+            second = await finish(client, await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={"request_id":str(uuid4()),"prompt":"second"}))
             assert second["workspace"] == first["workspace"]
             assert second["result"]["execution_status"] == "completed"
     asyncio.run(scenario())

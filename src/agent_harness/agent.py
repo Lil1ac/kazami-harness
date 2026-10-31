@@ -29,6 +29,9 @@ def _skipped(code: str) -> dict:
 
 def _record_tool(context: "RunContext", call: ToolCall, result: dict, messages: list[dict]) -> None:
     """校验并编码结果后再提交事件，每个调用只留下一个已配对的结果。"""
+    if result.get("ok") and call.name not in {"task_create", "task_get", "task_list", "task_update", "memory_propose"}:
+        # 回执明确返回可复制的证据引用，模型不必猜测供应商工具编号或当前运行编号。
+        result = {**result, "evidence_ref": {"run_id": str(context.manifest.run_id), "tool_call_id": call.call_id}}
     # 命令原始输出引用相对其所属运行，跨轮回读时不能误用新运行目录。
     if context.manifest.config.context.compression != "off" and call.name == "run_command":
         result = {**result, "context_source_run_id": str(context.manifest.run_id)}
@@ -158,6 +161,7 @@ async def run_agent(
 
     messages = builder.initial_messages(inherited)
     planning = getattr(executor, "planning", None)
+    builder.tasks = getattr(executor, "tasks", None)  # 与规划动态前缀一起计量，压缩后重新读取宿主状态。
     if planning is not None:
         # 使用原系统消息追加受控协议，保持历史重建约定的消息偏移不变。
         builder.bind_planning(planning, messages[0]["content"])

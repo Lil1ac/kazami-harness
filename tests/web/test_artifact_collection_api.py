@@ -1,5 +1,7 @@
 """网页、原目录/Git隔离、多轮和重启的自动文件登记及固定历史下载回归。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 import hashlib
 import json
@@ -71,13 +73,13 @@ def test_generated_reports_survive_restart_and_only_current_turn_files_are_liste
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                     if restart == 0:
-                        first = await finished(client, await client.post('/api/runs', json={'project_id': 'backend', 'execution_mode': mode, 'prompt': 'first'}))
+                        first = await finished(client, await submit_run(client, json={'project_id': 'backend', 'execution_mode': mode, 'prompt': 'first'}))
                         assert {item['path'] for item in first['result']['artifacts'] if item['location'] == 'workspace'} == {'report.txt'}
                         original = {name: hashlib.sha256((records / first['run_id'] / name).read_bytes()).hexdigest() for name in ('run.json', 'events.jsonl', 'summary.json')}
                     else:
                         parent = first
                         for prompt in ('second', 'third'):
-                            current = await finished(client, await client.post('/api/runs/' + parent['run_id'] + '/followups', json={'prompt': prompt, 'request_id': str(uuid4())}))
+                            current = await finished(client, await submit_followup(client, '/api/runs/' + parent['run_id'] + '/followups', json={'prompt': prompt, 'request_id': str(uuid4())}))
                             expected = {'next.txt'} if prompt == 'third' else {'report.txt'}
                             assert {item['path'] for item in current['result']['artifacts'] if item['location'] == 'workspace'} == expected
                             assert current['result']['artifact_status'] == 'complete'

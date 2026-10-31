@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Alert, Button, Checkbox, Form, Input, Select } from 'antd';
 import { ArrowUpOutlined, BranchesOutlined, SettingOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
-import type { LocalProjectOption, OptionsResponse } from '../types';
+import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
 
@@ -14,6 +14,24 @@ interface TaskValues {
   prompt: string; // 本轮要求，提交时去首尾空白。
   base_ref?: string; // 仅隔离Git执行使用，空白沿用HEAD。
   verifier_id?: string; // 普通目录可选宿主验收器编号。
+}
+
+/** 网络结果未知的新建请求；正文和编号一起冻结，刷新后只核对该请求。 */
+interface PendingNewSubmission {
+  id: string; // 幂等请求 UUID。
+  body: CreateRunRequest; // 已发送的受限参数，不含凭据。
+}
+
+/** 读取 key 下待确认请求；损坏或非对象返回 null，不触发任何网络请求。 */
+function readPendingSubmission(key: string): PendingNewSubmission | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key + ':submission') || 'null');
+    return value && typeof value.id === 'string' && typeof value.body?.prompt === 'string'
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 当前标签页的新任务草稿键；不保存密钥、宿主路径或模型执行状态。 */
@@ -76,6 +94,10 @@ export function TaskForm({
   const config = effectiveConfig(options.config, draft);
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const pendingSubmission = useRef<PendingNewSubmission | null>(readPendingSubmission(draftKey)); // 网络未知时固定原载荷及编号。
+  const [confirmingSubmission, setConfirmingSubmission] = useState(
+    Boolean(pendingSubmission.current),
+  ); // 刷新后保留确认提示。
   const choices = options.recent_projects;
   const selected =
     choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === selectedId) ||
@@ -90,17 +112,54 @@ export function TaskForm({
     [selected?.id],
   );
   const mutation = useMutation({
-    mutationFn: createRun,
+    mutationFn: /* 首次投递前落浏览器草稿，网络未知时重试只确认原请求。 */ (
+      body: CreateRunRequest,
+    ) => {
+      if (!pendingSubmission.current) {
+        try {
+          pendingSubmission.current = JSON.parse(
+            sessionStorage.getItem(draftKey + ':submission') || 'null',
+          );
+        } catch {
+          /* 存储损坏时使用本次输入。 */
+        }
+      }
+      const pending = pendingSubmission.current || {
+        id: crypto.randomUUID(),
+        body: structuredClone(body),
+      };
+      pendingSubmission.current = pending;
+      try {
+        sessionStorage.setItem(draftKey + ':submission', JSON.stringify(pending));
+      } catch {
+        /* 内存仍保持幂等编号。 */
+      }
+      return createRun(pending.body, pending.id);
+    },
     onSuccess: /* 真实接纳后进入已有持续会话。 */ (run) => {
       try {
-        sessionStorage.removeItem(draftKey);
+        if (form.getFieldValue('prompt')?.trim() === pendingSubmission.current?.body.prompt)
+          sessionStorage.removeItem(draftKey);
+        sessionStorage.removeItem(draftKey + ':submission');
       } catch {
         /* 成功运行不依赖浏览器存储。 */
       }
-      cache.setQueryData(['run', run.run_id], run);
       void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
-      navigate('/runs/' + run.run_id);
+      navigate('/jobs/' + run.id);
+      pendingSubmission.current = null;
+      setConfirmingSubmission(false);
+    },
+    onError: /* 确定未接纳的4xx允许更正；网络未知只确认原请求。 */ (error: unknown) => {
+      const status = (error as { status?: number }).status;
+      if (status && status >= 400 && status < 500) {
+        pendingSubmission.current = null;
+        try {
+          sessionStorage.removeItem(draftKey + ':submission');
+        } catch {
+          /* 不影响表单。 */
+        }
+      } else setConfirmingSubmission(true);
     },
   });
 
@@ -167,8 +226,11 @@ export function TaskForm({
           }
         />
       )}
-      {error && (
+      {Boolean(error) && (
         <Alert type="error" showIcon title="操作未完成" description={errorMessage(error)} />
+      )}
+      {confirmingSubmission && (
+        <p role="status">上次提交尚未确认。再次点击开始执行会核对原请求，保留原编号与内容。</p>
       )}
       <ProjectSelector
         projects={choices}
@@ -227,7 +289,6 @@ export function TaskForm({
                 disabled={
                   !selected ||
                   selected.available === false ||
-                  Boolean(busyId) ||
                   !options.key_configured ||
                   projectBusy
                 }

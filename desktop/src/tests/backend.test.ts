@@ -105,8 +105,12 @@ test(
         ).status,
         403,
       );
-      const selection = (await api(backend, token, "/api/projects/pick", {})).selection;
-      const project = await api(backend, token, "/api/projects", { selection_id: selection.selection_id, label: "桌面项目" });
+      const selection = (await api(backend, token, "/api/projects/pick", {}))
+        .selection;
+      const project = await api(backend, token, "/api/projects", {
+        selection_id: selection.selection_id,
+        label: "桌面项目",
+      });
       await api(
         backend,
         token,
@@ -136,21 +140,24 @@ test(
         { config: settings, downloads_directory: path.join(root, "downloads") },
         "PUT",
       );
-      const created = await api(backend, token, "/api/runs", {
-        project_id: project.id,
-        prompt: "先规划再交付",
-        mode: "plan",
+      const created = await api(backend, token, "/api/jobs", {
+        request_id: randomUUID(),
+        create: {
+          project_id: project.id,
+          prompt: "先规划再交付",
+          mode: "plan",
+        },
       });
       const planned = await finished(backend, token, created.run_id);
       assert.equal(planned.result.execution_status, "waiting_input");
       await assert.rejects(readFile(path.join(root, "project/result.txt")));
       const pending = planned.result.planning.pending;
-      const approved = await api(
-        backend,
-        token,
-        `/api/runs/${created.run_id}/followups`,
-        {
-          request_id: randomUUID(),
+      const approvalRequest = randomUUID(); // 作业和续轮共用同一幂等编号。
+      const approved = await api(backend, token, "/api/jobs", {
+        request_id: approvalRequest,
+        parent_run_id: created.run_id,
+        followup: {
+          request_id: approvalRequest,
           prompt: "批准并执行",
           decision: {
             interaction_id: pending.id,
@@ -158,7 +165,7 @@ test(
             plan_version: pending.plan_version,
           },
         },
-      );
+      });
       const result = await finished(backend, token, approved.run_id);
       assert.equal(result.result.execution_status, "completed");
       assert.equal(result.result.validation_status, "passed");

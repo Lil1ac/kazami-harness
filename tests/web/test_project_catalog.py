@@ -1,5 +1,7 @@
 """验证本机目录登记、原生选择的API边界、持久化及未配置测试时的真实运行。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -154,7 +156,7 @@ def test_project_api_binding_rename_run_and_restart(tmp_path: Path, monkeypatch)
             project = response.json()
             identifier = project["id"]
             assert project["label"] == "文件项目" and project["kind"] == "workspace"
-            response = await client.post("/api/runs", json={"workspace_id": identifier, "prompt": "修改文件"})
+            response = await submit_run(client, json={"workspace_id": identifier, "prompt": "修改文件"})
             assert response.status_code == 202
             result = await finish(client, response.json()["run_id"])
             assert result["result"]["execution_status"] == "completed"
@@ -234,7 +236,7 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
             assert project["kind"] == "project" and project["available"] and project["test_argv"] == []
             assert project["branch"]
             assert (await client.get("/api/conversations")).json()["total"] == 0
-            response = await client.post("/api/runs", json={"project_id": project["id"], "prompt": "修改value", "execution_mode": "isolated"})
+            response = await submit_run(client, json={"project_id": project["id"], "prompt": "修改value", "execution_mode": "isolated"})
             assert response.status_code == 202, response.text
             first = await finish(client, response.json()["run_id"])
             assert first["result"]["execution_status"] == "completed"
@@ -251,8 +253,7 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
             response = await client.put("/api/projects/" + project["id"] + "/settings",
                 json={"test_command": program, "test_timeout_seconds": 10.0})
             assert response.status_code == 200, response.text
-            follow = await client.post("/api/runs/" + first["run_id"] + "/followups",
-                json={"request_id":str(uuid4()), "prompt":"继续核对"})
+            follow = await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json={"request_id":str(uuid4()), "prompt":"继续核对"})
             assert follow.status_code == 202, follow.text
             second = await finish(client, follow.json()["run_id"])
             assert second["result"]["validation_status"] == "passed"
@@ -260,7 +261,7 @@ def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_pa
             assert (manager.runs_root / first["run_id"] / "events.jsonl").read_bytes() == saved
             cleared = await client.put("/api/projects/" + project["id"] + "/settings", json={"test_command":""})
             assert cleared.status_code == 200 and cleared.json()["test_argv"] == []
-            assert (await client.post("/api/runs",json={"prompt":"绕过目录","project_id":project["id"],"path":str(tmp_path)})).status_code == 422
+            assert (await submit_run(client, json={"prompt":"绕过目录","project_id":project["id"],"path":str(tmp_path)})).status_code == 422
     asyncio.run(scenario())
 
 
@@ -383,7 +384,7 @@ def test_plain_project_evidence_excludes_other_run_records(tmp_path: Path, monke
         identifier = manager.catalog.register(selected)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", trust_env=False) as client:
-                created = await client.post("/api/runs", json={"workspace_id": identifier, "prompt": "修改value"})
+                created = await submit_run(client, json={"workspace_id": identifier, "prompt": "修改value"})
                 assert created.status_code == 202, created.text
                 result = await finish(client, created.json()["run_id"])
                 copied = Path(result["workspace"])

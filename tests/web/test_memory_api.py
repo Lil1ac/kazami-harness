@@ -13,7 +13,7 @@ from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from tests.web.test_planning_api import call, reply, ScriptModel
-
+from tests.web.test_jobs_api import wait_job
 
 
 class MemoryModel:
@@ -54,22 +54,12 @@ def application(tmp_path: Path, model, config: RunConfig | None = None):
     return app, web
 
 
-async def wait_run(client, run_id: str) -> dict:
-    """轮询 client 中 run_id 的真实终态；返回运行视图，超时失败，不创建新任务。"""
-    for _ in range(500):
-        view = (await client.get("/api/runs/" + run_id)).json()
-        if not view["active"]:
-            return view
-        await asyncio.sleep(0.01)
-    raise AssertionError("记忆验收运行未结束")
-
-
 async def run(client, prompt: str, *, project: str = "one", **options):
     """通过 client 接纳 prompt；project 选择已登记目录，options 覆盖请求，返回真实终态视图。"""
-    response = await client.post("/api/runs", json={"workspace_id": project, "prompt": prompt, **options})
+    response = await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": project, "prompt": prompt, **options}})
     assert response.status_code == 202, response.text
-    job = await wait_run(client, response.json()["run_id"])
-    assert job["result"]["execution_status"] in {"completed", "failed", "waiting_input"}, job
+    job = await wait_job(client, response.json()["id"])
+    assert job["status"] in {"completed", "failed"}, job
     return (await client.get("/api/runs/" + job["run_id"])).json()
 
 
@@ -119,7 +109,7 @@ def test_public_controls_origin_and_version_conflict(tmp_path):
         model = MemoryModel()
         app, _ = application(tmp_path, model)
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-            invalid = await client.post("/api/runs", json={"workspace_id": "one", "prompt": "修改", "config": {"memory": {"max_entries": 999}}})
+            invalid = await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "one", "prompt": "修改", "config": {"memory": {"max_entries": 999}}}})
             assert invalid.status_code == 422 and not model.requests
             body = {"request_id": str(uuid4()), "title": "接口", "content": "保留 legacy_name", "type": "fact", "details": {"subject": "接口", "attribute": "说明", "value": "保留 legacy_name"}}
             saved = await client.post("/api/projects/one/memories", json=body)
@@ -155,6 +145,30 @@ def test_planning_read_only_memory_tools(tmp_path):
     asyncio.run(scenario())
 
 
+def test_queue_freezes_policy_but_reads_current_memory_at_dequeue(tmp_path):
+    """排队时固定使用开关与宿主限额；内容取出队时版本，活动运行保持旧快照。"""
+    async def scenario():
+        """先阻塞首项，再写知识并接纳第二项，取消首项后让第二项真实执行，返回 None。"""
+        model = ScriptModel([], gated=True)
+        app, _ = application(tmp_path, model)
+        async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+            first = (await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "one", "prompt": "占用执行槽"}})).json()
+            await model.entered.wait()
+            second = (await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "two", "prompt": "接口返回约定"}})).json()
+            assert second["status"] == "queued"
+            saved = await client.post("/api/projects/two/memories", json={"request_id": str(uuid4()), "title": "接口返回约定", "content": "排队后保存的字段约定", "type": "fact", "details": {"subject": "接口返回约定", "attribute": "说明", "value": "排队后保存的字段约定"}})
+            assert saved.status_code == 200
+            app.state.manager.run_config.memory.use = False
+            app.state.manager.run_config.memory.max_entries = 0
+            model.responses.append(reply())
+            await client.post("/api/jobs/" + first["id"] + "/cancel")
+            finished = await wait_job(client, second["id"])
+            view = (await client.get("/api/runs/" + finished["run_id"])).json()
+            assert view["context"]["memory"]["selected"][0]["content"] == "排队后保存的字段约定"
+            assert view["config"]["memory"]["use"] is True and view["config"]["memory"]["max_entries"] == 6
+            first_view = (await client.get("/api/runs/" + first["run_id"])).json()
+            assert first_view["context"]["memory"]["selected"] == []
+    asyncio.run(scenario())
 
 
 def test_corrupt_memory_stops_before_model_and_surfaces_warning(tmp_path):
@@ -184,9 +198,9 @@ def test_partial_memory_override_preserves_other_choice_on_followup(tmp_path):
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             first = await run(client, "修改接口", config={"memory": {"capture": False}})
             identifier = str(uuid4())
-            response = await client.post("/api/runs/" + first["run_id"] + "/followups", json={"request_id": identifier, "prompt": "继续修改", "config": {"memory": {"use": False}}})
+            response = await client.post("/api/jobs", json={"request_id": identifier, "parent_run_id": first["run_id"], "followup": {"request_id": identifier, "prompt": "继续修改", "config": {"memory": {"use": False}}}})
             assert response.status_code == 202, response.text
-            job = await wait_run(client, response.json()["run_id"])
+            job = await wait_job(client, response.json()["id"])
             view = (await client.get("/api/runs/" + job["run_id"])).json()
             assert view["config"]["memory"]["use"] is False
             assert view["config"]["memory"]["capture"] is False
@@ -206,9 +220,9 @@ def test_followup_does_not_reinject_deleted_memory_tool_result(tmp_path):
             assert first["context"]["memory"]["reads"]
             await client.patch(f"/api/projects/one/memories/{saved['id']}", json={"request_id": str(uuid4()), "expected_revision": 1, "action": "delete"})
             identifier = str(uuid4())
-            response = await client.post("/api/runs/" + first["run_id"] + "/followups", json={"request_id": identifier, "prompt": "继续检查当前约定"})
+            response = await client.post("/api/jobs", json={"request_id": identifier, "parent_run_id": first["run_id"], "followup": {"request_id": identifier, "prompt": "继续检查当前约定"}})
             assert response.status_code == 202, response.text
-            job = await wait_run(client, response.json()["run_id"])
+            job = await wait_job(client, response.json()["id"])
             second = (await client.get("/api/runs/" + job["run_id"])).json()
             sent = json.dumps(model.requests[-1]["messages"], ensure_ascii=False)
             assert "OBSOLETE_MEMORY_MARKER" not in sent

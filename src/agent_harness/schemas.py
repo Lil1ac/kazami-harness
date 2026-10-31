@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -374,11 +374,17 @@ class HistorySource(DataModel):
     interrupted: bool = False  # 宿主明确接纳中断后继续；旧记录默认False，网页不能设置来源。
 
 
+def new_step_id() -> str:
+    """生成宿主计划步骤的稳定字符串编号；返回 UUID 文本，不访问文件。"""
+    return str(uuid4())
+
+
 class PlanStep(DataModel):
     """计划内稳定编号的执行步骤；进度更新不能修改已经批准的步骤正文。"""
 
+    id: str = Field(min_length=1, max_length=100)  # 宿主创建时生成并持久保存；读取缺失编号须拒绝，不能临时生成。
     text: str = Field(min_length=1, max_length=4000)  # 可审阅的具体工作与产出。
-    status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"  # 当前进度，不表示验收事实。
+    status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"  # AgentTask 的只读进度投影，不能由规划工具独立更新。
 
 
 class PlanRevision(DataModel):
@@ -515,6 +521,7 @@ class VerificationAttempt(DataModel):
 
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
+    tasks: dict = Field(default_factory=dict)  # 当轮固定的工作项快照；历史读取不回查最新清单。
     schema_version: Literal[1] = 1
     run_id: UUID
     # 执行结束与验收通过分别记录：completed 本身不代表产物已经符合要求。

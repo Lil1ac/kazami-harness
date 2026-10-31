@@ -153,6 +153,7 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
   return (
     <div className="workspace-nav-content">
       <nav className="workspace-nav-links" aria-label="主导航">
+        <NavLink to="/jobs" onClick={onNavigate}><span>后台工作</span></NavLink>
         <NavLink
           to="/runs?new=1"
           aria-label="新建对话"

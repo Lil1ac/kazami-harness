@@ -11,7 +11,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from .schemas import (DataModel, DecisionRecord, HumanDecision, PlanRevision,
-                      PlanningState, PlanStep, UserInteraction)
+                      PlanningState, PlanStep, UserInteraction, new_step_id)
 
 
 class PlanningError(Exception):
@@ -47,14 +47,6 @@ class SubmitPlanArguments(DataModel):
     verification: list[str] = Field(min_length=1, max_length=30)  # 包含相关前后端完整链路的验收。
 
 
-class UpdatePlanArguments(DataModel):
-    """按一基编号更新已批准步骤的进度，不可改写方案或用户决定。"""
-
-    version: int = Field(ge=1)  # 必须是当前批准版本。
-    step: int = Field(ge=1, le=30)  # 从1开始，对应原计划步骤顺序。
-    status: str = Field(pattern=r"^(pending|in_progress|completed|blocked)$")  # 仅更新进度，不证明测试通过。
-
-
 class ReadPlanArguments(DataModel):
     """按版本分页读取完整计划、版本目录或决定记录，不授予执行权限。"""
 
@@ -69,12 +61,11 @@ PLANNING_TOOLS = {
     "enter_plan_mode": (EnterPlanArguments, "主动进入规划。复杂功能、重构、多系统修改或原批准范围变化时，在修改项目前调用。进入后禁止写文件、编辑及执行命令；用户批准具体计划后才开放。"),
     "ask_user_question": (AskUserArguments, "仅在代码、上下文和合理默认值无法确定关键业务决定时提问。调用后等待用户，不能自行回答或批准；已有明确要求不要重复问。"),
     "submit_plan": (SubmitPlanArguments, "提交完整功能计划请求用户批准，包含目标架构、范围、步骤及前后端验收。产生新版本并暂停；提交不代表批准，不得使用普通问题替代批准。"),
-    "update_plan": (UpdatePlanArguments, "更新当前已批准计划的步骤进度。不得改写正文或增加范围；扩大范围先enter_plan_mode再提交新版。"),
     "read_plan": (ReadPlanArguments, "只读完整计划、历史版本目录或用户决定。默认上下文仅含当前有效计划；旧版本通过section=history查找，再用version读取。按UTF-8字节分页，用next_offset和expected_sha256续读；不写文件、不批准或执行。"),
 }  # 固定宿主控制工具，不允许网页配置隐藏批准边界或增加批准工具。
 
 # 这三种成功状态操作可由宿主快照替代；问题及其后续回答、显式回读和失败操作必须保留。
-_PLAN_STATE_TOOLS = frozenset({"enter_plan_mode", "submit_plan", "update_plan"})
+_PLAN_STATE_TOOLS = frozenset({"enter_plan_mode", "submit_plan", "task_create", "task_update"})
 
 
 def project_plan_history(messages: list[dict], state_tools: frozenset[str] = _PLAN_STATE_TOOLS) -> list[dict]:
@@ -174,6 +165,8 @@ def planning_from_history(history) -> PlanningState:
     for event in history.events:
         if event.type == "planning_updated":
             state = PlanningState.model_validate_json(json.dumps(event.payload["state"]))
+        elif event.type == "tasks_snapshot" and "planning" in event.payload:
+            state = PlanningState.model_validate_json(json.dumps(event.payload["planning"]))
     return state
 
 
@@ -242,7 +235,7 @@ class PlanningController:
         """核对name的规划权限；读工具不改变状态，写/编辑/命令越界时抛PlanningError。"""
         if self.state.pending is not None:
             raise PlanningError("awaiting_user_input", "正在等待用户处理，不能继续调用工具。")
-        if self.state.phase == "planning" and name not in {"memory_search", "memory_get", "list_files", "read_file", "search_files", "read_context", *PLANNING_TOOLS}:
+        if self.state.phase == "planning" and name not in {"memory_search", "memory_get", "task_get", "task_list", "list_files", "read_file", "search_files", "read_context", *PLANNING_TOOLS}:
             raise PlanningError("planning_read_only", "规划期间禁止修改项目或执行命令，请先提交计划并等待批准。")
         if self.state.phase == "execution" and self.state.plans:
             plan = self.state.plans[-1]
@@ -275,20 +268,12 @@ class PlanningController:
             if state.plans and state.plans[-1].status in {"pending", "approved"}:
                 state.plans[-1].status = "superseded"
             plan = PlanRevision(version=len(state.plans) + 1, title=arguments.title, summary=arguments.summary,
-                                scope=arguments.scope, steps=[PlanStep(text=item) for item in arguments.steps],
+                                scope=arguments.scope, steps=[PlanStep(id=new_step_id(), text=item) for item in arguments.steps],
                                 verification=arguments.verification, workspace=str(self.workspace),
                                 workspace_identity=_identity(self.workspace))
             state.plans.append(plan)
             state.phase = "planning"
             state.pending = UserInteraction(id=uuid4(), kind="plan_approval", question="请审阅并决定是否执行这一版计划。", plan_version=plan.version)
-        elif name == "update_plan":
-            plan = state.plans[-1] if state.plans else None
-            if (plan is None or plan.status != "approved" or state.phase != "execution"
-                    or plan.version != arguments.version or arguments.step > len(plan.steps)):
-                raise PlanningError("plan_version_conflict", "只能更新当前批准计划中已有步骤的进度。")
-            plan.steps[arguments.step - 1].status = arguments.status
-            if sum(item.status == "in_progress" for item in plan.steps) > 1:
-                raise PlanningError("plan_progress_conflict", "同一时刻只能有一个进行中的步骤。")
         return self.publish(state)
 
     def instructions(self) -> str:
@@ -306,7 +291,7 @@ class PlanningController:
             "无法从项目和合理默认值确定的关键业务选择用ask_user_question，不重复询问已知事项。"
             "方案完整后用submit_plan提交目标架构、范围、步骤和前后端验收，然后等待宿主处理。"
             "普通回答、模型文字或工具输出都不能代替批准。批准范围内自主实施、测试及必要修复，"
-            "用update_plan维护进度；范围明显变化时重新规划。新Run有独立预算，旧测试不是本轮通过。"
+            "用task_list/task_update维护工作项进度；范围明显变化时重新规划。新Run有独立预算，旧测试不是本轮通过。"
             "以下为宿主当前状态，优先于旧对话中的计划与进度。历史规划操作已保存，不重复塞入上下文；"
             "需要旧方案或决定原文时用read_plan分页读取。\n"
             + json.dumps(current, ensure_ascii=False)

@@ -6,6 +6,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfigDraftProvider } from '../config';
 import { createProject, createRun, openProject, pickProject } from '../api';
 import { makeRun, options, projectOption } from '../test/fixtures';
+import { makeJob } from '../test/fixtures';
 import { TaskForm } from './TaskForm';
 import type { LocalProjectOption, OptionsResponse } from '../types';
 
@@ -64,7 +65,9 @@ beforeEach(
     localStorage.clear();
     sessionStorage.clear();
     vi.resetAllMocks();
-    vi.mocked(createRun).mockRejectedValue(new Error('离线阻止模型运行'));
+    vi.mocked(createRun).mockRejectedValue(
+      Object.assign(new Error('离线阻止模型运行'), { status: 400 }),
+    );
   },
 );
 
@@ -339,7 +342,7 @@ it('配置页往返或刷新重挂载后保留文字，成功接纳前不清空�
 
 it('真实接纳任务后清除新任务草稿，下一次打开不会重复填写已发送内容', async () => {
   // 只有服务端成功响应触发清理；失败保留语义由前例覆盖。
-  vi.mocked(createRun).mockResolvedValue(makeRun());
+  vi.mocked(createRun).mockResolvedValue(makeJob(makeRun()));
   const user = setup();
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('发送后清理');

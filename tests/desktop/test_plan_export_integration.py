@@ -1,5 +1,7 @@
 """桌面层的计划导出集成验收；独立文件名避免与网页导出测试发生模块名冲突。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 from pathlib import Path
 
@@ -41,7 +43,7 @@ def test_desktop_download_uses_same_plan_artifact_and_configured_directory(plann
         """在真实认证 HTTP 服务中提交和下载；校验原生参数与状态，不模拟计划或附件服务。"""
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", headers={"Authorization": "Bearer offline-token"}) as client:
-                view = await finished(client, await client.post("/api/runs", json={"workspace_id": "files", "prompt": "先规划"}))
+                view = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "先规划"}))
                 url = f"/api/runs/{view['run_id']}/artifacts?location=run&path=plans%2Fv1.md"
                 downloaded = await client.post("/api/desktop/download", json={"url": url})
                 assert downloaded.status_code == 200, downloaded.text

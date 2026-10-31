@@ -10,7 +10,7 @@ import pytest
 
 from agent_harness.compression import message_groups
 from agent_harness.context import ContextBuilder
-from agent_harness.planning import PlanningController, PlanningError, ReadPlanArguments, UpdatePlanArguments, project_plan_history, read_plan
+from agent_harness.planning import PlanningController, PlanningError, ReadPlanArguments, project_plan_history, read_plan
 from agent_harness.providers.base import ModelResponse
 from agent_harness.runner import run_task
 from agent_harness.schemas import DecisionRecord, PlanRevision, PlanningState, PlanStep, RunConfig, TaskSpec
@@ -24,7 +24,7 @@ def plan_state(workspace: Path, count: int = 1) -> PlanningState:
     """为 workspace 创建 count 个版本；最后一版已批准，其余为历史，返回独立可变状态。"""
     identity = workspace.stat()
     plans = [PlanRevision(version=index, title=f"功能 {index}", summary=f"历史版本 {index} 正文。" * 80,
-                          scope=["BOUNDARY_KEEP：不能修改输入文件"], steps=[PlanStep(text="实现并检查")],
+                          scope=["BOUNDARY_KEEP：不能修改输入文件"], steps=[PlanStep(id=str(uuid4()), text="实现并检查")],
                           verification=["核对前后端及文件结果"], workspace=str(workspace),
                           workspace_identity=(identity.st_dev, identity.st_ino), status="approved" if index == count else "superseded")
              for index in range(1, count + 1)]
@@ -61,10 +61,13 @@ def test_current_plan_projection_shrinks_history_and_refreshes_without_mutating_
     assert "历史版本 12 正文" in text and "BOUNDARY_KEEP" in text
     assert prepared.check.input_bytes < raw_size / 4
     assert messages == original and len(controller.state.plans) == 12
-    acknowledgement = controller.execute("update_plan", UpdatePlanArguments(version=12, step=1, status="in_progress"))
-    current = json.loads(builder.build(messages, [], 2).messages[0]["content"].rsplit("\n", 1)[-1])
-    assert current["current_plan"]["steps"][0]["status"] == "in_progress"
-    assert "plans" not in acknowledgement and len(events[0][1]["state"]["plans"]) == 12
+    from agent_harness.tasks import WorkStore, TaskController, TaskUpdate
+    from agent_harness.schemas import RunManifest
+    tasks = TaskController(WorkStore(tmp_path / "records"), RunManifest(run_id=uuid4(), task=TaskSpec(prompt="继续", workspace=tmp_path), config=RunConfig(), planning=state), controller)
+    builder.tasks = tasks
+    task = tasks.service.store.snapshot(tasks.service.session)["items"][0]
+    tasks.service.update(TaskUpdate(request_id="start", task_id=task["id"], expected_revision=1, status="in_progress"))
+    assert 'in_progress' in builder.build(messages, [], 2).messages[0]["content"]
     assert messages == original
 
 
@@ -74,12 +77,12 @@ def test_projection_preserves_mixed_batches_failures_explicit_reads_and_reused_i
     other = tool_group("read_file", {"path": "source.txt"}, {"content": "真实输入"}, "file")
     first[0]["tool_calls"].extend(other[0]["tool_calls"])
     first[0]["content"] = "保留这段观察"
-    messages = first + other[1:] + tool_group("update_plan", {"version": 2}, {}, ok=False) + tool_group("read_plan", {"version": 1}, {"content": "显式回读旧方案"})
+    messages = first + other[1:] + tool_group("task_update", {"version": 2}, {}, ok=False) + tool_group("read_plan", {"version": 1}, {"content": "显式回读旧方案"})
     original = deepcopy(messages)
     projected = project_plan_history(messages)
     message_groups(projected)
     names = [item["function"]["name"] for message in projected for item in message.get("tool_calls", [])]
-    assert names == ["read_file", "update_plan", "read_plan"]
+    assert names == ["read_file", "task_update", "read_plan"]
     assert projected[0]["content"] == "保留这段观察"
     assert "显式回读旧方案" in json.dumps(projected, ensure_ascii=False)
     assert "plan_version_conflict" in json.dumps(projected)
@@ -147,7 +150,9 @@ class CompressingPlanModel:
             return reply(text="完成并核对 BOUNDARY_KEEP。")
         operations = [call("read_file", path="small.txt")]
         if index in {1, 6}:
-            operations.insert(0, call("update_plan", version=1, step=1, status="in_progress" if index == 1 else "completed"))
+            current = json.loads(messages[0]["content"].rsplit("\n", 1)[-1])["items"][0]
+            if index == 1:
+                operations.insert(0, call("task_update", task_id=current["id"], expected_revision=current["revision"], status="in_progress"))
         response = reply(*operations)
         response.message["content"] = "已分析当前文件，记录观察。" + "历史分析细节abcd；" * 95
         return response
@@ -165,9 +170,9 @@ def test_hybrid_compaction_reinjects_current_approved_plan_on_every_request(tmp_
     assert outcome.result.execution_status == "completed", outcome.result.stop_reason
     assert model.summaries and any(event.type == "context_action" and event.payload["kind"] == "summary" for event in history.events)
     for index, messages in enumerate(model.execution):
-        current = json.loads(messages[0]["content"].rsplit("\n", 1)[-1])
+        current = json.loads(messages[0]["content"].split("[宿主任务清单]")[0].rstrip().rsplit("\n", 1)[-1])
         assert current["current_plan"]["status"] == "approved"
         assert "BOUNDARY_KEEP" in current["current_plan"]["scope"][0]
-        assert current["current_plan"]["steps"][0]["status"] == ("pending" if index == 0 else "completed" if index == 6 else "in_progress")
+        assert current["current_plan"]["steps"][0]["status"] == ("pending" if index == 0 else "in_progress")
         message_groups(messages)
-    assert len([event for event in history.events if event.type == "tool_started" and event.payload["name"] == "update_plan"]) == 2
+    assert len([event for event in history.events if event.type == "tool_started" and event.payload["name"] == "task_update"]) == 1

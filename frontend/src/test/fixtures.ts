@@ -5,7 +5,27 @@ import type {
   RunConfig,
   RunEvent,
   RunView,
+  JobView,
 } from '../types';
+
+export const jobRuns = new Map<string, RunView>(); // 作业确认后可读取的真实运行夹具。
+
+/** 将 run 包装为已建立运行的作业夹具；登记只读 Run 响应，返回统一 JobView。 */
+export function makeJob(run: RunView = makeRun()): JobView {
+  jobRuns.set(run.run_id, run);
+  return {
+    id: 'job-' + run.run_id,
+    run_id: run.run_id,
+    session_id: run.session_id || run.run_id,
+    title: run.prompt,
+    project_id: 'sample',
+    project_label: '示例项目',
+    status: run.active ? 'running' : 'completed',
+    error: null,
+    execution_status: run.result.execution_status,
+    validation_status: run.result.validation_status,
+  };
+}
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {

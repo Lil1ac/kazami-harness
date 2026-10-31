@@ -34,7 +34,7 @@ it('计划导出链接由桌面统一下载器接管，并且不发送用户批�
         title: '前后端交付',
         summary: '实施并验收',
         scope: ['页面与服务'],
-        steps: [{ text: '联调', status: 'pending' }],
+        steps: [{ id: 'step-1', text: '联调', status: 'pending' }],
         verification: ['核对结果'],
         workspace: 'D:/project',
         workspace_identity: [1, 2],

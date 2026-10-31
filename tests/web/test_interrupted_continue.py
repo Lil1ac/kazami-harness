@@ -1,5 +1,7 @@
 """通过已有followups验证中断记录接续，不使用独立检查点入口。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 import hashlib
 import json
@@ -94,7 +96,7 @@ def test_send_continue_inherits_interrupted_record_and_current_code(project, pro
                 assert "继续" in conversation["continuation_notice"]
                 assert not (store.run_dir / "checkpoints").exists()
                 body = {"request_id": str(uuid4()), "prompt": "继续"}
-                first, duplicate = await asyncio.gather(*[client.post(f"/api/runs/{identifier}/followups", json=body) for _ in range(2)])
+                first, duplicate = await asyncio.gather(*[submit_followup(client, f"/api/runs/{identifier}/followups", json=body) for _ in range(2)])
                 assert first.status_code == duplicate.status_code == 202, (first.text, duplicate.text)
                 assert first.json()["run_id"] == duplicate.json()["run_id"]
                 final = await idle(client, first.json()["run_id"])
@@ -135,7 +137,7 @@ def test_damaged_interrupted_record_still_blocks_continue(project):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", trust_env=False) as client:
                 view = (await client.get(f"/api/runs/{identifier}/conversation")).json()
                 assert not view["can_continue"]
-                response = await client.post(f"/api/runs/{identifier}/followups", json={"request_id": str(uuid4()), "prompt": "继续"})
+                response = await submit_followup(client, f"/api/runs/{identifier}/followups", json={"request_id": str(uuid4()), "prompt": "继续"})
                 assert response.status_code == 409
             assert model.requests == []
     asyncio.run(scenario())

@@ -24,7 +24,10 @@ const toolLabels: Record<string, string> = {
   enter_plan_mode: '进入规划',
   ask_user_question: '向你提问',
   submit_plan: '提交计划',
-  update_plan: '更新计划进度',
+  task_create: '创建工作项',
+  task_get: '读取工作项',
+  task_list: '查看任务清单',
+  task_update: '更新工作项',
 }; // 文件、命令及只读历史工具的操作语义。
 
 /** 安全解析工具参数 JSON；损坏输入保留原字符串，便于在完整轨迹中核对。 */

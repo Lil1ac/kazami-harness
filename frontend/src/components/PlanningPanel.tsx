@@ -25,14 +25,17 @@ const stepLabels: Record<PlanRevision['steps'][number]['status'], string> = {
   in_progress: '进行中',
   completed: '已完成',
   blocked: '受阻',
-}; // 由 Agent 更新的执行进度，独立验收仍从本轮结果查看。
+}; // 由工作项投影的执行进度，独立验收仍从本轮结果查看。
 
 /** 按 plan 的原始顺序展示完整步骤，返回带可读状态的清单，不改写步骤正文或进度。 */
 function PlanSteps({ plan }: { plan: PlanRevision }) {
   return (
     <ol className="plan-steps">
       {plan.steps.map(
-        /* 一基编号与 update_plan 对应；图标之外保留文字，读屏无需辨认颜色。 */ (step, index) => (
+        /* 稳定步骤编号与 AgentTask 来源对应；图标之外保留文字，读屏无需辨认颜色。 */ (
+          step,
+          index,
+        ) => (
           <li key={index} className={`plan-step plan-step-${step.status}`}>
             <span className="plan-step-marker" aria-hidden="true">
               {step.status === 'completed' ? <CheckOutlined /> : index + 1}
@@ -125,7 +128,7 @@ function PlanCard({
       </header>
       <h3 className="plan-title">{plan.title}</h3>
       <div className="plan-overview">
-        <span className="plan-count" title="Agent 更新的步骤进度；验收结论见本轮结果">
+        <span className="plan-count" title="工作项执行进度；验收结论见本轮结果">
           已完成 {completed} / {plan.steps.length} 步
         </span>
         <div className="plan-reading-actions">

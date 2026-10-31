@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createFollowup, errorMessage } from '../api';
+import { createFollowup, errorMessage, getJob, getRun } from '../api';
 import { useConfigDraft } from '../config';
-import type { ConversationView, FollowupRequest, HumanDecision, RunView } from '../types';
+import type { ConversationView, FollowupRequest, HumanDecision, RunView, JobView } from '../types';
 
 /** 未确认的发送；父轮和完整载荷一起固定，重试只能确认同一请求。 */
 export interface PendingSend {
@@ -89,6 +89,7 @@ export function useConversationSend(
   const skills =
     skillChoice?.parentId === conversation.latest_run_id ? skillChoice.names : run?.config.skills;
   const inFlight = useRef(false); // 同一事件循环中的连续 Enter 也只能开始一次发送。
+  const [queuedJob, setQueuedJob] = useState<JobView | null>(null); // 已接纳作业，等待真正建立运行。
   useEffect(
     /* 持久化当前标签页草稿；此 effect 从不发送网络请求。 */ () => {
       writeDraft(sessionId, { text, pending });
@@ -97,14 +98,28 @@ export function useConversationSend(
   );
 
   const mutation = useMutation({
-    mutationFn: /* 无自动重试；确认旧请求时继续使用其原父轮和原载荷。 */ (
+    mutationFn: /* 只投递一次；排队期间只读状态，刷新重试沿用原请求编号。 */ async (
       submission: PendingSend,
-    ) => createFollowup(submission.parentId, submission.body),
+    ) => {
+      let job = await createFollowup(submission.parentId, submission.body);
+      setQueuedJob(job);
+      while (job.status === 'queued' || job.status === 'preparing') {
+        await new Promise<void>(
+          /* 状态轮询不创建新作业。 */ (resolve) => setTimeout(resolve, 1000),
+        );
+        job = await getJob(job.id);
+        setQueuedJob(job);
+      }
+      if (job.status === 'needs_review' || job.status === 'cancelled')
+        throw new Error(job.error || '作业已取消。');
+      return getRun(job.run_id);
+    },
     onSuccess: /* 只有收到真实运行后才交付新轮；发送期间预写的新要求继续保留。 */ (
       view,
       submission,
     ) => {
       setPending(null);
+      setQueuedJob(null);
       setRepairChoice(
         /* 发送期间编辑的新选择留给下一条，重试确认不改变原授权。 */ (choice) =>
           choice && choice.enabled !== submission.body.config?.auto_repair
@@ -220,6 +235,7 @@ export function useConversationSend(
     setSkills: /* 当前最新轮下的明确选择；空列表也必须保留。 */ (names: string[]) =>
       setSkillChoice({ parentId: conversation.latest_run_id, names }),
     pending,
+    queuedJob,
     sending: mutation.isPending,
     confirming,
     canSend,

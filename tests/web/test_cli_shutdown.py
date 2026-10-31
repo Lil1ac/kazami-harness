@@ -1,5 +1,7 @@
 """用真实CLI进程、HTTP/SSE连接和SIGINT验证停服会取消后台命令并持久化收尾。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import json
 import os
 from pathlib import Path
@@ -153,10 +155,10 @@ def test_cli_sigint_with_open_sse_cleans_command_and_persists_shutdown(tmp_path:
             # 本机请求必须绕过宿主代理环境，既避免外网也不要求安装SOCKS依赖。
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", trust_env=False, timeout=5) as client:
                 wait_for_local_server(client, process, log_path)
-                response = client.post("/api/runs", json={
+                response = client.post('/api/jobs', json={"request_id": str(__import__('uuid').uuid4()), "create": {
                     "prompt": "执行离线阻塞命令，等待服务关闭。", "workspace_id": "workspace",
                     "config": {"tools": ["run_command"], "limits": {"command_timeout_seconds": 60.0, "run_timeout_seconds": 90.0}},
-                })
+                }})
                 assert response.status_code == 202, response.text
                 identifier = response.json()["run_id"]
                 wait_for_command_marker(workspace / "command.started", process)

@@ -1,5 +1,7 @@
 """真实 API、局部工具、原目录、pytest 与重启接续的端到端回归。"""
 
+from tests.web.job_helpers import submit_run, submit_followup
+
 import asyncio
 import hashlib
 from pathlib import Path
@@ -35,7 +37,7 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
         """首轮从配置启用工具，重启后续轮继承权限并修改已生成测试，不重写旧记录。"""
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                first = await finish(client, await client.post("/api/runs", json={
+                first = await finish(client, await submit_run(client, json={
                     "project_id": app.state.fixture_project_id, "prompt": "修复加法函数并添加测试",
                     "config": {"tools": ["read_file", "search_files", "write_file", "edit_file", "run_command"]},
                 }))
@@ -61,7 +63,7 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
         restarted = fixture_app(root, tmp_path / "dist")
         async with restarted.router.lifespan_context(restarted):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://localhost") as client:
-                second = await finish(client, await client.post("/api/runs/" + first["run_id"] + "/followups", json={"prompt": "增加空值检查，补充 None 的测试", "request_id": str(uuid4())}))
+                second = await finish(client, await submit_followup(client, "/api/runs/" + first["run_id"] + "/followups", json={"prompt": "增加空值检查，补充 None 的测试", "request_id": str(uuid4())}))
                 assert second["result"]["execution_status"] == "completed", second
                 assert second["result"]["validation_status"] == "passed", second
                 assert second["turn_index"] == 2 and second["workspace"] == first["workspace"]
@@ -100,7 +102,7 @@ def test_failed_start_event_does_not_execute_edit(tmp_path: Path, monkeypatch):
         """从真实 API 提交，等待后台退出；记录失败时保留未确认状态，不补造终态。"""
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                view = await finish(client, await client.post("/api/runs", json={"project_id": app.state.fixture_project_id, "prompt": "修复加法函数并添加测试", "config": {"tools": ["read_file", "write_file", "edit_file", "run_command"]}}))
+                view = await finish(client, await submit_run(client, json={"project_id": app.state.fixture_project_id, "prompt": "修复加法函数并添加测试", "config": {"tools": ["read_file", "write_file", "edit_file", "run_command"]}}))
                 assert view["interrupted"] and not view["active"]
                 assert view["result"]["execution_status"] == "running"
                 assert view["warnings"]

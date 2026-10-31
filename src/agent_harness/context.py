@@ -107,6 +107,7 @@ class ContextBuilder:
         self.instruction = load_project_instructions(workspace, self._config.context)  # 本次运行固定的项目指令快照。
         self.planning: PlanningController | None = None  # Runner 绑定的可信状态，每次实际输入读取最新快照。
         self._planning_base: str | None = None  # 不含规划动态状态的原系统正文，刷新时替换而非反复追加。
+        self.tasks = None  # Runner 绑定的任务控制器；每次请求读取可信最新状态。
         self.memory = None  # 固定修订的记忆控制器；输入投影随实际动作选择，不回查新修订。
 
     @property
@@ -199,7 +200,8 @@ class ContextBuilder:
             frozen_messages = project_plan_history(frozen_messages)
             if not frozen_messages or frozen_messages[0].get("role") != "system" or self._planning_base is None:
                 raise ValueError("planning context requires host system prefix")
-            frozen_messages[0]["content"] = self._planning_base + self.planning.instructions()
+            task_instructions = self.tasks.instructions() if self.tasks is not None else ""
+            frozen_messages[0]["content"] = self._planning_base + self.planning.instructions() + task_instructions
         frozen_tools = deepcopy(tools)
         encoded = json.dumps({"messages": frozen_messages, "tools": frozen_tools}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         policy = self._config.context

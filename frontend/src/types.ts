@@ -14,8 +14,9 @@ export type CleanupStatus = 'not_needed' | 'complete' | 'incomplete' | 'unknown'
 
 /** 模型维护的步骤进度；正文属于对应计划版本，不能借更新进度扩大授权。 */
 export interface PlanStep {
+  id: string; // 宿主生成的稳定步骤编号，用于关联工作项。
   text: string; // 已提交的工作步骤。
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked'; // 进度陈述，与独立验收分别记录。
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked'; // 关联任务的只读投影，与独立验收分别记录。
 }
 
 /** 与后端一致的固定计划版本，批准只绑定这一版及实际工作区。 */
@@ -222,6 +223,7 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  tasks?: TaskSnapshot; // 当轮固定任务快照；活动列表通过任务接口刷新。
   planning: PlanningState; // 规划、批准与等待的固定事实，不按最终回答猜测权限。
   schema_version: 1; // 当前记录格式版本。
   run_id: string; // 本次运行 UUID。
@@ -242,6 +244,53 @@ export interface RunResult {
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; // 已知 token 数。
   usage_complete: boolean; // false 时 token 数仅为已知部分。
   active_duration_seconds?: number; // 本次主动执行秒数；旧记录缺省不推断。
+}
+
+/** 单个持久工作项；状态与实际项目检查结果分别展示。 */
+export interface AgentTask {
+  id: string; // 跨运行稳定编号。
+  display_id: number; // 清单内短编号。
+  subject: string; // 标题。
+  description: string; // 工作范围。
+  acceptance: string[]; // 完成条件。
+  parent_task_id: string | null; // 父任务，null 为顶层。
+  depends_on: string[]; // 前置任务编号。
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled'; // 工作进度。
+  revision: number; // 修改时必须提交的当前版本。
+  blocked_reason: string | null; // 宿主计算的阻塞原因。
+  is_group: boolean; // 父任务由子项汇总。
+  source: { plan_version: number; step_id: string } | null; // 批准方案来源。
+  completion_summary: string | null; // 完成说明，保留旧证据。
+  evidence_refs: { run_id?: string; tool_call_id?: string; kind?: string }[]; // 工具或人工确认。
+  run_ids: string[]; // 实际推进过该项的运行。
+}
+
+/** 一次读取对应的任务清单版本。 */
+export interface TaskSnapshot {
+  revision: number; // 清单总体版本。
+  items: AgentTask[]; // 当前或历史固定工作项。
+}
+
+/** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
+export interface JobView {
+  id: string; // 同时是客户端幂等请求编号。
+  run_id: string; // 宿主预分配的运行编号，queued/preparing 时尚未建立。
+  session_id: string | null; // 首轮开始前为空。
+  title: string; // 原始输入的精简标题。
+  project_id: string; // 固定项目归属。
+  project_label: string; // 接纳时固定的项目名称，便于筛选和辨认工作归属。
+  status:
+    | 'queued'
+    | 'preparing'
+    | 'running'
+    | 'waiting_input'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'needs_review'; // 真实队列状态。
+  error: string | null; // 可处理的阻塞或异常原因。
+  validation_status: ValidationStatus; // 独立检查结论。
+  execution_status: string | null; // null 表示尚未建立 Runner，不能打开不存在的运行。
 }
 
 /** 当轮 Python 执行快照；源码目录和解释器从持久记录读取。 */

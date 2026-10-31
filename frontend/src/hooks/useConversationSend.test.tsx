@@ -4,8 +4,8 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConfigDraftProvider, useConfigDraft } from '../config';
-import { createFollowup } from '../api';
-import { makeRun } from '../test/fixtures';
+import { getRun, getTasks, createFollowup } from '../api';
+import { makeRun, makeJob, jobRuns } from '../test/fixtures';
 import type { ConversationView, RunView } from '../types';
 import { useConversationSend } from './useConversationSend';
 
@@ -13,6 +13,8 @@ vi.mock(
   '../api',
   /* 仅替换 HTTP 提交，技能继承、冻结与状态流转仍使用真实实现。 */ () => ({
     createFollowup: vi.fn(),
+    getRun: vi.fn(),
+    getTasks: vi.fn(),
     errorMessage: /* 测试只保留受控文本。 */ (error: unknown) =>
       error instanceof Error ? error.message : '请求失败',
   }),
@@ -73,6 +75,8 @@ function setup(run = makeRun({ config: { ...makeRun().config, skills: ['current-
 beforeEach(
   /* 每例清除待确认状态，不复用前次幂等请求。 */ () => {
     vi.resetAllMocks();
+    vi.mocked(getRun).mockImplementation(async (id) => jobRuns.get(id) || makeRun({ run_id: id }));
+    vi.mocked(getTasks).mockResolvedValue({ revision: 0, items: [] });
     sessionStorage.clear();
   },
 );
@@ -107,7 +111,7 @@ it('更改技能后网络重试固定原始选择，编辑的新选择留给下�
   vi.mocked(createFollowup)
     .mockRejectedValueOnce(new Error('网络断开'))
     .mockResolvedValueOnce(
-      makeRun({ run_id: 'run-b', config: { ...makeRun().config, skills: ['changed-skill'] } }),
+      makeJob(makeRun({ run_id: 'run-b', config: { ...makeRun().config, skills: ['changed-skill'] } })),
     );
   const { result, confirmed, rerender } = setup();
   act(
@@ -163,7 +167,7 @@ it('自动修复默认继承，网络重试不改变已冻结开关，后续新�
   vi.mocked(createFollowup)
     .mockRejectedValueOnce(new Error('网络断开'))
     .mockResolvedValueOnce(
-      makeRun({ run_id: 'run-b', config: { ...makeRun().config, auto_repair: true } }),
+      makeJob(makeRun({ run_id: 'run-b', config: { ...makeRun().config, auto_repair: true } })),
     );
   const host = setup(makeRun({ config: { ...makeRun().config, auto_repair: true } }));
   expect(host.result.current.autoRepair).toBe(true);

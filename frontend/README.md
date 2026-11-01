@@ -74,7 +74,7 @@ HTTP/SSE 入口位于 `src/agent_harness/web/api.py`，请求与运行视图位�
 
 详情采用持续会话工作区。`RunDetailPage.tsx` 以session_id固定消息区，`ConversationPanel.tsx` 展示消息与底部输入，服务确认后原地追加独立新轮；`RunInspector.tsx` 按所选轮次显示测试、上下文、轨迹与代码。代码页明确后续 diff 是相对会话原始基线的累计差异，新轮重新待审阅。
 
-每次明确提交生成 request_id，网络失败重试沿用同一编号和载荷；sessionStorage按会话保存当前标签页草稿及未确认请求的原父轮/载荷，刷新不自动提交。运行中可以编辑、不能新提交；回看旧轮只切换检查器，发送仍追加最新轮。审阅决定与快照恢复会刷新会话可继续条件。后端对应 `web/conversations.py`、`sessions.py` 和 `snapshots.py`；完整限制见 [多轮任务交互](../docs/MULTITURN_TASKS.md)。
+每次明确提交生成 request_id，网络失败重试沿用同一编号和载荷；sessionStorage按会话保存当前标签页草稿及未确认请求的原父轮/载荷，刷新不自动提交。运行中可以编辑、不能新提交；回看旧轮只切换检查器，发送仍追加最新轮。审阅决定与快照恢复会刷新会话可继续条件。后端对应 `web/conversations.py`、`storage/sessions.py` 和 `storage/snapshots.py`；完整限制见 [多轮任务交互](../docs/MULTITURN_TASKS.md)。
 
 首轮与续轮统一通过 `/api/jobs` 接纳。其他会话占用执行槽时可以排队，同会话已有活动或排队请求时不能重复发送。新任务表单也保存未确认提交的固定载荷，刷新不重发；后台中心 `/jobs` 展示排队、执行、等待决定、待核对与检查结果。作业尚未建立 Run 时不提供运行链接。
 

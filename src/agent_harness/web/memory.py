@@ -6,9 +6,9 @@ from uuid import UUID
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 
-from ..memory import MemoryChange, MemoryError, MemorySave, MemoryService, MemoryStore, digest, encode
-from ..plan_exports import materialize_text_export
-from ..store import StorageError
+from agent_harness.memory.service import MemoryChange, MemoryError, MemorySave, MemoryService, MemoryStore, digest, encode
+from agent_harness.work.exports import materialize_text_export
+from agent_harness.storage.runs import StorageError
 
 
 def project_memory_service(manager, identifier: str) -> MemoryService:
@@ -56,7 +56,7 @@ def install_memory_routes(app: FastAPI, manager) -> None:
             if store.read(source.source)["scope_id"] != store.read(service.source)["scope_id"]:
                 raise MemoryError("memory_source_invalid", "不能关联其他项目的运行。")
             provenance.update(run_id=str(body.source_run_id), sha256=digest(manager._read_history(body.source_run_id).manifest.task.prompt))
-        from ..memory import MemoryContent
+        from agent_harness.memory.service import MemoryContent
         content = MemoryContent(**body.model_dump(exclude={"request_id", "source_run_id", "replacements"}))
         return service.create(content, str(body.request_id), provenance=provenance, replacements=[value.model_dump() for value in body.replacements])
 

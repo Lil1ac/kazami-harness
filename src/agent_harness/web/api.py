@@ -15,23 +15,23 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import httpx
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from ..providers.base import ModelClient
-from ..schemas import RunConfig
-from ..sessions import SessionError
-from ..store import StorageError
-from .config import WebConfig
-from .schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
-from .service import WebRunManager, WebServiceError
-from .project_catalog import CatalogError
-from .jobs import JobRequest
-from ..tasks import TaskError, TaskService, TaskCreate, TaskUpdate
-from ..planning import PlanningError
-from ..memory import MemoryError
-from .memory import install_memory_routes
-from ..config import ConfigurationError
+from agent_harness.providers.base import ModelClient
+from agent_harness.schemas import RunConfig
+from agent_harness.storage.sessions import SessionError
+from agent_harness.storage.runs import StorageError
+from agent_harness.web.config import WebConfig
+from agent_harness.web.schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
+from agent_harness.web.service import WebRunManager, WebServiceError
+from agent_harness.web.project_catalog import CatalogError
+from agent_harness.web.jobs import JobRequest
+from agent_harness.work.tasks import TaskError, TaskService, TaskCreate, TaskUpdate
+from agent_harness.work.planning import PlanningError
+from agent_harness.memory.service import MemoryError
+from agent_harness.web.memory import install_memory_routes
+from agent_harness.config import ConfigurationError
 
 if TYPE_CHECKING:
-    from ..desktop.host import DesktopHost
+    from agent_harness.desktop.host import DesktopHost
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -503,6 +503,6 @@ def create_app(
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     if desktop is not None:
-        from ..desktop.api import install_routes
+        from agent_harness.desktop.api import install_routes
         install_routes(app, desktop, manager)
     return app

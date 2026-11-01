@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from agent_harness.execution import PythonExecutionError, prepare_python_execution, python_command
+from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
 from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, TaskSpec, VerifierSpec
 
 

@@ -14,7 +14,7 @@ import time
 import httpx
 import pytest
 
-from agent_harness.store import RunStore
+from agent_harness.storage.runs import RunStore
 
 
 # 子进程始终覆盖模型凭据为离线值，模型客户端也由本地替身提供，不访问供应商。

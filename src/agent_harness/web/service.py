@@ -14,28 +14,28 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import ValidationError
 
-from ..config import ConfigurationError, load_config, prepare_task
-from ..providers.base import ModelClient
-from ..runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
-from ..execution import PythonExecutionError, prepare_python_execution, python_command
-from ..schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
-from ..projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
-from ..store import RunHistory, RunStore, StorageError
-from ..skills import SkillCatalog
-from ..local_execution import LocalChangeStore
-from ..snapshots import SnapshotError
-from ..sessions import SessionError
-from ..planning import planning_from_history
-from ..plan_exports import materialize_plan_export
-from ..subagents import read_child, report_page, SubagentError
-from ..subagent_reports import partial_report
-from ..schemas import SubagentRecord
-from .config import WebConfig
-from .conversations import ConversationService
-from .conversation_index import ConversationIndex
-from .project_catalog import ProjectCatalog
-from .folder_picker import FolderPicker
-from .schemas import CreateRunRequest, EventPage, RunView
+from agent_harness.config import ConfigurationError, load_config, prepare_task
+from agent_harness.providers.base import ModelClient
+from agent_harness.runtime.runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
+from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
+from agent_harness.schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
+from agent_harness.projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
+from agent_harness.storage.runs import RunHistory, RunStore, StorageError
+from agent_harness.context.skills import SkillCatalog
+from agent_harness.execution.local import LocalChangeStore
+from agent_harness.storage.snapshots import SnapshotError
+from agent_harness.storage.sessions import SessionError
+from agent_harness.work.planning import planning_from_history
+from agent_harness.work.exports import materialize_plan_export
+from agent_harness.subagents.service import read_child, report_page, SubagentError
+from agent_harness.subagents.reports import partial_report
+from agent_harness.schemas import SubagentRecord
+from agent_harness.web.config import WebConfig
+from agent_harness.web.conversations import ConversationService
+from agent_harness.web.conversation_index import ConversationIndex
+from agent_harness.web.project_catalog import ProjectCatalog
+from agent_harness.web.folder_picker import FolderPicker
+from agent_harness.web.schemas import CreateRunRequest, EventPage, RunView
 
 
 class WebServiceError(Exception):
@@ -229,7 +229,7 @@ class WebRunManager:
         self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
         self._queued_run_id: UUID | None = None  # 出队时预分配的稳定 Run 编号，仅队列写入。
         self._execution_lease = None  # 队列从项目准备到证据收尾一直持有的操作系统锁。
-        from .jobs import JobQueue
+        from agent_harness.web.jobs import JobQueue
         self.jobs = JobQueue(self)  # 同一管理器的唯一串行队列，重启默认暂停。
 
     @property

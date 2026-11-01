@@ -8,8 +8,8 @@ from pathlib import Path
 import sys
 import tempfile
 
-from ..processes import _child_environment
-from .project_catalog import CatalogError
+from agent_harness.execution.processes import _child_environment
+from agent_harness.web.project_catalog import CatalogError
 
 
 def _native_environment() -> dict[str, str]:

@@ -14,7 +14,7 @@ import pytest
 
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
-from tests.test_auto_repair import CHECK_CODE, RepairModel
+from tests.runtime.test_auto_repair import CHECK_CODE, RepairModel
 from tests.web.test_projects import project_config  # 复用真实Git及用户dirty文件夹具。
 
 

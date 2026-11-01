@@ -6,11 +6,11 @@ import shutil
 
 from pydantic import Field, model_validator
 
-from ..processes import ProcessRunner
-from ..schemas import PythonExecution
-from ..execution import python_command
-from ..schemas import DataModel
-from ..workspace import Workspace, WorkspaceError
+from agent_harness.execution.processes import ProcessRunner
+from agent_harness.schemas import PythonExecution
+from agent_harness.execution.python import python_command
+from agent_harness.schemas import DataModel
+from agent_harness.execution.workspace import Workspace, WorkspaceError
 
 
 # 命令参数必须显式列出 argv；不接收自动交给 Shell 解析的命令字符串。

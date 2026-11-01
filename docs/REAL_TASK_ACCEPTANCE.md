@@ -67,7 +67,7 @@
 验收副本的累计修改仅涉及：
 
 - `src/agent_harness/tools/files.py`：递归 glob 修复，`ignore_case` 参数与大小写折叠。
-- `tests/test_file_mutations.py`：针对 glob、参数、大小写和 Unicode 的回归。
+- `tests/tools/test_file_mutations.py`：针对 glob、参数、大小写和 Unicode 的回归。
 - `docs/TECH_DESIGN_V0.1.md`：工具语义说明。
 
 完整交付见 [最终补丁](../.runtime/real-task-acceptance-20261026/evidence/final-delivery.patch) 和 [固化源码](../.runtime/real-task-acceptance-20261026/evidence/final-delivery/src/agent_harness/tools/files.py)。这些修改只存在于验收副本；采纳前需要审阅补丁，并按迭代约定确定范围。

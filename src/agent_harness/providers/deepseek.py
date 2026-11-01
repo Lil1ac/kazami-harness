@@ -9,7 +9,7 @@ import httpx
 
 from agent_harness.schemas import RunConfig
 
-from .base import ModelError, ModelResponse, ToolCall
+from agent_harness.providers.base import ModelError, ModelResponse, ToolCall
 
 
 _ENDPOINT = "https://api.deepseek.com/chat/completions"

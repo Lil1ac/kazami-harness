@@ -69,7 +69,7 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
     """通过离线模型完成 CLI 文件读取闭环，验证回答持久化且未验收退出码为 3。"""
     import httpx
     from agent_harness import cli
-    from agent_harness.runner import run_task as actual_run
+    from agent_harness.runtime.runner import run_task as actual_run
 
     secret = "dummy-cli-key"
     monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
@@ -151,7 +151,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     """correct 选择报告内容，核对CLI的 expected_code/status、真实验收输出与历史；返回 None。"""
     import httpx
     from agent_harness import cli
-    from agent_harness.runner import run_task as actual_run
+    from agent_harness.runtime.runner import run_task as actual_run
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "dummy-cli-verifier-key")
     workspace = tmp_path / "workspace"

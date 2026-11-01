@@ -13,7 +13,7 @@ import uvicorn
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
-from agent_harness.snapshots import FileSnapshotStore
+from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 

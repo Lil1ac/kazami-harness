@@ -12,8 +12,8 @@ from typing import BinaryIO, Literal
 
 from pydantic import Field, field_validator
 
-from ..schemas import DataModel
-from ..workspace import Workspace, WorkspaceError
+from agent_harness.schemas import DataModel
+from agent_harness.execution.workspace import Workspace, WorkspaceError
 
 
 # 文件工具的严格参数结构；使用类前注释，保持自动生成的工具 JSON Schema 不变。

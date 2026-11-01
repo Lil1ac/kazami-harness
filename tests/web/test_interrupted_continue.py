@@ -11,14 +11,14 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agent_harness.context import ContextBuilder
+from agent_harness.context.builder import ContextBuilder
 from agent_harness.providers.base import ModelResponse
 from agent_harness.schemas import RunConfig, RunManifest, RunOrigin, TaskSpec, VerifierSpec
-from agent_harness.sessions import SessionError, history_messages
-from agent_harness.store import RunStore
+from agent_harness.storage.sessions import SessionError, history_messages
+from agent_harness.storage.runs import RunStore
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.web.api import create_app
-from agent_harness.workspace import Workspace
+from agent_harness.execution.workspace import Workspace
 from continuation_support import project, idle
 
 

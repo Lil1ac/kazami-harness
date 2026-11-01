@@ -19,7 +19,7 @@ import pytest
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse
 from agent_harness.schemas import ContextPolicy, RunConfig, RunManifest, TaskSpec
-from agent_harness.store import RunStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 

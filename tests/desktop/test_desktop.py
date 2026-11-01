@@ -17,15 +17,15 @@ import httpx
 import pytest
 
 from agent_harness.config import ConfigurationError
-from agent_harness.context import ContextBuilder
+from agent_harness.context.builder import ContextBuilder
 from agent_harness.desktop.bridge import NativeBridge
 from agent_harness.desktop.host import DesktopHost
 from agent_harness.desktop.storage import DesktopRunSettings, PreferenceStore, resource_root
 from agent_harness.schemas import PythonExecution, RunConfig, TaskSpec
-from agent_harness.store import RunStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
-from agent_harness.workspace import Workspace
+from agent_harness.execution.workspace import Workspace
 
 
 @pytest.mark.parametrize("state", ["configured", "missing", "unprepared"])

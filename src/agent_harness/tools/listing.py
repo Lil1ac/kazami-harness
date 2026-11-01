@@ -5,8 +5,8 @@ from pathlib import Path
 
 from pydantic import Field
 
-from ..schemas import DataModel
-from ..workspace import Workspace, WorkspaceError
+from agent_harness.schemas import DataModel
+from agent_harness.execution.workspace import Workspace, WorkspaceError
 
 
 class ListFilesArguments(DataModel):

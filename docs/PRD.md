@@ -29,22 +29,22 @@
 | --- | --- | --- |
 | 本机项目入口 | Windows 原生目录选择、Git 根目录/普通目录识别、最近项目去重与持久化、不可用来源提示；选择取消不启动任务 | P01—P06；[项目登记](../src/agent_harness/web/project_catalog.py)、[目录选择测试](../tests/web/test_folder_picker.py) |
 | 项目与会话导航 | 项目页、全部会话、侧栏和手机抽屉；一段多轮会话只显示一条列表记录，按最新轮状态筛选；新建、继续与查看历史分开 | N01—N04；[会话索引](../src/agent_harness/web/conversation_index.py)、[导航组件](../frontend/src/components/WorkspaceNavigation.tsx) |
-| 模型接入与自主循环 | DeepSeek 工具调用、参数校验、错误反馈、有限请求重试及连续模型/工具交互；当前只有 DeepSeek 适配器，模型响应为非流式 | A01—A03；[模型适配](../src/agent_harness/providers/deepseek.py)、[执行循环](../src/agent_harness/agent.py) |
-| 文件操作 | UTF-8 分页读取、字面量搜索、递归 glob、创建/覆盖写入、指纹核验的唯一片段编辑；统一 LF/CRLF 等价匹配，保持原格式；搜索当前区分大小写 | E01—E05、X01；[文件工具](../src/agent_harness/tools/files.py)、[编辑回归](../tests/test_file_edits.py) |
-| 命令与 Python 环境 | argv 命令执行、输出捕获、退出码、超时及进程清理；项目解释器与源码导入路径按轮固定，模型命令和宿主测试使用同一实际代码 | X02—X03；[执行环境](../src/agent_harness/execution.py)、[执行环境验收](PYTHON_EXECUTION.md) |
-| 原目录与 Git 隔离 | 默认在所选目录修改，保留已有及轮间手动改动；显式隔离才创建 Git 工作树，一个会话复用一个工作树；逐轮固定差异及产物 | D01—D05、X04—X06；[原目录执行](../src/agent_harness/local_execution.py)、[工作树管理](../src/agent_harness/projects/manager.py) |
-| 预算、取消与结束状态 | 模型轮次、工具次数、总时限及内部请求/命令限制；单任务串行、主动取消、清理状态和明确结束原因；执行、验收、人工审阅分别记录 | A04—A07、A09；[Runner](../src/agent_harness/runner.py)、[状态展示](../frontend/src/components/RunStatus.tsx) |
-| 持久轨迹与实时观察 | JSONL 事件、配置/指令快照、完整已捕获输出、耗时与已知 token 用量；HTTP/SSE 展示阶段和事件，重启可读，缺失用量标记未知 | A08、F01—F08；[记录存储](../src/agent_harness/store.py)、[事件订阅](../frontend/src/hooks/useRunEvents.ts) |
-| 项目测试与独立验收 | 宿主固定检查入口，区分未验收、通过、失败、异常；Git 项目可保存公开测试命令，普通目录可选择宿主登记的独立验收；未配置不冒充通过 | A07、A09、P04；[验收器](../src/agent_harness/verifier.py)、[项目设置](../frontend/src/components/ProjectSettingsPanel.tsx) |
-| 公开测试失败自动修复 | 默认关闭；同一 Run 内最多两次修复、三次检查，共用原预算；独立检查不回传，取消/超时/运行异常不触发自动重试；保留各次输出 | AR01—AR08；[核心回归](../tests/test_auto_repair.py)、[API 回归](../tests/web/test_auto_repair_api.py)、[检查历史面板](../frontend/src/components/VerificationPanel.tsx) |
-| 自动产物收集与下载 | 自动登记本轮新增、修改文件，含命令生成的报告与二进制；固定结束快照，旧轮文件不随续轮变化；排除未变旧文件和缓存，采集不完整单独提示 | D03、AR06；[产物回归](../tests/test_artifact_collection.py)、[下载回归](../tests/web/test_artifact_collection_api.py)、[产物面板](../frontend/src/components/ArtifactPanel.tsx) |
+| 模型接入与自主循环 | DeepSeek 工具调用、参数校验、错误反馈、有限请求重试及连续模型/工具交互；当前只有 DeepSeek 适配器，模型响应为非流式 | A01—A03；[模型适配](../src/agent_harness/providers/deepseek.py)、[执行循环](../src/agent_harness/runtime/agent.py) |
+| 文件操作 | UTF-8 分页读取、字面量搜索、递归 glob、创建/覆盖写入、指纹核验的唯一片段编辑；统一 LF/CRLF 等价匹配，保持原格式；搜索当前区分大小写 | E01—E05、X01；[文件工具](../src/agent_harness/tools/files.py)、[编辑回归](../tests/tools/test_file_edits.py) |
+| 命令与 Python 环境 | argv 命令执行、输出捕获、退出码、超时及进程清理；项目解释器与源码导入路径按轮固定，模型命令和宿主测试使用同一实际代码 | X02—X03；[执行环境](../src/agent_harness/execution/python.py)、[执行环境验收](PYTHON_EXECUTION.md) |
+| 原目录与 Git 隔离 | 默认在所选目录修改，保留已有及轮间手动改动；显式隔离才创建 Git 工作树，一个会话复用一个工作树；逐轮固定差异及产物 | D01—D05、X04—X06；[原目录执行](../src/agent_harness/execution/local.py)、[工作树管理](../src/agent_harness/projects/manager.py) |
+| 预算、取消与结束状态 | 模型轮次、工具次数、总时限及内部请求/命令限制；单任务串行、主动取消、清理状态和明确结束原因；执行、验收、人工审阅分别记录 | A04—A07、A09；[Runner](../src/agent_harness/runtime/runner.py)、[状态展示](../frontend/src/components/RunStatus.tsx) |
+| 持久轨迹与实时观察 | JSONL 事件、配置/指令快照、完整已捕获输出、耗时与已知 token 用量；HTTP/SSE 展示阶段和事件，重启可读，缺失用量标记未知 | A08、F01—F08；[记录存储](../src/agent_harness/storage/runs.py)、[事件订阅](../frontend/src/hooks/useRunEvents.ts) |
+| 项目测试与独立验收 | 宿主固定检查入口，区分未验收、通过、失败、异常；Git 项目可保存公开测试命令，普通目录可选择宿主登记的独立验收；未配置不冒充通过 | A07、A09、P04；[验收器](../src/agent_harness/runtime/verifier.py)、[项目设置](../frontend/src/components/ProjectSettingsPanel.tsx) |
+| 公开测试失败自动修复 | 默认关闭；同一 Run 内最多两次修复、三次检查，共用原预算；独立检查不回传，取消/超时/运行异常不触发自动重试；保留各次输出 | AR01—AR08；[核心回归](../tests/runtime/test_auto_repair.py)、[API 回归](../tests/web/test_auto_repair_api.py)、[检查历史面板](../frontend/src/components/VerificationPanel.tsx) |
+| 自动产物收集与下载 | 自动登记本轮新增、修改文件，含命令生成的报告与二进制；固定结束快照，旧轮文件不随续轮变化；排除未变旧文件和缓存，采集不完整单独提示 | D03、AR06；[产物回归](../tests/runtime/test_artifact_collection.py)、[下载回归](../tests/web/test_artifact_collection_api.py)、[产物面板](../frontend/src/components/ArtifactPanel.tsx) |
 | 代码差异与人工审阅 | 原目录和隔离共用分文件差异、行号、文件清单与补丁下载；仅隔离会话最新轮可保留/丢弃，历史证据仍可读；保留不自动提交或合并 | M02、X05、第 5.5 节；[差异组件](../frontend/src/components/FileChangesPanel.tsx)、[审阅组件](../frontend/src/components/ProjectReviewPanel.tsx) |
 | 多轮任务交互 | 持续消息区、底部输入、Markdown/代码复制、折叠执行过程；继承历史与当前代码，每轮有独立预算/结果/测试/差异；请求编号防重复执行 | M01—M06；[会话服务](../src/agent_harness/web/conversations.py)、[会话页面回归](../frontend/src/pages/RunDetailPage.test.tsx) |
 | 主动规划与用户决定 | Agent 可主动进入规划、提问、提交版本化方案和更新步骤；网页回答、批准、修改或拒绝，宿主限制规划写入/命令并绑定版本和目录身份；等待跨轮持久化，最终验收单列 | PM01—PM09、第16节；[规划协议](PLANNING.md)、[API回归](../tests/web/test_planning_api.py) |
-| 只读子 Agent | 探索/审阅串行委派、独立角色与显式技能、父权限交集、共享预算与取消；报告返回后重新决定后续动作，保留父收尾额度及末轮总结；有界结构报告核验实际引用，部分结果保留限制和证据；页面及历史同步展示 | C07；[委派协议与验收](SUBAGENTS.md)、[核心回归](../tests/test_subagents.py)、[HTTP回归](../tests/web/test_subagents_api.py) |
+| 只读子 Agent | 探索/审阅串行委派、独立角色与显式技能、父权限交集、共享预算与取消；报告返回后重新决定后续动作，保留父收尾额度及末轮总结；有界结构报告核验实际引用，部分结果保留限制和证据；页面及历史同步展示 | C07；[委派协议与验收](SUBAGENTS.md)、[核心回归](../tests/subagents/test_subagents.py)、[HTTP回归](../tests/web/test_subagents_api.py) |
 | 中断后接续 | 原会话发送“继续”产生新运行；核对持久事件与当前代码，标记未知工具结果；刷新/重启只读，不重放工具，不提供任意步骤精确恢复 | M03、M05、AR08；[中断接续回归](../tests/web/test_interrupted_continue.py)、[多轮协议](MULTITURN_TASKS.md) |
-| 上下文管理 | 固定根 AGENTS.md；完整消息及工具定义的字节预算、可选 token 估算；输出外置、旧成功结果遮蔽、结构化摘要、跨轮复用与只读 read_context；摘要占预算 | M06；[压缩实现](../src/agent_harness/compression.py)、[上下文协议](CONTEXT_MANAGEMENT.md) |
-| 手动技能 | 宿主登记 SKILL.md，页面手动选择，续轮继承/更换/清空，逐轮冻结正文与指纹；计入输入预算，不增加工具权限 | 第 9 节；[技能实现](../src/agent_harness/skills.py)、[技能联动回归](../tests/web/test_skills_api.py) |
+| 上下文管理 | 固定根 AGENTS.md；完整消息及工具定义的字节预算、可选 token 估算；输出外置、旧成功结果遮蔽、结构化摘要、跨轮复用与只读 read_context；摘要占预算 | M06；[压缩实现](../src/agent_harness/context/compression.py)、[上下文协议](CONTEXT_MANAGEMENT.md) |
+| 手动技能 | 宿主登记 SKILL.md，页面手动选择，续轮继承/更换/清空，逐轮冻结正文与指纹；计入输入预算，不增加工具权限 | 第 9 节；[技能实现](../src/agent_harness/context/skills.py)、[技能联动回归](../tests/web/test_skills_api.py) |
 | 运行与项目配置 | 全局页提供模型、工具及三项任务预算；覆盖值用于本浏览器后续任务，刷新恢复宿主默认；项目页持久保存解释器及 Git 公开测试；内部策略仍由 TOML 管理 | 用户故事 13、X02；[运行设置](../frontend/src/pages/SettingsPage.tsx)、[项目页](../frontend/src/pages/ProjectPage.tsx) |
 | 前端工作台 | 新建、项目、会话及运行配置页面；详情按“结果 / 文件 / 诊断”组织，支持手机抽屉、草稿保留、失败反馈与历史回看 | F01—F08；[页面入口](../frontend/src/App.tsx)、[详情检查器](../frontend/src/components/RunInspector.tsx)、[最近界面验收](WEB_CONSOLE.md#2026-10-29-工作台精简与界面统一) |
 

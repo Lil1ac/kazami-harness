@@ -1,7 +1,7 @@
 # V0.1 技术设计
 
-- 文档版本：0.8
-- 更新日期：2026-10-23
+- 文档版本：0.9
+- 更新日期：2026-11-01
 - 状态：维护当前实现的架构与协议；交付进度统一见 PROJECT.md
 - 对应需求：[PRD](PRD.md)
 - 交付目标：CLI / 前端提交任务 → 模型调用工具 → 保存产物与轨迹 → 独立验收 → 展示明确结果
@@ -50,60 +50,62 @@ Runner 是运行生命周期的唯一协调者，避免 CLI、工具和模型客
 
 ```text
 src/agent_harness/
-├── cli.py            # 参数、启动与结果显示
-├── schemas.py        # 任务、配置、结果和事件的数据契约
-├── config.py         # 运行配置加载与脱敏快照
-├── runner.py         # 生命周期、验收与收尾
-├── agent.py          # 多轮模型/工具循环
-├── context.py        # 根指令/所选技能快照与整体模型输入预算
-├── skills.py         # 宿主技能发现、规范校验与完整正文冻结
-├── sessions.py       # 会话关系、请求幂等与历史重建
-├── snapshots.py      # 普通工作区有界快照与后续副本
-├── workspace.py      # 路径边界与原子文件提交
-├── execution.py      # 当轮 Python 解释器及项目源码目录的固定与核验
-├── processes.py      # 子进程、输出、超时和清理
-├── store.py          # JSONL 与摘要
-├── verifier.py       # 宿主验收与退出码映射
-├── projects/
-│   ├── models.py     # 宿主Git项目与审阅契约
-│   └── manager.py    # 工作树、完整补丁与保留/丢弃
-├── providers/
-│   ├── base.py       # 最小模型协议
-│   └── deepseek.py   # 单供应商 REST 适配
-├── tools/
-│   ├── registry.py   # Schema、参数校验与分派
-│   ├── files.py      # 读取、搜索和写入
-│   └── command.py    # 命令工具
-└── web/
-    ├── config.py     # 宿主登记的工作区、验收预设与构建目录
-    ├── schemas.py    # 受限请求与运行视图
-    ├── service.py    # 单槽后台任务、取消、历史与产物
-    ├── conversations.py # 会话读取与后续运行准备
-    └── api.py        # HTTP、SSE、静态资源和受限产物访问
-frontend/
-└── src/
-    ├── pages/        # 任务列表、运行详情、配置
-    ├── components/   # 表单、状态、轨迹、产物与验收
-    ├── hooks/        # SSE 生命周期
-    ├── api.ts        # HTTP 请求与受控错误
-    ├── types.ts      # 与后端对应的数据契约
-    └── events.ts     # 事件合并；测试放在对应源码旁
+├── cli.py、__main__.py # CLI 与 python -m 入口
+├── config.py          # 运行配置加载与启动前校验
+├── schemas.py         # 公共配置、运行、事件和结果契约
+├── runtime/
+│   ├── runner.py      # 生命周期、共享预算、取消、验收与收尾
+│   ├── agent.py       # 多轮模型/工具循环
+│   └── verifier.py    # 宿主独立验收
+├── context/
+│   ├── builder.py     # 项目约定快照与整体模型输入构建、计量
+│   ├── compression.py # 分层压缩与输入投影
+│   ├── archive.py     # 外置内容保存及只读回读
+│   └── skills.py      # 宿主技能发现与正文冻结
+├── execution/
+│   ├── python.py      # 当轮解释器与项目源码目录核验
+│   ├── processes.py   # 子进程、输出、超时和清理
+│   ├── workspace.py   # 路径约束与原子文件提交
+│   └── local.py       # 原目录身份核验及逐轮变更证据
+├── storage/
+│   ├── runs.py        # JSONL 运行事件、输出与摘要
+│   ├── sessions.py    # 会话关联、请求幂等与历史重建
+│   └── snapshots.py   # 逐轮文件快照及固定产物
+├── work/
+│   ├── planning.py    # 方案版本、批准和交互决定
+│   ├── tasks.py       # 工作项、依赖、执行证据与租约
+│   └── exports.py     # 可信计划的 Markdown 导出
+├── memory/
+│   ├── service.py     # 记忆修订、候选和运行读取快照
+│   └── types.py       # 类型结构、触发与复核规则
+├── subagents/
+│   ├── service.py     # 只读串行委派及父子执行归属
+│   ├── profiles.py    # 子角色与只读工具范围
+│   └── reports.py     # 结构报告及证据引用核验
+├── projects/          # Git 工作树、补丁与审阅
+├── providers/         # 模型协议与 DeepSeek 适配
+├── tools/             # 工具注册、文件与命令执行
+├── web/               # HTTP/SSE、后台队列、会话及本机项目接入
+└── desktop/           # Electron 后台入口、设置及原生通道
+frontend/src/          # 页面、组件、API 类型与就近行为测试
+desktop/src/           # Electron 主进程、预加载及原生操作
 examples/
-├── logs/             # Agent 可操作的固定输入和任务说明
-├── skills/           # 宿主可选的 SKILL.md 流程说明
-└── verifiers/        # 宿主验收脚本与 TOML
+├── logs/              # Agent 可操作的固定输入和任务说明
+├── skills/            # 宿主可选的 SKILL.md 流程说明
+└── verifiers/         # 宿主验收脚本与 TOML
 tests/
-├── projects/         # 临时真实Git仓库的工作树与补丁测试
-├── web/
-│   ├── test_api.py
-│   └── test_cli_shutdown.py
-├── helpers/          # 显式离线浏览器辅助服务
-└── test_*.py         # 核心行为测试
+├── runtime/、context/、execution/、storage/
+├── work/、memory/、subagents/、providers/、tools/
+├── projects/、web/、desktop/ # 对应职责的行为与接入回归
+├── helpers/           # 共享测试构建器与显式离线服务
+└── test_*.py          # CLI、配置与公共契约测试
 ```
 
 `harness.example.toml` 与 `web.example.toml` 保留在根目录，分别配置运行核心和 Web 宿主预设。`examples/logs/` 与 `examples/verifiers/` 分开，避免将宿主验收程序混入样例工作区。CSV、目录清单样例及 demo 入口作为可选回归素材，不是近期产品交付目标。
 
-源码阅读可先沿 `cli.py → runner.py → agent.py` 理解主流程，再读 `providers/`、`tools/`、`processes.py` 与 `store.py`；网页从 `web/api.py → web/service.py` 进入同一个 Runner。依赖、缓存和运行输出仍保留原路径，由项目级编辑器规则隐藏，完整目录职责见 [项目概览](../PROJECT.md)。
+源码阅读可先沿 `cli.py → runtime/runner.py → runtime/agent.py` 理解主流程，再读 `providers/`、`tools/`、`execution/processes.py` 与 `storage/runs.py`；网页从 `web/api.py → web/service.py` 进入同一个 Runner。依赖、缓存和运行输出仍保留原路径，由项目级编辑器规则隐藏，完整目录职责见 [项目概览](../PROJECT.md)。
+
+跨包依赖使用 `agent_harness.<职责包>.<模块>` 绝对导入，源码位置与调用方定位保持一致。新增包的 `__init__.py` 仅说明职责，直接从实现模块导入所需对象，避免包初始化时隐式加载整个执行链；旧平铺路径已删除。测试按相同职责分组，Web 与桌面测试继续覆盖接入链路。
 
 每个模块解释关键机制和设计理由；类、函数和方法均提供中文职责说明，参数与返回值说明含义、单位、范围、默认值及特殊值行为，类属性和模型字段说明用途、初始状态与关联约束，变更时同步维护。前后端共享字段使用一致语义。不为单次使用的简单函数额外引入多层抽象。
 
@@ -264,7 +266,7 @@ RunResult.artifact_status为pending/complete/incomplete，artifact_warnings保�
 
 ## 9. 独立验收协议与状态收尾
 
-本节后端实现在 verifier.py、runner.py 和 schemas.py，日志参考入口为 examples/verifiers/verify_logs.py。验收仅在模型执行正常完成后启动，不占用模型轮次或工具调用数。启动预检不会运行验收程序。
+本节后端实现在 runtime/verifier.py、runtime/runner.py 和 schemas.py，日志参考入口为 examples/verifiers/verify_logs.py。验收仅在模型执行正常完成后启动，不占用模型轮次或工具调用数。启动预检不会运行验收程序。
 
 VerifierSpec 由宿主启动时读取的 TOML 声明，包含 argv、可选 cwd 和 timeout_seconds，例如：
 
@@ -411,7 +413,7 @@ Sessions只为最后一批缺失工具结果补充未知或未开始标记，要
 
 ## 手动技能加载（V0.2）
 
-skills.py 只负责从宿主配置的 skill_roots 有界发现技能并冻结显式选择的正文；Agent 启动时加载一次，context_prepared 保存原文和指纹。ContextBuilder 把技能和项目约定合并为同一条固定 user 前缀，避免更改原有 conversation_start 的 1/2 条前缀协议；跨轮摘要偏移同时考虑技能存在。固定正文参与输入计量，受压缩保护。
+context/skills.py 只负责从宿主配置的 skill_roots 有界发现技能并冻结显式选择的正文；Agent 启动时加载一次，context_prepared 保存原文和指纹。ContextBuilder 把技能和项目约定合并为同一条固定 user 前缀，避免更改原有 conversation_start 的 1/2 条前缀协议；跨轮摘要偏移同时考虑技能存在。固定正文参与输入计量，受压缩保护。
 
 RunConfig 的 skills 保存当前选择，浏览器 RunConfigPatch 只能覆盖名称数组；目录来源由宿主控制，续轮重新使用当前宿主登记，选择默认沿用前轮。WebRunManager.options 提供可选目录及禁用原因，详情通过既有上下文视图展示实际快照。PyYAML safe_load 解析 frontmatter，正文不解释为代码，不执行附属脚本。模块限额、配置与字段见 [任务技能](SKILLS.md)。
 

@@ -14,12 +14,12 @@ from uuid import uuid4
 from pydantic import Field, ValidationError, model_validator
 from typing import Literal
 
-from ..config import ConfigurationError
-from ..execution import prepare_python_execution
-from ..processes import _child_environment
-from ..projects import ProjectPreset
-from ..schemas import DataModel, UtcDatetime
-from .config import WebConfig, WebWorkspace, prepare_project_test
+from agent_harness.config import ConfigurationError
+from agent_harness.execution.python import prepare_python_execution
+from agent_harness.execution.processes import _child_environment
+from agent_harness.projects import ProjectPreset
+from agent_harness.schemas import DataModel, UtcDatetime
+from agent_harness.web.config import WebConfig, WebWorkspace, prepare_project_test
 
 
 class CatalogError(Exception):

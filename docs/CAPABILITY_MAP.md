@@ -91,7 +91,7 @@
 
 **边界：** 当前是可信本地、单任务、单 Agent。不能将工作树描述成命令沙箱；普通文件夹与 Git 项目的测试设置能力也有差异。复杂能力的缺口归入 C06、C10—C14，不把每个工具参数作为新一轮大功能。
 
-**前后端证据：** [项目登记](../src/agent_harness/web/project_catalog.py)、[工具执行器](../src/agent_harness/tools/registry.py)、[Runner](../src/agent_harness/runner.py)、[项目页](../frontend/src/pages/ProjectPage.tsx)、[项目入口回归](../tests/web/test_project_catalog.py)、[文件工具回归](../tests/test_file_tools.py)。实际联动记录见 [可靠性复验](RELIABILITY_ACCEPTANCE_20261029.md)。
+**前后端证据：** [项目登记](../src/agent_harness/web/project_catalog.py)、[工具执行器](../src/agent_harness/tools/registry.py)、[Runner](../src/agent_harness/runtime/runner.py)、[项目页](../frontend/src/pages/ProjectPage.tsx)、[项目入口回归](../tests/web/test_project_catalog.py)、[文件工具回归](../tests/tools/test_file_tools.py)。实际联动记录见 [可靠性复验](RELIABILITY_ACCEPTANCE_20261029.md)。
 
 ### C02 多轮会话与上下文管理
 
@@ -101,7 +101,7 @@
 
 **边界：** 重启后读取历史不会自动续跑。“继续”创建新 Run，不是从某一代码行恢复；未知工具结果不能自动重放。当前根项目指令加载不包含完整的分层规则发现。运行中不能提交新一轮；会话分叉及代码分叉没有产品闭环，应随 C05/C13 的场景设计。跨会话知识归 C09。
 
-**前后端证据：** [会话重建](../src/agent_harness/sessions.py)、[压缩](../src/agent_harness/compression.py)、[上下文归档](../src/agent_harness/context_archive.py)、[会话发送](../frontend/src/hooks/useConversationSend.ts)、[上下文面板](../frontend/src/components/ContextPanel.tsx)、[中断接续测试](../tests/web/test_interrupted_continue.py)、[压缩 API 测试](../tests/web/test_compression_api.py)。
+**前后端证据：** [会话重建](../src/agent_harness/storage/sessions.py)、[压缩](../src/agent_harness/context/compression.py)、[上下文归档](../src/agent_harness/context/archive.py)、[会话发送](../frontend/src/hooks/useConversationSend.ts)、[上下文面板](../frontend/src/components/ContextPanel.tsx)、[中断接续测试](../tests/web/test_interrupted_continue.py)、[压缩 API 测试](../tests/web/test_compression_api.py)。
 
 ## 4. 核心缺口：任务如何被组织和执行
 
@@ -114,7 +114,7 @@
 - **当前交付：** 版本化方案包含目标架构、范围、步骤及验收，用户可批准/修改/拒绝；批准绑定当前请求、方案版本和实际目录对象。规划写入、局部编辑、所有命令与宿主测试均被拒绝/跳过；目录发现使用只读工具。状态保存在受保护运行记录。
 - **前端闭环：** 原会话回答问题、审阅并决定方案；批准后自动接续，显示对应计划和步骤；历史只读、各版方案与用户决定可回看。等待状态不冒充开发完成。
 - **边界：** 自动模式的复杂度判断仍由模型完成，严格先批准需显式入口或宿主策略；批准范围依靠方案约定与既有工具/路径/预算限制，不声称形式化理解自然语言范围。CLI可保存等待，但交互式决定首版限网页登记会话。
-- **验收与依据：** 复用C02幂等追加和当前单槽，等待结束当前Run、回答后建立新Run，重启只读不重放；不是持久协程精确恢复。[规划实现](../src/agent_harness/planning.py)、[工具注册](../src/agent_harness/tools/registry.py)、[页面](../frontend/src/components/PlanningPanel.tsx)、[真实API测试](../tests/web/test_planning_api.py)；对应PRD PM01—PM09。
+- **验收与依据：** 复用C02幂等追加和当前单槽，等待结束当前Run、回答后建立新Run，重启只读不重放；不是持久协程精确恢复。[规划实现](../src/agent_harness/work/planning.py)、[工具注册](../src/agent_harness/tools/registry.py)、[页面](../frontend/src/components/PlanningPanel.tsx)、[真实API测试](../tests/web/test_planning_api.py)；对应PRD PM01—PM09。
 
 ### C04 Agent Tasks：可追踪的整体工作与子任务
 
@@ -149,7 +149,7 @@
 - **应补齐：** 统一作业生命周期及记录；排队/运行/等待/终态；执行者认领和失联检测；重启后的恢复策略；后台命令输出和资源清理；完成/失败/需要用户处理的通知。需要区分“关闭网页”“Web 服务重启”“执行进程崩溃”，分别承诺行为。
 - **前端闭环：** 后台中心展示队列、活动工作、阻塞原因和结果；能进入对应会话、停止作业；用户离开页面仍能再次定位工作，通知只提示有意义的变化。
 - **完成标准：** 并发不越限，同一工作区不会发生未受控写冲突；取消能覆盖相关进程；重复投递不重复执行副作用；重启后不把孤儿运行显示成正常活动。无法确认是否完成的外部写入进入待核对，不能直接重放。
-- **依赖与依据：** 是 C07 并行、C08 团队和 C16 自动化的基础；首版可限定本机，分阶段建设但最终形成完整后台闭环。[当前服务](../src/agent_harness/web/service.py)、[命令进程](../src/agent_harness/processes.py)、[停服测试](../tests/web/test_cli_shutdown.py)、[事件订阅](../frontend/src/hooks/useRunEvents.ts)。参考 [后台 Agent 管理](https://code.claude.com/docs/en/agent-view) 与 [持久检查点](https://docs.langchain.com/oss/python/langgraph/checkpointers)。
+- **依赖与依据：** 是 C07 并行、C08 团队和 C16 自动化的基础；首版可限定本机，分阶段建设但最终形成完整后台闭环。[当前服务](../src/agent_harness/web/service.py)、[命令进程](../src/agent_harness/execution/processes.py)、[停服测试](../tests/web/test_cli_shutdown.py)、[事件订阅](../frontend/src/hooks/useRunEvents.ts)。参考 [后台 Agent 管理](https://code.claude.com/docs/en/agent-view) 与 [持久检查点](https://docs.langchain.com/oss/python/langgraph/checkpointers)。
 
 ### C07 Subagents：主 Agent 委派独立子工作
 
@@ -159,7 +159,7 @@
 - **前端闭环：** 在会话活动中查看委派任务、执行者、状态和结果摘要；展开查看子执行记录、用量、改动及失败；停止主任务时说明子工作如何处理。
 - **完成标准：** 主 Agent 能使用子结果交付一个真实任务；子历史不会无条件灌入主上下文；子权限不能超出父级授权；多个子任务共享总预算；子失败不会伪造成功；取消后无未归属进程或写入。
 - **首版建议：** 先完整交付“探索/审阅型只读子 Agent”，验证委派价值；随后在同一能力后续迭代中引入隔离写入与成果集成，不一开始开放任意递归和共同改同一文件。
-- **依赖与依据：** 最小串行委派可复用现有 Runner；并行委派需要 C06，可靠写入需要 C12/C13，任务关联使用 C04。核对 [执行循环](../src/agent_harness/agent.py)、[工具注册](../src/agent_harness/tools/registry.py)、[前端类型](../frontend/src/types.ts)。参考 [Claude Code 子 Agent](https://code.claude.com/docs/en/sub-agents)。
+- **依赖与依据：** 最小串行委派可复用现有 Runner；并行委派需要 C06，可靠写入需要 C12/C13，任务关联使用 C04。核对 [执行循环](../src/agent_harness/runtime/agent.py)、[工具注册](../src/agent_harness/tools/registry.py)、[前端类型](../frontend/src/types.ts)。参考 [Claude Code 子 Agent](https://code.claude.com/docs/en/sub-agents)。
 
 ### C08 Agent Teams：多成员共享目标并持续协作
 
@@ -186,7 +186,7 @@
 - **应补齐：** 明确项目/用户作用域；记忆内容、来源、适用条件、更新时间；显式“记住”及可选自动候选提取；检索和注入预算；冲突、过期和错误记忆处理；查看、修改、删除。长期记忆不能无条件提升成宿主权限或替代当前用户指令。
 - **前端闭环：** 项目中能查看和管理记忆，运行详情能说明本轮用了哪些记忆；用户可以拒绝保存或纠正一条事实。优先展示有用内容和来源，不用给每个向量参数做设置页。
 - **完成标准：** 在会话 A 保存确认的项目事实，会话 B 能按需使用；另一项目不会串入；修改/删除后新运行生效而旧轮快照可追溯；矛盾事实不会静默覆盖；压缩上下文不会丢失应保留的来源关系。
-- **依赖与依据：** 复用 C02 的输入投影和快照，可独立于 Teams 开发；首版可以使用 Markdown/结构化记录与文本检索，不预设向量数据库。[上下文构造](../src/agent_harness/context.py)、[会话历史](../src/agent_harness/sessions.py)、[上下文面板](../frontend/src/components/ContextPanel.tsx)。参考 [Claude Code memory](https://code.claude.com/docs/en/memory) 与 [LangGraph 的线程状态和跨线程存储区分](https://docs.langchain.com/oss/python/langgraph/persistence)。
+- **依赖与依据：** 复用 C02 的输入投影和快照，可独立于 Teams 开发；首版可以使用 Markdown/结构化记录与文本检索，不预设向量数据库。[上下文构造](../src/agent_harness/context/builder.py)、[会话历史](../src/agent_harness/storage/sessions.py)、[上下文面板](../frontend/src/components/ContextPanel.tsx)。参考 [Claude Code memory](https://code.claude.com/docs/en/memory) 与 [LangGraph 的线程状态和跨线程存储区分](https://docs.langchain.com/oss/python/langgraph/persistence)。
 
 ## 5. 支撑完整工作台的其他大功能
 
@@ -197,7 +197,7 @@
 - **应补齐：** 技能按需发现与激活、附属资源/脚本的受控使用；MCP 服务连接、工具与资源发现、凭据和授权、失败隔离；扩展启停、来源和版本管理。Hooks 属于可配置的生命周期动作，必须有超时、失败策略与记录，不能与提示词技能混为一谈；插件市场可后置。
 - **前端闭环：** 管理可用技能与外部连接，区分断连/未授权/可用；运行中展示实际调用的外部工具及结果来源；授权只赋予明确范围。
 - **完成标准：** 从页面连接并调用一个真实或可控 MCP 服务，重连、撤权、超时行为一致；技能资源按选择加载并留下快照；外部工具不会绕过 C12 权限，密钥不进入日志；刷新历史仍能说明当时的扩展版本和使用结果。
-- **依据：** [技能实现](../src/agent_harness/skills.py)、[技能选择器](../frontend/src/components/SkillSelector.tsx)、[技能 API 测试](../tests/web/test_skills_api.py)、[技能说明](SKILLS.md)。参考 [MCP 架构](https://modelcontextprotocol.io/docs/learn/architecture) 和 [Hooks 生命周期](https://code.claude.com/docs/en/hooks)。
+- **依据：** [技能实现](../src/agent_harness/context/skills.py)、[技能选择器](../frontend/src/components/SkillSelector.tsx)、[技能 API 测试](../tests/web/test_skills_api.py)、[技能说明](SKILLS.md)。参考 [MCP 架构](https://modelcontextprotocol.io/docs/learn/architecture) 和 [Hooks 生命周期](https://code.claude.com/docs/en/hooks)。
 
 ### C11 模型接入与按角色配置
 
@@ -206,7 +206,7 @@
 - **应补齐：** 多供应商配置、凭据和能力声明；工具调用、错误、用量、上下文与流式事件的统一边界；按角色的可复用配置。自动路由或故障切换应记录实际模型与原因；可能重复副作用时不能不加区分地重跑整个任务。
 - **前端闭环：** 选择供应商和模型，查看能力及连接问题；任务和子 Agent 可选明确配置；运行详情保留实际供应商/模型与已知用量，逐步输出不会产生重复最终消息。
 - **完成标准：** 至少两个适配器在同一工具任务和异常场景中通过契约及页面验证；未知用量仍为未知；凭据不回传页面；流式中断能正确收尾，不丢已完成工具结果。
-- **依据：** [模型协议](../src/agent_harness/providers/base.py)、[DeepSeek 适配](../src/agent_harness/providers/deepseek.py)、[配置模型](../src/agent_harness/schemas.py)、[设置页面](../frontend/src/pages/SettingsPage.tsx)、[供应商测试](../tests/test_provider.py)。多模型可以支持 C07，但不是实现子 Agent 的必要前置条件。
+- **依据：** [模型协议](../src/agent_harness/providers/base.py)、[DeepSeek 适配](../src/agent_harness/providers/deepseek.py)、[配置模型](../src/agent_harness/schemas.py)、[设置页面](../frontend/src/pages/SettingsPage.tsx)、[供应商测试](../tests/providers/test_provider.py)。多模型可以支持 C07，但不是实现子 Agent 的必要前置条件。
 
 ### C12 执行环境与权限控制
 
@@ -215,7 +215,7 @@
 - **应补齐：** 会话与 Agent 的工具/目录/网络权限策略；具体动作的批准与拒绝；权限继承；可选容器或其他沙箱执行环境；依赖准备、资源限制和遗留回收。执行环境与代码工作区分别建模，不能把“隔离工作树”按钮当作两者都已隔离。
 - **前端闭环：** 明确展示工作目录、执行环境和权限范围；需要批准时展示将执行的具体动作；环境不可用时解释失败，不能静默切回本机。
 - **完成标准：** Plan Mode 的写操作被宿主拦截；子 Agent 不可扩大权限；命令与项目测试使用同一目标代码和执行环境；取消/超时后可核验清理；越界访问和网络策略按承诺生效。
-- **依据：** [工作区约束](../src/agent_harness/workspace.py)、[执行环境](../src/agent_harness/execution.py)、[进程管理](../src/agent_harness/processes.py)、[工作树管理](../src/agent_harness/projects/manager.py)、[项目审阅面板](../frontend/src/components/ProjectReviewPanel.tsx)。首版具体隔离环境需另行选择，不预设必须支持所有平台。
+- **依据：** [工作区约束](../src/agent_harness/execution/workspace.py)、[执行环境](../src/agent_harness/execution/python.py)、[进程管理](../src/agent_harness/execution/processes.py)、[工作树管理](../src/agent_harness/projects/manager.py)、[项目审阅面板](../frontend/src/components/ProjectReviewPanel.tsx)。首版具体隔离环境需另行选择，不预设必须支持所有平台。
 
 ### C13 成果审阅与采纳交付
 
@@ -224,7 +224,7 @@
 - **应补齐：** 目标分支和基线选择、源目录已有改动处理、冲突呈现与解决、采纳后的复验；经用户授权的提交/PR 交付；可选会话/代码分支与回退。多 Agent 写入后需要在集成结果上验收，而不是只看各自工作树通过。
 - **前端闭环：** 清楚区分“生成成果”“审阅通过”“已采纳”“已提交/创建 PR”；展示操作目标、冲突和最新测试依据；提供可审阅的最终变更。
 - **完成标准：** 指定目标收到正确改动，原有未提交修改不被覆盖；冲突和测试失败时不伪造交付成功；重复操作不重复采纳；历史补丁和产物仍可下载；提交与推送遵守明确授权范围。
-- **依据：** [项目管理](../src/agent_harness/projects/manager.py)、[本地文件证据](../src/agent_harness/local_execution.py)、[文件差异](../frontend/src/components/FileChangesPanel.tsx)、[审阅交互](../frontend/src/components/ProjectReviewPanel.tsx)、[产物 API 测试](../tests/web/test_artifact_collection_api.py)。
+- **依据：** [项目管理](../src/agent_harness/projects/manager.py)、[本地文件证据](../src/agent_harness/execution/local.py)、[文件差异](../frontend/src/components/FileChangesPanel.tsx)、[审阅交互](../frontend/src/components/ProjectReviewPanel.tsx)、[产物 API 测试](../tests/web/test_artifact_collection_api.py)。
 
 ### C14 验证、评测与持续改进
 
@@ -233,7 +233,7 @@
 - **应补齐：** 固定任务、起始代码、模型、环境与预算的比较流程；任务集与运行证据关联；比较质量、干预次数、耗时及已知成本；候选采用/拒绝、回退和未见任务回归。评测页面可以随重复使用需要演进，首轮无需先造平台。
 - **前端闭环：** 首版可用现有运行详情查看基线/候选与各自检查；后续提供成对比较和回归结果，保留失败与人工介入记录。
 - **完成标准：** 同条件跑完一组比较并可复查；候选不得继承基线已修改代码或修改独立检查；无收益能明确拒绝；采用后有可验证回退路径。样本规模不足时不宣称普遍性能提升。
-- **依据：** [验收器](../src/agent_harness/verifier.py)、[自动修复测试](../tests/test_auto_repair.py)、[验收面板](../frontend/src/components/VerificationPanel.tsx)、[可靠性报告](RELIABILITY_ACCEPTANCE_20261029.md)、[PRD 的 I01—I05](PRD.md#46-受限改进首版v03)。
+- **依据：** [验收器](../src/agent_harness/runtime/verifier.py)、[自动修复测试](../tests/runtime/test_auto_repair.py)、[验收面板](../frontend/src/components/VerificationPanel.tsx)、[可靠性报告](RELIABILITY_ACCEPTANCE_20261029.md)、[PRD 的 I01—I05](PRD.md#46-受限改进首版v03)。
 
 ### C15 运行观察与资源管理
 
@@ -242,7 +242,7 @@
 - **应补齐：** 任务—Run—Agent—工具的关联追踪；队列、等待与执行耗时；子预算分配及整体停止；按供应商可知数据估算费用、缺失和估算标识；多运行故障定位及必要通知。运营指标应服务实际判断，不先做大量仪表盘。
 - **前端闭环：** 从总目标逐级进入失败环节，看到谁在运行、在等什么以及总预算；可定位原始日志和输入配置，历史与实时状态口径一致。
 - **完成标准：** 父子用量不重复计数，未知数据不记零；超过总预算停止新增工作并收尾；断线重连不重复展示事件；可以从一条失败追到相应 Agent、工具和输出。
-- **依据：** [记录存储](../src/agent_harness/store.py)、[运行检查器](../frontend/src/components/RunInspector.tsx)、[事件轨迹](../frontend/src/components/EventTrail.tsx)、[用量展示](../frontend/src/components/UsageDisplay.tsx)、[SSE Hook 回归](../frontend/src/hooks/useRunEvents.test.tsx)。
+- **依据：** [记录存储](../src/agent_harness/storage/runs.py)、[运行检查器](../frontend/src/components/RunInspector.tsx)、[事件轨迹](../frontend/src/components/EventTrail.tsx)、[用量展示](../frontend/src/components/UsageDisplay.tsx)、[SSE Hook 回归](../frontend/src/hooks/useRunEvents.test.tsx)。
 
 ### C16 定时与事件驱动自动化
 
@@ -251,7 +251,7 @@
 - **应补齐：** 触发规则、时区与生效范围、执行身份和预授权；任务模板、去重、重叠执行策略、失败重试边界；暂停/恢复、历史及通知。定时执行是一种运行入口，不应另写一套绕过 Runner 权限和验收的执行器。
 - **前端闭环：** 新建和修改规则、查看下一次执行、暂停、查看触发历史与结果；只在完成、失败、实质变化或需要处理时通知。
 - **完成标准：** 重启后规则仍在；同一触发不会重复产生副作用；时区正确；长任务重叠按规则处理；撤销授权或暂停后不再启动；无交互环境遇到待批准动作能等待或明确终止。
-- **依赖与依据：** 需要 C06 持久调度、C05/C12 的无人值守处理及 C15 通知；重用 [任务 API](../src/agent_harness/web/api.py) 与 [Runner](../src/agent_harness/runner.py)。可复用外部调度基础设施，但需要本产品的完整管理与记录闭环。
+- **依赖与依据：** 需要 C06 持久调度、C05/C12 的无人值守处理及 C15 通知；重用 [任务 API](../src/agent_harness/web/api.py) 与 [Runner](../src/agent_harness/runtime/runner.py)。可复用外部调度基础设施，但需要本产品的完整管理与记录闭环。
 
 ### C17 联网研究与多模态工作
 
@@ -344,13 +344,13 @@ V0.2 的既定首版验收已经完成，仍允许人工接续。这个事实与
 
 | 核对面 | 代码/前端入口 | 测试或既有验收依据 |
 | --- | --- | --- |
-| 单 Agent 运行与工具集合 | [agent.py](../src/agent_harness/agent.py)、[registry.py](../src/agent_harness/tools/registry.py)、[schemas.py](../src/agent_harness/schemas.py) | [工具工作流](../tests/test_tool_workflow.py)、[Runner 测试](../tests/test_runner.py) |
+| 单 Agent 运行与工具集合 | [runtime/agent.py](../src/agent_harness/runtime/agent.py)、[registry.py](../src/agent_harness/tools/registry.py)、[schemas.py](../src/agent_harness/schemas.py) | [工具工作流](../tests/tools/test_tool_workflow.py)、[Runner 测试](../tests/runtime/test_runner.py) |
 | 单槽后台、取消、停服 | [service.py](../src/agent_harness/web/service.py)、[api.py](../src/agent_harness/web/api.py)、[事件订阅](../frontend/src/hooks/useRunEvents.ts) | [API 测试](../tests/web/test_api.py)、[停服测试](../tests/web/test_cli_shutdown.py) |
-| 多轮、历史、手动接续 | [conversations.py](../src/agent_harness/web/conversations.py)、[sessions.py](../src/agent_harness/sessions.py)、[详情页](../frontend/src/pages/RunDetailPage.tsx) | [中断接续](../tests/web/test_interrupted_continue.py)、[详情页测试](../frontend/src/pages/RunDetailPage.test.tsx) |
-| 上下文、技能、记忆边界 | [context.py](../src/agent_harness/context.py)、[compression.py](../src/agent_harness/compression.py)、[skills.py](../src/agent_harness/skills.py)、[上下文面板](../frontend/src/components/ContextPanel.tsx) | [压缩 API](../tests/web/test_compression_api.py)、[技能 API](../tests/web/test_skills_api.py) |
-| 代码工作区与成果 | [local_execution.py](../src/agent_harness/local_execution.py)、[projects/manager.py](../src/agent_harness/projects/manager.py)、[文件差异面板](../frontend/src/components/FileChangesPanel.tsx) | [项目测试](../tests/web/test_projects.py)、[产物采集 API](../tests/web/test_artifact_collection_api.py) |
-| 检查与修复 | [runner.py](../src/agent_harness/runner.py)、[verifier.py](../src/agent_harness/verifier.py)、[验收面板](../frontend/src/components/VerificationPanel.tsx) | [自动修复](../tests/test_auto_repair.py)、[修复 API](../tests/web/test_auto_repair_api.py) |
-| 模型、输入与设置 | [providers](../src/agent_harness/providers/deepseek.py)、[Web schemas](../src/agent_harness/web/schemas.py)、[前端类型](../frontend/src/types.ts)、[设置页](../frontend/src/pages/SettingsPage.tsx) | [供应商测试](../tests/test_provider.py)、[配置测试](../tests/test_config.py) |
+| 多轮、历史、手动接续 | [conversations.py](../src/agent_harness/web/conversations.py)、[storage/sessions.py](../src/agent_harness/storage/sessions.py)、[详情页](../frontend/src/pages/RunDetailPage.tsx) | [中断接续](../tests/web/test_interrupted_continue.py)、[详情页测试](../frontend/src/pages/RunDetailPage.test.tsx) |
+| 上下文、技能、记忆边界 | [context/builder.py](../src/agent_harness/context/builder.py)、[context/compression.py](../src/agent_harness/context/compression.py)、[context/skills.py](../src/agent_harness/context/skills.py)、[上下文面板](../frontend/src/components/ContextPanel.tsx) | [压缩 API](../tests/web/test_compression_api.py)、[技能 API](../tests/web/test_skills_api.py) |
+| 代码工作区与成果 | [execution/local.py](../src/agent_harness/execution/local.py)、[projects/manager.py](../src/agent_harness/projects/manager.py)、[文件差异面板](../frontend/src/components/FileChangesPanel.tsx) | [项目测试](../tests/web/test_projects.py)、[产物采集 API](../tests/web/test_artifact_collection_api.py) |
+| 检查与修复 | [runtime/runner.py](../src/agent_harness/runtime/runner.py)、[runtime/verifier.py](../src/agent_harness/runtime/verifier.py)、[验收面板](../frontend/src/components/VerificationPanel.tsx) | [自动修复](../tests/runtime/test_auto_repair.py)、[修复 API](../tests/web/test_auto_repair_api.py) |
+| 模型、输入与设置 | [providers](../src/agent_harness/providers/deepseek.py)、[Web schemas](../src/agent_harness/web/schemas.py)、[前端类型](../frontend/src/types.ts)、[设置页](../frontend/src/pages/SettingsPage.tsx) | [供应商测试](../tests/providers/test_provider.py)、[配置测试](../tests/test_config.py) |
 
 “未实现”的判断来自上述入口相互核对：数据模型没有相应实体/状态，工具与 API 没有相应操作，前端没有对应使用闭环。没有仅凭一次关键词搜索就将某能力判成缺失。测试文件的存在是已有行为约束的证据，不代表本次重新执行并通过。
 

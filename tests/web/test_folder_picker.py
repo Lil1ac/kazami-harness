@@ -119,7 +119,7 @@ def test_native_environment_preserves_shell_paths_without_credentials(monkeypatc
     assert all(result[key] == value for key, value in desktop.items())
     assert "DEEPSEEK_API_KEY" not in result and "PYTHONPATH" not in result
     assert dict(os.environ) == original
-    from agent_harness.processes import _child_environment
+    from agent_harness.execution.processes import _child_environment
     assert "PROGRAMDATA" not in _child_environment()
 
 

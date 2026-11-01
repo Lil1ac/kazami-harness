@@ -7,9 +7,9 @@ import shutil
 
 from pydantic import Field, ValidationError, model_validator
 
-from ..config import ConfigurationError
-from ..schemas import DataModel
-from ..projects import ProjectPreset
+from agent_harness.config import ConfigurationError
+from agent_harness.schemas import DataModel
+from agent_harness.projects import ProjectPreset
 
 
 # 受控普通目录登记；每轮直接使用已登记目录。

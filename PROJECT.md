@@ -39,14 +39,21 @@ CLI 与网页在统一收尾阶段自动登记本轮新增、修改文件，命�
 
 | 位置 | 存放内容 |
 | --- | --- |
-| `src/agent_harness/` | CLI、运行生命周期、模型/工具循环、配置、记录及验收核心 |
-| `src/agent_harness/local_execution.py` | 原目录身份核验、逐轮文件变化与固定产物，不复制执行目录 |
+| `src/agent_harness/` | CLI 入口、运行配置与公共数据契约 |
+| `src/agent_harness/runtime/` | 运行生命周期、模型/工具循环与宿主验收 |
+| `src/agent_harness/context/` | 输入构建、压缩、归档与技能快照 |
+| `src/agent_harness/execution/` | Python 环境、进程、工作区与原目录执行证据 |
+| `src/agent_harness/storage/` | 运行记录、会话历史与逐轮文件快照 |
+| `src/agent_harness/work/` | 计划审批、持久工作项与计划导出 |
+| `src/agent_harness/memory/` | 长期记忆及类型、触发和复核规则 |
+| `src/agent_harness/subagents/` | 只读子代理执行、角色与报告核验 |
+| `src/agent_harness/providers/`、`tools/` | 模型适配、工具注册与具体文件/命令工具 |
 | `src/agent_harness/projects/` | 宿主项目预设、Git 工作树、代码快照、补丁和审阅决定 |
 | `src/agent_harness/web/` | HTTP/SSE 入口、后台任务服务、网页请求/视图、本机项目登记、原生选择器与宿主预设 |
 | `frontend/` | 页面、组件、浏览器状态、API 类型与前端离线测试 |
 | `desktop/` | Electron 主进程、沙箱预加载、后台进程管理、原生操作及 Windows 安装包配置 |
 | `src/agent_harness/desktop/` | Electron 管理的独立后台入口、公开设置、会话认证和私有原生通道 |
-| `tests/` | 后端行为测试；`web/` 放 Web 接口与停服测试，`helpers/` 放显式测试辅助服务 |
+| `tests/` | 后端测试按源码职责分组；`web/`、`desktop/` 覆盖接入链路，`helpers/` 放共享构建器和离线服务 |
 | `examples/logs/` | 可交给 Agent 操作的固定日志输入和任务说明 |
 | `examples/verifiers/` | 宿主维护的独立验收程序与 TOML，不混入 Agent 样例工作区 |
 | `docs/` | 产品需求、技术协议、前端验收要求及控制台说明 |
@@ -77,7 +84,7 @@ CLI 与网页在统一收尾阶段自动登记本轮新增、修改文件，命�
 | [前端工程说明](frontend/README.md) | 前端开发命令、源码阅读入口与订阅实现 |
 | [项目约定](AGENTS.md) | 中文说明、代码注释、Plan 审批与前后端同步迭代约定 |
 
-先按 README 启动，再读 PRD 理解范围；学习实现时，从 `cli.py → runner.py → agent.py` 看执行主线，从 `web/api.py → web/service.py → runner.py` 看网页如何复用核心，最后按实际问题阅读工具、进程、存储和验收模块。前端从 `App.tsx → pages/ → api.ts / types.ts → useRunEvents.ts` 阅读。
+先按 README 启动，再读 PRD 理解范围；学习实现时，从 `cli.py → runtime/runner.py → runtime/agent.py` 看执行主线，从 `web/api.py → web/service.py → runtime/runner.py` 看网页如何复用核心，最后按实际问题阅读工具、进程、存储和验收模块。前端从 `App.tsx → pages/ → api.ts / types.ts → useRunEvents.ts` 阅读。
 
 ## 版本路线与下一步
 

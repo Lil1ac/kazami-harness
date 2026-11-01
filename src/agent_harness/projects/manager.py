@@ -15,11 +15,11 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
-from agent_harness.processes import _child_environment, _windows_taskkill
-from agent_harness.snapshots import FileSnapshotStore
-from agent_harness.local_execution import LocalChangeStore
+from agent_harness.execution.processes import _child_environment, _windows_taskkill
+from agent_harness.storage.snapshots import FileSnapshotStore
+from agent_harness.execution.local import LocalChangeStore
 
-from .models import ChangedFile, ProjectPreset, ProjectReview, ProjectWorkspace
+from agent_harness.projects.models import ChangedFile, ProjectPreset, ProjectReview, ProjectWorkspace
 
 
 class ProjectError(Exception):

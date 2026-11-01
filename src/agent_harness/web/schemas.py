@@ -6,10 +6,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ..schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
-from ..projects import ProjectReview, ProjectWorkspace
-from ..local_execution import LocalChangeView
-from ..schemas import MemorySelection
+from agent_harness.schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
+from agent_harness.projects import ProjectReview, ProjectWorkspace
+from agent_harness.execution.local import LocalChangeView
+from agent_harness.schemas import MemorySelection
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。

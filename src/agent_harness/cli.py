@@ -13,9 +13,9 @@ from uuid import uuid4
 from agent_harness import __version__
 from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.schemas import RunManifest, RunResult
-from agent_harness.runner import CancellationState, RunOutcome, exit_code, run_task, validate_auto_repair
-from agent_harness.store import RunStore, StorageError
-from agent_harness.tasks import TaskError
+from agent_harness.runtime.runner import CancellationState, RunOutcome, exit_code, run_task, validate_auto_repair
+from agent_harness.storage.runs import RunStore, StorageError
+from agent_harness.work.tasks import TaskError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -204,8 +204,8 @@ def _serve(args: argparse.Namespace) -> int:
         raise ConfigurationError("服务端口必须为1至65535之间的整数。")
     # 延迟导入：CLI运行/历史查看不初始化Web服务或静态资源。
     import uvicorn
-    from .web.api import create_app
-    from .web.config import load_web_config
+    from agent_harness.web.api import create_app
+    from agent_harness.web.config import load_web_config
 
     web_config = load_web_config(args.web_config)
     app = create_app(web_config, load_config(args.config), args.runs_dir)

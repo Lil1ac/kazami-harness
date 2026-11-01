@@ -9,15 +9,15 @@ from uuid import UUID
 
 from starlette.requests import Request
 
-from ..config import ConfigurationError
-from ..schemas import RunConfig
-from ..web.project_catalog import CatalogError
-from ..web.service import WebServiceError
-from .bridge import NativeClient
-from .storage import DesktopPreferences, DesktopRunSettings, PreferenceStore
+from agent_harness.config import ConfigurationError
+from agent_harness.schemas import RunConfig
+from agent_harness.web.project_catalog import CatalogError
+from agent_harness.web.service import WebServiceError
+from agent_harness.desktop.bridge import NativeClient
+from agent_harness.desktop.storage import DesktopPreferences, DesktopRunSettings, PreferenceStore
 
 if TYPE_CHECKING:
-    from ..web.service import WebRunManager
+    from agent_harness.web.service import WebRunManager
 
 
 class DesktopHost:
@@ -89,7 +89,7 @@ class DesktopHost:
         url = urlsplit(relative_url)
         memory = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]{1,64})/memories/export", url.path)
         if memory is not None and self.manager is not None and not (url.scheme or url.netloc or url.query or url.fragment):
-            from ..web.memory import export_project_memory
+            from agent_harness.web.memory import export_project_memory
             return export_project_memory(self.manager, memory[1])
         match = re.fullmatch(r"/api/runs/([0-9a-fA-F-]{36})/(artifacts|patch)", url.path)
         if url.scheme or url.netloc or url.fragment or match is None or self.manager is None:

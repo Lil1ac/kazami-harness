@@ -53,7 +53,7 @@ CLI、普通文件夹及示例任务默认使用相同的根目录/src 规则，
 | `executable` | 项目设置或 PATH 解析的解释器；null 表示未找到 |
 | `python_paths` | 有序的项目源码目录，根目录优先 |
 
-实现主线：[执行快照](../src/agent_harness/execution.py) → [Runner](../src/agent_harness/runner.py) → [命令](../src/agent_harness/tools/command.py) / [验收](../src/agent_harness/verifier.py)。路径快照的结构校验不访问文件系统；执行前核验由执行器负责。
+实现主线：[执行快照](../src/agent_harness/execution/python.py) → [Runner](../src/agent_harness/runtime/runner.py) → [命令](../src/agent_harness/tools/command.py) / [验收](../src/agent_harness/runtime/verifier.py)。路径快照的结构校验不访问文件系统；执行前核验由执行器负责。
 
 ## 5. 本轮验收（2026-10-27）
 

@@ -18,9 +18,9 @@ import pytest
 from agent_harness.projects import ProjectError, ProjectManager, ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
-from agent_harness.sessions import SessionStore, payload_digest
-from agent_harness.snapshots import FileSnapshotStore
-from agent_harness.store import RunStore
+from agent_harness.storage.sessions import SessionStore, payload_digest
+from agent_harness.storage.snapshots import FileSnapshotStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from agent_harness.web.schemas import FollowupRequest

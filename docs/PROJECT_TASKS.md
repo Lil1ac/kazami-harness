@@ -62,7 +62,7 @@ TOML 作为可选初始登记，与页面打开的目录合并；任务接口仍
 - `web/project_catalog.py`：本机目录登记、初始配置合并、最近项目持久化与测试设置。
 - `web/folder_picker.py` 与 `web/native_dialog.py`：异步协调 Windows 系统目录选择窗口。
 - `web/service.py`：单槽提交、Runner与可选项目测试组合、收尾保护和审阅操作条件；正常快照由Runner在唯一终态前固化。
-- `verifier.py` 与 `processes.py`：复用真实进程、输出、超时和取消处理。
+- `runtime/verifier.py` 与 `execution/processes.py`：复用真实进程、输出、超时和取消处理。
 - 前端：项目表单、代码改动页、测试面板及确认操作。
 
 `GET /api/options` 返回初始项目、最近项目及选择器能力；目录选择、重新打开和测试设置见 [本机项目协议](LOCAL_PROJECTS.md#4-http-契约)。`POST /api/runs` 的 `project_id` 与 `workspace_id` 二选一，Git隔离模式可传 `base_ref`，不传普通 `verifier_id`。`RunView.project` 为隔离Git审阅；原目录的 `execution_mode/source_path/source_kind/local_changes` 分别提供执行方式、来源、类型与本轮变化。项目详情通过 `GET /api/runs/{id}/review` 读取；`POST /api/runs/{id}/review` 接收 `decision=keep/discard`；`GET /api/runs/{id}/diff` 提供文本预览，`GET /api/runs/{id}/patch` 下载完整补丁。

@@ -14,8 +14,8 @@ import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
-from agent_harness.snapshots import FileSnapshotStore
-from agent_harness.store import RunStore
+from agent_harness.storage.snapshots import FileSnapshotStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from tests.web.test_projects import project_config  # 复用真实Git和既有未提交文件的夹具，不复制实现。
 

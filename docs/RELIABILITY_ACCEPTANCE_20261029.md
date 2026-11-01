@@ -47,7 +47,7 @@
 
 最终页面保留六轮各自状态，当前自动修复开关仍为开启。文件工具、项目命令和检查的工作目录及源码来源保持一致；旧轮执行失败仍显示失败或达到上限，新轮通过不覆盖旧结论。六轮产物采集均为 complete，55 个已登记下载在后续修改及重启后指纹保持，每轮仅一个 run_finished，artifacts_collected 均先于最终事件。
 
-相对已核验的 178 文件起点，最终只修改 `src/agent_harness/tools/files.py` 和 `tests/test_file_mutations.py`；成果留在验收副本。见 [最终补丁](../.runtime/v02-acceptance-20261029/evidence/final-delivery.patch)、[固化源码](../.runtime/v02-acceptance-20261029/evidence/final-delivery/src/agent_harness/tools/files.py)。主产品的 ignore_case 仍未采纳，不能计入产品已实现清单。
+相对已核验的 178 文件起点，最终只修改 `src/agent_harness/tools/files.py` 和 `tests/tools/test_file_mutations.py`；成果留在验收副本。见 [最终补丁](../.runtime/v02-acceptance-20261029/evidence/final-delivery.patch)、[固化源码](../.runtime/v02-acceptance-20261029/evidence/final-delivery/src/agent_harness/tools/files.py)。主产品的 ignore_case 仍未采纳，不能计入产品已实现清单。
 
 桌面检查结果、文件差异及 390×844 详情已实际打开，手机文档宽度与滚动宽度均为 390；浏览器记录零错误、零警告。页面证据：[结果](../output/playwright/v02-acceptance-20261029/real-final-result.png)、[文件](../output/playwright/v02-acceptance-20261029/real-final-files.png)、[手机文件](../output/playwright/v02-acceptance-20261029/real-mobile-files.png)、[页面事实](../.runtime/v02-acceptance-20261029/real-ui-proof-final.txt)。
 

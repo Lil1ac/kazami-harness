@@ -16,7 +16,7 @@ import pytest
 from agent_harness.config import ConfigurationError
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import RunConfig
-from agent_harness.store import RunStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebVerifier, WebWorkspace, load_web_config
 

@@ -7,20 +7,20 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
-from ..config import ConfigurationError, load_config, prepare_task
-from ..projects import ProjectError
-from ..runner import validate_auto_repair, validate_execution
-from ..execution import PythonExecutionError, prepare_python_execution
-from ..schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
-from ..sessions import SessionError, SessionStore, history_messages, payload_digest
-from ..snapshots import SnapshotError
-from ..store import StorageError
-from ..planning import PlanningError, continue_planning, planning_from_history
-from .schemas import ConversationTurn, ConversationView, FollowupRequest
+from agent_harness.config import ConfigurationError, load_config, prepare_task
+from agent_harness.projects import ProjectError
+from agent_harness.runtime.runner import validate_auto_repair, validate_execution
+from agent_harness.execution.python import PythonExecutionError, prepare_python_execution
+from agent_harness.schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
+from agent_harness.storage.sessions import SessionError, SessionStore, history_messages, payload_digest
+from agent_harness.storage.snapshots import SnapshotError
+from agent_harness.storage.runs import StorageError
+from agent_harness.work.planning import PlanningError, continue_planning, planning_from_history
+from agent_harness.web.schemas import ConversationTurn, ConversationView, FollowupRequest
 
 if TYPE_CHECKING:
-    from .service import WebRunManager
-    from ..store import RunHistory
+    from agent_harness.web.service import WebRunManager
+    from agent_harness.storage.runs import RunHistory
 
 
 class ConversationService:

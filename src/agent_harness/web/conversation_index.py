@@ -4,14 +4,14 @@ import os
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from ..sessions import SessionError
-from ..store import StorageError
-from .schemas import ConversationPage, ConversationRunState, ConversationSource, ConversationSummary
+from agent_harness.storage.sessions import SessionError
+from agent_harness.storage.runs import StorageError
+from agent_harness.web.schemas import ConversationPage, ConversationRunState, ConversationSource, ConversationSummary
 
 if TYPE_CHECKING:
-    from ..store import RunHistory
-    from .service import WebRunManager
-    from .schemas import RunView
+    from agent_harness.storage.runs import RunHistory
+    from agent_harness.web.service import WebRunManager
+    from agent_harness.web.schemas import RunView
 
 
 class ConversationIndex:
@@ -90,7 +90,7 @@ class ConversationIndex:
         project_id=None查看全部历史（包括已移除登记），status=None不过滤最新执行状态。
         非法记录不导致整个列表失败；列表只读，不创建会话、触碰源码或启动执行。
         """
-        from .service import WebServiceError
+        from agent_harness.web.service import WebServiceError
 
         registry = self._registry()
         if project_id is not None and not any(key[1] == project_id for key in registry):

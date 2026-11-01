@@ -7,7 +7,7 @@ import threading
 from typing import Protocol, TextIO
 from uuid import uuid4
 
-from ..config import ConfigurationError
+from agent_harness.config import ConfigurationError
 
 
 class NativeClient(Protocol):

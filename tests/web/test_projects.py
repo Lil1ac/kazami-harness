@@ -387,7 +387,7 @@ def test_shutdown_during_prepare_creates_cancel_record_without_model(project_con
 def test_runner_start_failure_cleans_registered_worktree(project_config: WebConfig, monkeypatch):
     """Runner 建立记录前失败，已登记且未执行工具的工作树受控移除，源项目不受影响；返回 None。"""
     from agent_harness import web
-    from agent_harness.store import StorageError
+    from agent_harness.storage.runs import StorageError
     monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
 
     async def fail_before_context(*arguments, **keywords):
@@ -493,7 +493,7 @@ def test_post_worktree_preflight_failure_removes_unstarted_copy(project_config: 
     """创建副本后的二次路径校验失败时清理已登记工作树，不启动模型也不遗留孤立副本；返回 None。"""
     from agent_harness import web
     monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
-    from agent_harness.execution import PythonExecutionError
+    from agent_harness.execution.python import PythonExecutionError
 
     def fail_execution_snapshot(*arguments, **keywords):
         """实际工作树创建后的解释器快照预检失败；接收宿主参数并抛受控错误，不启动进程。"""

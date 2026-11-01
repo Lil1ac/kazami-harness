@@ -6,11 +6,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from pydantic import Field, SecretStr, ValidationError
 
-from ..config import ConfigurationError
-from ..schemas import DataModel
-from ..web.service import WebRunManager, WebServiceError
-from .host import DesktopHost
-from .storage import DesktopRunSettings
+from agent_harness.config import ConfigurationError
+from agent_harness.schemas import DataModel
+from agent_harness.web.service import WebRunManager, WebServiceError
+from agent_harness.desktop.host import DesktopHost
+from agent_harness.desktop.storage import DesktopRunSettings
 
 
 class SettingsRequest(DataModel):

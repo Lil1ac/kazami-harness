@@ -11,14 +11,14 @@ import sys
 from pydantic import Field, SecretStr, ValidationError
 import uvicorn
 
-from ..config import ConfigurationError, load_config
-from ..providers.base import ModelClient
-from ..schemas import DataModel
-from ..web.api import create_app
-from ..web.config import load_web_config
-from .bridge import NativeBridge
-from .host import DesktopHost
-from .storage import PreferenceStore, resource_root
+from agent_harness.config import ConfigurationError, load_config
+from agent_harness.providers.base import ModelClient
+from agent_harness.schemas import DataModel
+from agent_harness.web.api import create_app
+from agent_harness.web.config import load_web_config
+from agent_harness.desktop.bridge import NativeBridge
+from agent_harness.desktop.host import DesktopHost
+from agent_harness.desktop.storage import PreferenceStore, resource_root
 
 
 class Bootstrap(DataModel):

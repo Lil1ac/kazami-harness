@@ -10,7 +10,7 @@ from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from tests.web.test_planning_api import ScriptModel, reply, call
-from agent_harness.store import RunStore
+from agent_harness.storage.runs import RunStore
 from agent_harness.web.service import _unfinished_result
 
 

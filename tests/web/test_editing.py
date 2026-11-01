@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import httpx
 
-from agent_harness.store import RunStore, StorageError
+from agent_harness.storage.runs import RunStore, StorageError
 from tests.helpers.serve_editing_fixture import SOURCE, fixture_app
 
 

@@ -6,8 +6,8 @@ import threading
 
 from pydantic import Field, ValidationError, field_validator
 
-from ..config import ConfigurationError
-from ..schemas import DataModel, RunConfig, RunLimits, ToolName
+from agent_harness.config import ConfigurationError
+from agent_harness.schemas import DataModel, RunConfig, RunLimits, ToolName
 
 
 def resource_root() -> Path:

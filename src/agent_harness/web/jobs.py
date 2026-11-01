@@ -7,16 +7,16 @@ from uuid import UUID, uuid4
 
 from pydantic import Field
 
-from ..schemas import DataModel
-from ..sessions import payload_digest, SessionError
-from ..store import RunStore, StorageError
-from ..tasks import WorkStore, TaskError, ExecutionLease, encode, now
-from .schemas import CreateRunRequest, FollowupRequest
-from ..config import load_config, prepare_task, ConfigurationError
-from ..schemas import RunManifest
-from ..runner import validate_execution, validate_auto_repair
-from ..planning import continue_planning, planning_from_history
-from ..execution import prepare_python_execution, PythonExecutionError
+from agent_harness.schemas import DataModel
+from agent_harness.storage.sessions import payload_digest, SessionError
+from agent_harness.storage.runs import RunStore, StorageError
+from agent_harness.work.tasks import WorkStore, TaskError, ExecutionLease, encode, now
+from agent_harness.web.schemas import CreateRunRequest, FollowupRequest
+from agent_harness.config import load_config, prepare_task, ConfigurationError
+from agent_harness.schemas import RunManifest
+from agent_harness.runtime.runner import validate_execution, validate_auto_repair
+from agent_harness.work.planning import continue_planning, planning_from_history
+from agent_harness.execution.python import prepare_python_execution, PythonExecutionError
 
 
 def directory_identity(path: Path) -> list[int]:

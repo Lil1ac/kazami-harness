@@ -92,19 +92,20 @@ class ModelInput:
 class ContextBuilder:
     """统一组装初始消息与计量输入；不修改原始消息或执行工具。"""
 
-    def __init__(self, workspace: Workspace, task: TaskSpec, config: RunConfig, *, skills: list[SkillSnapshot] | None = None) -> None:
+    def __init__(self, workspace: Workspace, task: TaskSpec, config: RunConfig, *, skills: list[SkillSnapshot] | None = None, instruction: ProjectInstructionSnapshot | None = None) -> None:
         """冻结任务、配置及项目约定；workspace 限制读取位置，构造时最多读取一次文件。
 
         task 提供实际工作目录与任务；config 提供宿主提示与字节预算。
         skills 为本轮已加载的完整技能快照，None 与空列表均表示未选；本方法不读取技能文件。
-        每次运行从实际工作区读取一次根指令；读取后保持本次快照不变。
+        instruction=None时读取根约定；非空则继承父运行固定快照，避免委派中途重新加载。
+        根运行从实际工作区读取一次，子运行复制父快照；后续请求不重新加载根指令。
         指令错误保存在instruction，由Agent先提交事件再停止；本方法不记录运行事件。
         """
         self._task = task.model_copy(deep=True)  # 固定本次初始任务，外部可变对象不改变模型输入。
         self._config = config.model_copy(deep=True)  # 固定宿主规则及预算，后续网页草稿不影响本次运行。
         self.skills = [item.model_copy(deep=True) for item in skills or []]  # 冻结所选正文，压缩始终保护此初始用户前缀。
         self.token_ratio = 1 / 3  # UTF-8字节到token的初始启发式；后续只用真实usage保守上调。
-        self.instruction = load_project_instructions(workspace, self._config.context)  # 本次运行固定的项目指令快照。
+        self.instruction = instruction.model_copy(deep=True) if instruction is not None else load_project_instructions(workspace, self._config.context)  # 委派沿用批准时已提供的项目约定。
         self.planning: PlanningController | None = None  # Runner 绑定的可信状态，每次实际输入读取最新快照。
         self._planning_base: str | None = None  # 不含规划动态状态的原系统正文，刷新时替换而非反复追加。
         self.tasks = None  # Runner 绑定的任务控制器；每次请求读取可信最新状态。

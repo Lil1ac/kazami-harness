@@ -5,7 +5,7 @@ type 决定结构、触发、呈现与复核；来源和确认权限不随类型
 """
 
 from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -438,6 +438,21 @@ class MemoryController:
         self.exposed_rules = set()  # 最近一次实际模型输入中的约定编号，预算减少后不能误报已看过。
         self.selected = []  # 当前输入的类型视图，reference 不展开补充正文。
         self.select(self.phase)
+
+    def fork(self, manifest, emit):
+        """为只读子manifest建立独立选择状态，返回控制器；emit只写子日志。
+
+        继承父运行固定的知识修订和来源服务，不重新读取SQLite；清空回读、路径和采用轨迹，
+        防止把父模型已经看过的内容误报为子模型已读。子策略必须关闭候选写入。
+        """
+        child = copy(self)
+        child.manifest, child.emit, child.policy = manifest, emit, manifest.config.memory
+        child.items = deepcopy(self.items)
+        child.skipped, child.reads, child.proposals, child.uses = [], [], [], []
+        child.paths, child.selected, child.exposed_rules = [], [], set()
+        child.command_scope = False
+        child.select(self.phase)  # 子研究沿用父当前规划/执行/修复阶段，不从初始清单猜测当前阶段。
+        return child
 
     def select(self, phase: str) -> None:
         """从固定修订按 phase 和已观察路径选择输入；只读取当前证据，不写库，返回 None。"""

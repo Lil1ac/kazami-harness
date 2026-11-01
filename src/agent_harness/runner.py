@@ -54,6 +54,31 @@ class RunContext:
     event_count: int = 1
     phase: str = "starting"
     started_at: float = 0.0  # 本次运行的单调起点，用于计量实际执行时长。
+    record_root: Path | None = None  # 子日志嵌套保存时仍使用真实运行根保护文件和记忆边界；None取日志父目录。
+    budget_parent: "RunContext | None" = None  # 串行子执行的共享预算归属，根运行为None。
+    active_child: "RunContext | None" = None  # 当前只读子执行；用于供应商HTTP回调路由，结束后清空。
+    on_event: Callable[[str, dict], None] | None = None  # 子事件落盘后通知父级进度，None不发布额外快照。
+    timeout_scope: asyncio.Timeout | None = None  # 根运行实际超时管理器；None为尚未进入，避免Windows时钟粒度误判取消来源。
+    delegation_used: bool = False  # 曾尝试委派后启用父级末轮交接；失败接纳也须为父保留总结机会。
+
+    @property
+    def runs_root(self) -> Path:
+        """返回受保护的实际运行根目录；不把嵌套子日志目录误作整个数据边界。"""
+        return self.record_root or self.store.run_dir.parent
+
+    def consume(self, kind: str) -> None:
+        """接纳一次model或tool调用并累计父子计数；超出任一级限额时先抛AgentStopped。
+
+        kind仅由执行核心传入model/tool；返回None，不发送请求或执行工具。
+        子预算是父预算的子集，检查和累计无await，串行执行不会在其间穿插其他调用。
+        """
+        field, limit = ("model_turns", "max_model_turns") if kind == "model" else ("tool_calls", "max_tool_calls")
+        contexts = [self] if self.budget_parent is None else [self, self.budget_parent]
+        for item in contexts:
+            if getattr(item.result, field) >= getattr(item.manifest.config.limits, limit):
+                raise AgentStopped("limit_exceeded", limit)
+        for item in contexts:
+            setattr(item.result, field, getattr(item.result, field) + 1)
 
     def active_duration(self) -> float:
         """返回本次运行耗时秒数；使用单调时间，不受系统时间校准影响。"""
@@ -80,12 +105,24 @@ class RunContext:
             "verification_result": "verification_result",
             "repair_started": "repair",
             "artifact_collection_started": "artifact_collection",
+            "budget_handoff_started": "budget_handoff",
         }
         self.phase = "context_compaction" if kind == "model_request_started" and (payload or {}).get("purpose") == "summary" else phases.get(kind, self.phase)
+        if kind == "subagent_snapshot" and (payload or {}).get("subagent", {}).get("status") == "running":
+            self.phase = "subagent_execution"
+        if self.on_event is not None:
+            self.on_event(kind, payload or {})
 
     def http_attempt(self, attempt: int) -> None:
         """登记单轮 HTTP 尝试；出现重试时，用量可能含未知部分，因此取消完整标记。"""
+        if self.active_child is not None:
+            self.active_child.http_attempt(attempt)
+            return
         self.result.http_attempts += 1
+        if self.budget_parent is not None:
+            self.budget_parent.result.http_attempts += 1
+            if attempt > 1:
+                self.budget_parent.result.usage_complete = False
         if attempt > 1:
             self.result.usage_complete = False
         self.emit("model_http_attempt", {"model_turn": self.result.model_turns, "attempt": attempt})
@@ -335,7 +372,8 @@ async def _run_task(
     try:
         if on_context is not None:
             on_context(context)
-        async with asyncio.timeout_at(deadline):
+        async with asyncio.timeout_at(deadline) as timeout_scope:
+            context.timeout_scope = timeout_scope
             if model_client is not None:
                 await run_agent(context, model_client, tool_executor, on_completion=check_completion)
             else:

@@ -14,6 +14,7 @@ import { EventTrail } from './EventTrail';
 import { UsageDisplay } from './UsageDisplay';
 import { PlanningPanel } from './PlanningPanel';
 import { TasksPanel } from './TasksPanel';
+import { SubagentsPanel } from './SubagentsPanel';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -52,6 +53,7 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
             children: (
               <div className="inspector-overview">
                 <StateBreakdown run={run} />
+                {Boolean(run.result.subagents?.length) && <SubagentsPanel parentId={run.run_id} records={run.result.subagents!} active={run.active && !historical} />}
                 {historical && <TasksPanel runId={run.run_id} active={false} historical />}
                 <PlanningPanel runId={run.run_id} state={run.result.planning} />
                 <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>

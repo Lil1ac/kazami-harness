@@ -456,6 +456,70 @@ class PlanningState(DataModel):
         return self
 
 
+class DelegationOrigin(DataModel):
+    """子执行的宿主归属；与多轮会话的前轮关系分别保存。"""
+
+    parent_run_id: UUID  # 唯一委派者；子执行不独立进入全局运行队列。
+    role: Literal["explore", "review"]  # 探索代码或审阅风险，均仅允许读取。
+    task_id: UUID | None = None  # 可选关联父会话工作项，不改变该项状态或负责人。
+
+
+class SubagentFinding(DataModel):
+    """子模型的研究判断；分类不授予修改范围，证据编号由宿主核验。"""
+
+    category: Literal["required", "optional", "observation"]  # 范围内必要修复、可选建议或事实观察。
+    title: str = Field(min_length=1, max_length=160)  # 简短结论，不能只写空白。
+    detail: str = Field(min_length=1, max_length=600)  # 影响与依据，不复制完整文件或扩大父任务要求。
+    evidence_call_ids: list[str] = Field(max_length=2)  # 本子运行成功读取回执编号；required必须至少一个。
+
+
+class SubagentEvidence(DataModel):
+    """宿主从实际成功读取提取的证据入口；正文始终保存在原子轨迹。"""
+
+    tool_call_id: str = Field(min_length=1, max_length=200)  # 直属子运行内的调用编号，不能引用父或其他子运行。
+    tool: str  # 实际读取工具名，不由模型报告提供。
+    path: str | None = None  # 文件或目录的实际相对路径；搜索/记忆等入口可能为空。
+    sha256: str | None = None  # 工具已核验的完整文件指纹；无法获得时为空，不冒充完整读取。
+    truncated: bool = False  # 原工具是否截断，报告不能把有限结果当作完整扫描。
+
+
+class SubagentReport(DataModel):
+    """有界、可验证来源的统一交接报告；部分完成与执行状态分别表达。"""
+
+    summary: str = Field(min_length=1, max_length=1200)  # 面向父Agent的短结论，不能代替项目验收。
+    findings: list[SubagentFinding] = Field(default_factory=list, max_length=8)  # 必要修复、观察及可选建议分别表达。
+    limitations: list[str] = Field(default_factory=list, max_length=8)  # 模型明确说明的范围、未读取部分和不确定性。
+    pending: list[str] = Field(default_factory=list, max_length=8)  # 尚未完成事项，不自动批准后续执行。
+    evidence: list[SubagentEvidence] = Field(default_factory=list, max_length=24)  # 宿主核验的回执入口，引用的证据优先保留。
+    partial: bool = True  # 只有执行正常且结构、证据及模型完成声明均有效时才为False。
+    reason: str | None = None  # 部分完成的稳定原因；完整报告为空。
+
+
+class SubagentRecord(DataModel):
+    """父运行持有的有界委派快照；完整输入和工具结果保存在子日志。"""
+
+    run_id: UUID  # 子日志编号，同时是父运行内的委派编号。
+    title: str = Field(min_length=1, max_length=120)  # 委派标题，用于页面定位。
+    objective: str = Field(min_length=1, max_length=8000)  # 主 Agent 明确提供的研究范围，不继承全部聊天历史。
+    role: Literal["explore", "review"]  # 只读探索或审阅职责。
+    task_id: UUID | None = None  # 可选同会话任务编号，不表示任务已完成。
+    status: Literal["running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "interrupted"] = "running"  # 可信执行状态；缺终态且父任务已停止时为 interrupted。
+    stop_reason: str | None = None  # 宿主生成的结束原因，未结束时为空。
+    report: SubagentReport | None = None  # 统一结构化交接报告；活动期间为空，失败也保留部分证据。
+    skill_names: list[str] = Field(default_factory=list, max_length=8)  # 仅明确委派的父级固定技能快照，默认不继承技能。
+    parent_reserve: dict[str, float] = Field(default_factory=dict)  # 分配时为父保留的模型、工具次数和秒数；不是额外额度。
+    model_turns: int = Field(default=0, ge=0)  # 子执行次数，已经计入父运行总数，不能再相加。
+    tool_calls: int = Field(default=0, ge=0)  # 子工具次数，已经计入父运行总数。
+    http_attempts: int = Field(default=0, ge=0)  # 子模型实际 HTTP 尝试，注入客户端不提供时为零。
+    usage: dict[str, int] = Field(default_factory=dict)  # 子执行已知 token 用量，同样已计入父运行。
+    usage_complete: bool = False  # False 表示存在未知用量，不据此估算完整费用。
+    elapsed_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)  # 子执行单调耗时，单位秒。
+    event_count: int = Field(default=1, ge=1)  # 已提交的子日志事件数，便于页面增量读取。
+    max_model_turns: int = Field(ge=1, le=12)  # 接纳时固定的子轮数上限，不超过父级剩余值。
+    max_tool_calls: int = Field(ge=1, le=30)  # 接纳时固定的子工具上限，不超过父级剩余值。
+    timeout_seconds: float = Field(gt=0, le=180, allow_inf_nan=False)  # 接纳时固定的子时限，秒；父任务截止时间始终优先。
+
+
 class RunManifest(DataModel):
     """运行开始时固定的任务、来源、配置、计划与当前用户决定；不保存密钥。"""
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
@@ -472,6 +536,7 @@ class RunManifest(DataModel):
     history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
     planning: PlanningState = Field(default_factory=PlanningState)  # 宿主固定的模式、计划和用户决定；网页不能直接传入该状态。
     human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
+    delegation: DelegationOrigin | None = None  # 非空表示父运行内的只读子执行，不是会话续轮。
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。
@@ -521,6 +586,8 @@ class VerificationAttempt(DataModel):
 
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
+    subagent_report: SubagentReport | None = None  # 子运行结束时核验并固定的报告；根运行为空。
+    subagents: list[SubagentRecord] = Field(default_factory=list)  # 该轮委派快照，旧轮不查询新轮状态。
     tasks: dict = Field(default_factory=dict)  # 当轮固定的工作项快照；历史读取不回查最新清单。
     schema_version: Literal[1] = 1
     run_id: UUID

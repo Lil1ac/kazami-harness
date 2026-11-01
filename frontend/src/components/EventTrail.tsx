@@ -7,6 +7,9 @@ import { toolFailureMessage } from '../activity';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
+  subagent_snapshot: '子 Agent 进度',
+  subagent_handoff: '收到子报告，重新决定后续动作',
+  budget_handoff_started: '预算收尾交接',
   run_created: '任务已登记',
   run_started: '开始执行',
   planning_updated: '更新规划与用户请求',
@@ -54,6 +57,8 @@ const connectionLabels: Record<ConnectionState, string> = {
 /** 根据已知事件生成简短摘要；不尝试将工具内容当 HTML 或 Markdown 执行。 */
 function eventSummary(event: RunEvent): string {
   const payload = event.payload;
+  if (event.type === 'subagent_snapshot')
+    return String((payload.subagent as { title?: string } | undefined)?.title || '只读委派');
   if (event.type === 'repair_started') return `第 ${String(payload.repair_attempt)} / 2 次修复`;
   if (event.type === 'repair_stopped') return String(payload.reason ?? '');
   if (event.type === 'context_prepared') {

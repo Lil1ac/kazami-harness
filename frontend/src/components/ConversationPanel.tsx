@@ -10,6 +10,7 @@ import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
 import { PlanningPanel } from './PlanningPanel';
 import { TasksPanel } from './TasksPanel';
+import { SubagentsPanel } from './SubagentsPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
@@ -97,6 +98,13 @@ function TurnMessage({
                 ? turnStatus(turn.execution_status, null, interrupted) + '，本次执行没有最终回答。'
                 : '运行记录待确认，请查看本次详情。'}
           </p>
+        )}
+        {selected && Boolean(run?.result.subagents?.length) && (
+          <SubagentsPanel
+            parentId={turn.run_id}
+            records={run!.result.subagents!}
+            active={run!.active}
+          />
         )}
         <div className="message-actions">
           {turn.final_answer && <SaveMemoryButton runId={turn.run_id} text={turn.final_answer} />}

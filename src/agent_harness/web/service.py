@@ -1,6 +1,7 @@
 """本地 Web 任务管理：单槽调度真实 Runner，读取事实记录，不另造执行状态。"""
 
 import asyncio
+import json
 from dataclasses import dataclass
 import os
 import re
@@ -26,6 +27,9 @@ from ..snapshots import SnapshotError
 from ..sessions import SessionError
 from ..planning import planning_from_history
 from ..plan_exports import materialize_plan_export
+from ..subagents import read_child, report_page, SubagentError
+from ..subagent_reports import partial_report
+from ..schemas import SubagentRecord
 from .config import WebConfig
 from .conversations import ConversationService
 from .conversation_index import ConversationIndex
@@ -75,10 +79,13 @@ def _phase(events: list[RunEvent]) -> str:
         "artifact_collection_started": "artifact_collection",
         "verification_result": "verification_result",
         "run_finished": "finished",
+        "budget_handoff_started": "budget_handoff",
     }
     current = "created"
     for event in events:
         current = "context_compaction" if event.type == "model_request_started" and event.payload.get("purpose") == "summary" else phases.get(event.type, current)
+        if event.type == "subagent_snapshot" and event.payload.get("subagent", {}).get("status") == "running":
+            current = "subagent_execution"
         if event.type == "run_finished":
             reason = event.payload.get("result", {}).get("stop_reason")
             if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled"}:
@@ -127,6 +134,9 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     verifier_pending = False  # 宿主验收已启动而未得到清理结论。
     cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
     for event in history.events:
+        if event.type == "subagent_snapshot":
+            record = SubagentRecord.model_validate_json(json.dumps(event.payload["subagent"]))
+            result.subagents = [item for item in result.subagents if item.run_id != record.run_id] + [record]
         if event.type == "tasks_snapshot":
             result.tasks = event.payload["state"]
         if event.type == "tool_started" and event.payload.get("name") == "run_command":
@@ -166,6 +176,13 @@ def _unfinished_result(history: RunHistory) -> RunResult:
                 value = usage.get(field) if isinstance(usage, dict) else None
                 if type(value) is int and value >= 0:
                     setattr(result.usage, field, getattr(result.usage, field) + value)
+    for record in result.subagents:
+        # 父事件仅保存子快照；从各自最新快照累计一次，避免把每次进度重复相加。
+        result.model_turns += record.model_turns
+        result.tool_calls += record.tool_calls
+        result.http_attempts += record.http_attempts
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            setattr(result.usage, key, getattr(result.usage, key) + record.usage.get(key, 0))
     if (pending_commands or verifier_pending) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
         result.cleanup_status = "unknown"
     return result
@@ -559,6 +576,47 @@ class WebRunManager:
             parent_run_id=history.manifest.parent_run_id,
             turn_index=history.manifest.turn_index,
         )
+
+    def list_subagents(self, run_id: UUID) -> dict:
+        """只读run_id的委派快照并返回items；父运行已停止时把无终态子项明确标为中断。
+
+        不扫描其他运行或自动续跑；运行不存在沿用get_run的404/503错误语义。
+        """
+        view = self.get_run(run_id)
+        items = [item.model_copy(deep=True) for item in view.result.subagents]
+        for item in items:
+            if not view.active and item.status == "running":
+                item.status, item.stop_reason = "interrupted", "missing_terminal"
+        return {"items": [item.model_dump(mode="json") for item in items], "active": view.active}
+
+    def get_subagent(self, run_id: UUID, child_id: UUID, after: int, limit: int, offset: int) -> dict:
+        """分页读取run_id直属child_id轨迹及报告；返回快照、事件页和上下文，不启动执行。
+
+        after是已读子事件序号，limit为1—100，offset为报告UTF-8字节偏移。
+        未登记子项返回404，日志损坏/归属变化返回503，非法报告偏移返回422。
+        """
+        view = self.list_subagents(run_id)
+        record = next((item for item in view["items"] if item["run_id"] == str(child_id)), None)
+        if record is None:
+            raise WebServiceError(404, "subagent_not_found", "该子执行不属于当前运行。")
+        try:
+            history = read_child(self.runs_root, run_id, child_id)
+            if record["report"] is None and not view["active"]:
+                recovered = history.result.subagent_report if history.result else None
+                record["report"] = (recovered or partial_report(history.events, "missing_terminal")).model_dump(mode="json")
+            report = report_page(history, offset, 8192)
+            report["status"] = record["status"]  # 当前活动状态取父宿主事实，缺终态的报告不擅自标中断。
+            selected = [event for event in history.events if event.seq > after][:limit]
+            last = selected[-1].seq if selected else after
+            context = _context_view(history.events)
+            return {"subagent": record, "report_page": report,
+                    "events": {"items": [event.model_dump(mode="json") for event in selected],
+                               "has_more": last < len(history.events), "last_seq": len(history.events)},
+                    "context": context.model_dump(mode="json") if context else None, "warnings": history.warnings}
+        except SubagentError as error:
+            raise WebServiceError(422, error.code, error.message) from None
+        except (StorageError, ValidationError):
+            raise WebServiceError(503, "subagent_unreadable", "子执行记录无法核对，请检查本地日志。") from None
 
     def list_events(self, run_id: UUID | str, after: int, limit: int) -> EventPage:
         """返回 run_id 中 seq>after 的最多 limit 条有效事件；after 从零开始。

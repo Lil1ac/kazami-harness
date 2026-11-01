@@ -31,6 +31,8 @@ export function phaseLabel(phase: string): string {
         model_response: '处理模型响应',
         tool: '执行工具',
         tool_execution: '执行工具',
+        subagent_execution: '子 Agent 正在研究',
+        budget_handoff: '整理交接结论',
         tool_result: '处理工具结果',
         execution_completed: '执行完成',
         verification: '独立验收',

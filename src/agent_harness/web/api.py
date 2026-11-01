@@ -326,6 +326,17 @@ def create_app(
         """读取 run_id 所属会话和可继续原因；不启动模型或重新拍摄快照。"""
         return manager.conversations.view(run_id)
 
+    @app.get("/api/runs/{run_id}/subagents")
+    async def subagents(run_id: UUID) -> dict:
+        """只读run_id本轮委派列表；返回持久进度，不重投作业或调用模型。"""
+        return manager.list_subagents(run_id)
+
+    @app.get("/api/runs/{run_id}/subagents/{child_id}")
+    async def subagent(run_id: UUID, child_id: UUID, after: int = Query(default=0, ge=0),
+                       limit: int = Query(default=100, ge=1, le=100), offset: int = Query(default=0, ge=0)) -> dict:
+        """返回直属child_id有界事件和报告页；after/offset分别为事件序号及UTF-8字节偏移。"""
+        return manager.get_subagent(run_id, child_id, after, limit, offset)
+
 
     @app.post("/api/runs/{run_id}/cancel", response_model=RunView)
     async def cancel(run_id: UUID) -> RunView:

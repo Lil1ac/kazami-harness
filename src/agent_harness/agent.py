@@ -56,13 +56,20 @@ def _collect_usage(context: "RunContext", usage: dict | None) -> None:
     """累加本轮已知的 token 数；任何计数缺失都将本次用量标为不完整。"""
     if usage is None:
         context.result.usage_complete = False
+        if context.budget_parent is not None:
+            context.budget_parent.result.usage_complete = False
         return
     for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
         value = usage.get(field)
         if type(value) is int and value >= 0:
             setattr(context.result.usage, field, getattr(context.result.usage, field) + value)
+            if context.budget_parent is not None:
+                total = context.budget_parent.result.usage
+                setattr(total, field, getattr(total, field) + value)
         else:
             context.result.usage_complete = False
+            if context.budget_parent is not None:
+                context.budget_parent.result.usage_complete = False
 
 
 async def _request_model(context: "RunContext", client: ModelClient, messages: list[dict], tools: list[dict], purpose: str) -> ModelResponse:
@@ -71,11 +78,7 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     messages/tools必须先经上下文检查；purpose为execution或summary。达到总模型上限
     时在请求前抛AgentStopped；供应商超时和错误原样交给Runner。摘要也受总截止时间约束。
     """
-    from .runner import AgentStopped
-
-    if context.result.model_turns >= context.manifest.config.limits.max_model_turns:
-        raise AgentStopped("limit_exceeded", "max_model_turns")
-    context.result.model_turns += 1
+    context.consume("model")
     context.emit("model_request_started", {
         "model_turn": context.result.model_turns,
         "requested_model": context.manifest.config.requested_model,
@@ -94,15 +97,17 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
 async def run_agent(
     context: "RunContext", client: ModelClient, executor: ToolExecutor,
     *, on_completion: Callable[[], Awaitable[str | None]] | None = None,
+    inherited_context: ContextBuilder | None = None,
 ) -> None:
     """执行多轮模型与工具交互，直接更新 context 中的计数和最终回答。
 
     client 负责模型通信，executor 负责工具执行；本函数维护消息历史和调用配对。
-    同一批工具按响应顺序串行处理，全部写入结果后才进入下一轮模型请求。
+    同一批工具按响应顺序串行处理；委派等交接点跳过剩余调用并配齐回执，再请求模型重新决定。
     首次冻结项目约定和记忆修订，每轮按实际动作选择记忆并检查压缩投影；摘要同样占模型轮次。
     达到额度或项目约定读取错误时抛出 AgentStopped，取消和存储故障交由 Runner 处理。
     on_completion在无工具回答后执行宿主检查；None返回表示结束，字符串表示已落盘的
     公开测试反馈，追加后沿用同一消息、压缩器、工具执行器和预算继续，绝不重新初始化运行。
+    inherited_context默认None；子执行继承固定约定、显式选择的技能及记忆修订，不继承消息历史。
     """
     from .runner import AgentStopped
 
@@ -110,19 +115,25 @@ async def run_agent(
     skills = []  # 每轮开始只读取一次；后续模型调用和历史页都使用固定快照。
     skill_error = None  # 加载失败同样落盘受控事实，模型和工具均不执行。
     try:
-        skills = SkillCatalog(config.skill_roots).load(config.skills)
+        skills = ([item for item in inherited_context.skills if item.name in config.skills] if inherited_context is not None
+                  else SkillCatalog(config.skill_roots).load(config.skills))
     except SkillError as error:
         skill_error = SkillFailure(name=error.name, code=error.code, message=error.message)
     builder = ContextBuilder(
-        Workspace(context.manifest.task.workspace, context.store.run_dir.parent),
+        Workspace(context.manifest.task.workspace, context.runs_root),
         context.manifest.task, config, skills=skills,
+        instruction=inherited_context.instruction if inherited_context is not None else None,
     )
     try:
-        builder.memory = MemoryController(context.store.run_dir.parent, context.manifest, context.emit)
+        builder.memory = (inherited_context.memory.fork(context.manifest, context.emit) if inherited_context is not None
+                          else MemoryController(context.runs_root, context.manifest, context.emit))
         executor.memory = builder.memory
     except MemoryError as error:
         context.emit("memory_failed", {"code": error.code, "message": error.message})
         raise AgentStopped("failed", error.code) from None
+    if isinstance(executor, ToolExecutor) and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
+        from .subagents import SubagentController
+        executor.subagents = SubagentController(context, client, executor)
     context.emit("context_prepared", {
         "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
         "skills": [item.model_dump(mode="json") for item in builder.skills],
@@ -176,6 +187,8 @@ async def run_agent(
             builder.bind_planning(planning, messages[0]["content"])
             messages[0] = {**messages[0], "content": messages[0]["content"] + planning.instructions()}
     context.emit("memory_prepared", {"memory": builder.memory.snapshot()})
+    if getattr(executor, "subagents", None) is not None:
+        executor.subagents.bind_inputs(builder)
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
     context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
     if context.manifest.human_decision is not None and context.manifest.human_decision.action in {"reject", "cancel"}:
@@ -193,7 +206,14 @@ async def run_agent(
     while context.result.model_turns < config.limits.max_model_turns:
         # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
         await asyncio.sleep(0)
-        if planning is not None and planning.state.phase == "planning":
+        delegated = context.manifest.delegation is not None or context.delegation_used
+        handoff = delegated and (config.limits.max_model_turns - context.result.model_turns == 1
+                                 or context.result.tool_calls >= config.limits.max_tool_calls)
+        if isinstance(executor, ToolExecutor):
+            executor.handoff = handoff
+        if context.manifest.delegation is not None:
+            phase = builder.memory.phase  # 子研究无法切换阶段，固定继承父委派时的实际阶段。
+        elif planning is not None and planning.state.phase == "planning":
             phase = "planning"  # 修复过程中重新规划仍以宿主只读阶段为准。
         else:
             phase = "verification" if context.result.repair_attempts else "execution"
@@ -204,7 +224,17 @@ async def run_agent(
             removed = builder.memory.selected.pop()
             builder.memory.skipped.append({"id": removed["id"], "title": removed["title"], "reason": "整体输入剩余预算不足，可搜索回读"})
         # 原始列表永不覆盖；压缩器返回的正是本次计量和实际发送的投影。
-        prepared = await compressor.prepare(messages, executor.definitions, request_model)
+        prepared = await compressor.prepare(messages, executor.definitions, request_model, reserve_model_turns=1 if delegated else 0)
+        if handoff:
+            notice = {"role": "system", "content": (
+                "宿主收尾交接：本次只总结已有信息，禁止新工具调用；不得为写出结论而编造完成或检查通过。"
+                + ("请按角色JSON格式交接；研究未完成时complete=false，列明限制与未完成事项。" if context.manifest.delegation is not None
+                   else "请明确已交付内容、失败及未完成事项，等待宿主按真实代码独立检查。"))}
+            # 交接通知仅进入此次输入投影，不改变压缩原消息索引或跨轮历史。
+            prepared = builder.build([*prepared.messages, notice], [], context.result.model_turns + 1,
+                                     raw_input_bytes=prepared.check.raw_input_bytes)
+            context.emit("budget_handoff_started", {"message": notice, "remaining_model_turns": config.limits.max_model_turns - context.result.model_turns,
+                                                    "remaining_tool_calls": config.limits.max_tool_calls - context.result.tool_calls})
         context.emit("context_checked", prepared.check.model_dump(mode="json"))
         if not prepared.check.allowed:
             reason = "max_model_input_bytes" if prepared.check.input_bytes > prepared.check.max_input_bytes else "max_model_input_tokens"
@@ -227,6 +257,10 @@ async def run_agent(
             continue
 
         batch = response.tool_calls
+        if handoff:
+            for call in batch:
+                _record_tool(context, call, _skipped("handoff_tools_disabled"), messages)
+            raise AgentStopped("limit_exceeded", "handoff_tools_disabled")
         if len(batch) > config.limits.max_tool_calls - context.result.tool_calls:
             # 整批拒绝，避免只执行一半后把残缺配对历史再发给供应商。
             for call in batch:
@@ -241,14 +275,29 @@ async def run_agent(
                 started = False
                 await asyncio.sleep(0)
                 # 被接纳处理的未知工具和非法参数也占额度，避免错误调用无限循环。
-                context.result.tool_calls += 1
+                # 委派可能消耗了同批工具剩余额度，每个实际调用前再次核对父子总数。
+                if context.result.tool_calls >= config.limits.max_tool_calls:
+                    for remaining in batch[index:]:
+                        _record_tool(context, remaining, _skipped("skipped_limit"), messages)
+                    raise AgentStopped("limit_exceeded", "max_tool_calls")
+                context.consume("tool")
                 context.emit("tool_started", {
                     "call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json,
                 })
                 started = True
+                if call.name == "delegate_readonly" and context.manifest.delegation is None:
+                    context.delegation_used = True
                 result = await executor.execute(call.name, call.arguments_json)
                 _record_tool(context, call, result, messages)
                 started = False
+                if call.name == "delegate_readonly" and context.manifest.delegation is None:
+                    # 后续参数在子报告产生前已经生成；成功、失败或拒绝接纳都先交回模型重新决定。
+                    for remaining in batch[index + 1:]:
+                        pending = _skipped("subagent_result_requires_review")
+                        pending["error"]["message"] = "尚未执行：请先阅读委派结果，再重新决定后续工具及参数。"
+                        _record_tool(context, remaining, pending, messages)
+                    context.emit("subagent_handoff", {"call_id": call.call_id, "ok": bool(result.get("ok")), "skipped_calls": len(batch) - index - 1})
+                    break
                 if (result.get("error") or {}).get("code") == "memory_context_updated":
                     # 新约定出现后，整批尚未执行的调用都交回模型重新决定，避免沿用旧参数。
                     for remaining in batch[index + 1:]:

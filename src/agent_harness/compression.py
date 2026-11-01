@@ -346,11 +346,14 @@ class ContextCompressor:
             })},
         ]
 
-    async def _summarize(self, messages: list[dict], tools: list[dict], request: RequestModel) -> bool:
-        """对一段旧历史请求结构化摘要；成功提交返回True，无可用区间返回False，失败明确停止。"""
+    async def _summarize(self, messages: list[dict], tools: list[dict], request: RequestModel, reserve_model_turns: int = 0) -> bool:
+        """对messages旧历史请求摘要，tools参与计量，返回是否提交；request统一计数，失败明确停止。
+
+        reserve_model_turns默认0，额外保留该数量的末轮交接请求，摘要不能占用；不增加总预算。
+        """
         from .runner import AgentStopped
 
-        if self.context.result.model_turns + 1 >= self.context.manifest.config.limits.max_model_turns:
+        if self.context.result.model_turns + 1 + reserve_model_turns >= self.context.manifest.config.limits.max_model_turns:
             return False
         region = self._region(messages)
         # 摘要请求本身也必须适配输入预算；不能把超限历史直接发给摘要模型。
@@ -411,11 +414,12 @@ class ContextCompressor:
             self._record("summary_failed", start, end, reference, before, before, reason="context_summary_invalid")
             raise AgentStopped("failed", "context_summary_invalid") from None
 
-    async def prepare(self, messages: list[dict], tools: list[dict], request: RequestModel) -> ModelInput:
+    async def prepare(self, messages: list[dict], tools: list[dict], request: RequestModel, *, reserve_model_turns: int = 0) -> ModelInput:
         """按策略返回实际执行输入；原始messages不变，所有外置/遮蔽/摘要先持久化再生效。
 
         tools为实际启用定义；request统一约束摘要调用预算。失败信息、用户原文和近期
         完整批次不会被摘要；无法压缩的超限输入交给Agent按确定原因停止。
+        reserve_model_turns默认0；为父子交接保留的模型次数不允许被压缩摘要消费。
         """
         if self.policy.compression == "off":
             raw = None if self.builder.planning is None else self.builder.build(messages, tools, self.context.result.model_turns + 1, apply_planning=False).check.input_bytes
@@ -428,7 +432,7 @@ class ContextCompressor:
             prepared = self.builder.build(self._project(messages), tools, self.context.result.model_turns + 1)
             if self.policy.compression == "hybrid":
                 while self._pressure(prepared, self.policy.trigger_ratio) and self.summary_calls < self.policy.max_summary_calls:
-                    if not await self._summarize(messages, tools, request):
+                    if not await self._summarize(messages, tools, request, reserve_model_turns):
                         break
                     prepared = self.builder.build(self._project(messages), tools, self.context.result.model_turns + 1)
         return self.builder.build(

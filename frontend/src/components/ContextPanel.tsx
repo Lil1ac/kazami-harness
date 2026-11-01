@@ -1,4 +1,5 @@
 import { Alert, Tag } from 'antd';
+import { useId } from 'react';
 import { CompressionActions } from './CompressionActions';
 import { formatContextBytes, instructionErrorLabel, instructionStatusLabels } from '../context';
 import type { ContextView } from '../types';
@@ -13,10 +14,11 @@ export function ContextPanel({
   context: ContextView | null | undefined; // 由 RunView 读取的完整证据，不从当前 SSE 窗口拼装。
   stopReason: string | null; // 真实运行结束原因；预算超限和指令错误分别解释。
 }) {
+  const headingId = useId(); // 父上下文和多个子执行可以同时展开，标题引用必须各自唯一。
   if (!context)
     return (
-      <section className="context-panel" aria-labelledby="context-heading">
-        <h2 id="context-heading">上下文</h2>
+      <section className="context-panel" aria-labelledby={headingId}>
+        <h2 id={headingId}>上下文</h2>
         <p className="muted">
           未记录上下文数据。旧任务或尚未准备上下文的任务无法展示加载与输入大小。
         </p>
@@ -25,18 +27,18 @@ export function ContextPanel({
   const { instruction, last_check: check } = context;
   const ratio = check ? (check.input_bytes / check.max_input_bytes) * 100 : null;
   return (
-    <section className="context-panel" aria-labelledby="context-heading">
+    <section className="context-panel" aria-labelledby={headingId}>
       <div className="section-heading">
         <div>
-          <h2 id="context-heading">上下文</h2>
+          <h2 id={headingId}>上下文</h2>
         </div>
         <span className="muted">UTF-8 JSON 字节数</span>
       </div>
       <p className="muted">
         统计消息和工具定义的整体输入大小，不等于模型 token 数。每轮发送前检查。
       </p>
-      <section className="context-budget" aria-labelledby="input-budget-heading">
-        <h3 id="input-budget-heading">最近一次输入检查</h3>
+      <section className="context-budget" aria-labelledby={`${headingId}-budget`}>
+        <h3 id={`${headingId}-budget`}>最近一次输入检查</h3>
         {check ? (
           <>
             <div className="context-budget-total">
@@ -95,8 +97,8 @@ export function ContextPanel({
           </p>
         )}
       </section>
-      <section className="context-skills" aria-labelledby="skills-heading">
-        <h3 id="skills-heading">本轮技能快照</h3>
+      <section className="context-skills" aria-labelledby={`${headingId}-skills`}>
+        <h3 id={`${headingId}-skills`}>本轮技能快照</h3>
         {context.skill_error && (
           <Alert
             type="error"
@@ -227,9 +229,9 @@ export function ContextPanel({
           )}
         </section>
       )}
-      <section className="context-instruction" aria-labelledby="instruction-heading">
+      <section className="context-instruction" aria-labelledby={`${headingId}-instruction`}>
         <div className="section-heading">
-          <h3 id="instruction-heading">项目指令快照</h3>
+          <h3 id={`${headingId}-instruction`}>项目指令快照</h3>
           <Tag color={instruction.status === 'error' ? 'error' : undefined}>
             {instructionStatusLabels[instruction.status]}
           </Tag>

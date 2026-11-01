@@ -96,6 +96,20 @@ export function getJob(id: string): Promise<JobView> {
   return request('/api/jobs/' + encodeURIComponent(id));
 }
 
+/** 只读parentId直属childId的轨迹和报告；after为子事件序号，offset为报告UTF-8字节偏移。 */
+export function getSubagent(
+  parentId: string,
+  childId: string,
+  after = 0,
+  offset = 0,
+  signal?: AbortSignal,
+): Promise<import('./types').SubagentDetail> {
+  return request(
+    `/api/runs/${encodeURIComponent(parentId)}/subagents/${encodeURIComponent(childId)}?after=${after}&offset=${offset}`,
+    { signal },
+  );
+}
+
 /** 返回后台清单与暂停状态，供后台中心刷新。 */
 export function getJobs(): Promise<{ items: JobView[]; paused: boolean }> {
   return request('/api/jobs');

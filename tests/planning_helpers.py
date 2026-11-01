@@ -10,6 +10,7 @@ from agent_harness.tools.registry import ToolExecutor
 from agent_harness.workspace import Workspace
 from agent_harness.tasks import WorkStore, TaskController
 from agent_harness.memory import MemoryController
+from agent_harness.subagents import SUBAGENT_TOOLS
 
 
 def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[dict], list[dict]]:
@@ -32,13 +33,18 @@ def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[
     messages = builder.initial_messages()
     builder.bind_planning(planning, messages[0]["content"])
     messages[0]["content"] += planning.instructions()
-    return builder, messages, executor.definitions
+    definitions = executor.definitions
+    if {"read_file", "search_files"}.intersection(value.config.tools):
+        # 此处只准备输入、不创建Runner或供应商连接；补齐运行时绑定的只读委派声明。
+        definitions.extend({"type": "function", "function": {"name": name, "description": description,
+                            "parameters": arguments.model_json_schema()}} for name, (arguments, description) in SUBAGENT_TOOLS.items())
+    return builder, messages, definitions
 
 
 def include_planning_overhead(config: RunConfig, workspace: Path, root: Path) -> None:
     """给测试config计入新增固定协议开销，返回None；不调整生产预算，也不放宽历史断言。
 
-    原config的字节预算表示旧工具下可用的测试空间；仅增加当前新增系统正文/工具定义的精确
+    原config的字节预算表示基础文件工具下可用的测试空间；仅增加当前规划、任务和委派系统正文/工具定义的精确
     差额，并换算触发/目标比例，使留给工具历史的绝对空间与原用例一致；workspace只读，root只初始化宿主元数据。
     """
     from uuid import uuid4

@@ -223,6 +223,8 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  subagents?: SubagentRecord[]; // 本轮只读委派；次数及用量已经包含在本轮总数。
+  subagent_report?: SubagentReport | null; // 仅子运行有固定交接报告，根运行为空。
   tasks?: TaskSnapshot; // 当轮固定任务快照；活动列表通过任务接口刷新。
   planning: PlanningState; // 规划、批准与等待的固定事实，不按最终回答猜测权限。
   schema_version: 1; // 当前记录格式版本。
@@ -244,6 +246,77 @@ export interface RunResult {
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; // 已知 token 数。
   usage_complete: boolean; // false 时 token 数仅为已知部分。
   active_duration_seconds?: number; // 本次主动执行秒数；旧记录缺省不推断。
+}
+
+/** 子研究的分类发现；必要修复仍须符合父任务范围，可选建议不授予扩大范围的权限。 */
+export interface SubagentFinding {
+  category: 'required' | 'optional' | 'observation'; // 范围内必要修复、可选建议或观察。
+  title: string; // 简短结论。
+  detail: string; // 影响及依据，不包含整个工具输出。
+  evidence_call_ids: string[]; // 宿主核验为当前子运行的真实成功读取编号。
+}
+
+/** 宿主固定的结构化交接报告，部分完成与子执行结束分别表达。 */
+export interface SubagentReport {
+  summary: string; // 研究结论，不代表父任务交付或验收。
+  findings: SubagentFinding[]; // 各类发现分开显示。
+  limitations: string[]; // 已知检查范围与不确定性。
+  pending: string[]; // 仍需研究或处理的事项。
+  evidence: {
+    tool_call_id: string;
+    tool: string;
+    path: string | null;
+    sha256: string | null;
+    truncated: boolean;
+  }[]; // 来自实际工具回执。
+  partial: boolean; // true时不能把研究当作完整结论。
+  reason: string | null; // 宿主部分完成原因，完整时为空。
+}
+
+/** 父运行内的只读委派快照，不是独立排队会话或任务完成结论。 */
+export interface SubagentRecord {
+  run_id: string; // 只在父运行下读取的子编号。
+  title: string; // 委派标题。
+  objective: string; // 主Agent指定的研究范围。
+  role: 'explore' | 'review'; // 探索或审阅，均只读。
+  task_id: string | null; // 可选关联工作项，不自动改变其状态。
+  status:
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'timed_out'
+    | 'limit_exceeded'
+    | 'interrupted'; // 宿主执行状态。
+  stop_reason: string | null; // 结束原因，活动时为空。
+  report: SubagentReport | null; // 统一交接报告，活动时可为空，失败保留部分证据。
+  skill_names: string[]; // 明确选择的父级技能快照，不自动继承全部技能。
+  parent_reserve: { model_turns?: number; tool_calls?: number; seconds?: number }; // 分配时父级保留值，不增加总额度。
+  model_turns: number; // 已计入父总数的子模型次数。
+  tool_calls: number; // 已计入父总数的子工具次数。
+  http_attempts: number; // 子HTTP尝试次数。
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }; // 已知token数。
+  usage_complete: boolean; // 是否完整；失败轮不推算完整费用。
+  elapsed_seconds: number; // 单调耗时，秒。
+  event_count: number; // 已提交子事件数。
+  max_model_turns: number; // 本次分配的轮数上限。
+  max_tool_calls: number; // 本次分配的工具次数上限。
+  timeout_seconds: number; // 本次分配的总时限，秒。
+}
+
+/** 单个子执行的有界报告及事件页；读取不会恢复执行。 */
+export interface SubagentDetail {
+  subagent: SubagentRecord; // 父日志中的最新快照。
+  report_page: {
+    content: string;
+    offset: number;
+    next_offset: number | null;
+    eof: boolean;
+    total_bytes: number;
+  }; // UTF-8字节分页。
+  events: EventsResponse; // 当前子事件页，序号只属于该子运行。
+  context: ContextView | null; // 子运行实际使用的约定、技能和记忆快照。
+  warnings: string[]; // 记录损坏等读取提示。
 }
 
 /** 单个持久工作项；状态与实际项目检查结果分别展示。 */

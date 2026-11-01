@@ -13,6 +13,8 @@ from ..schemas import PythonExecution, RunConfig
 from ..store import StorageError
 from ..tasks import TASK_TOOLS, TaskController, TaskError
 from ..memory import MEMORY_TOOLS, MemoryController, MemoryError
+from ..subagents import SUBAGENT_TOOLS, SubagentController, SubagentError
+from ..subagent_profiles import READONLY_TOOLS
 from ..workspace import WorkspaceError
 from .command import RunCommandArguments, run_command
 from .listing import ListFilesArguments, list_files
@@ -21,6 +23,7 @@ from .files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, 
 
 
 _TOOL_SPECS = {
+    **SUBAGENT_TOOLS,
     **MEMORY_TOOLS,
     **TASK_TOOLS,
     **PLANNING_TOOLS,
@@ -43,11 +46,12 @@ def _error(code: str, message: str) -> dict:
 class ToolExecutor:
     """公开已启用工具，维护本次运行的产物索引与最坏清理状态。"""
 
-    def __init__(self, workspace: Path, runs_root: Path, config: RunConfig, *, python_execution: PythonExecution | None = None) -> None:
+    def __init__(self, workspace: Path, runs_root: Path, config: RunConfig, *, python_execution: PythonExecution | None = None, readonly: frozenset[str] | None = None) -> None:
         """固定 workspace、runs_root、config 和 Python 快照；返回 None，不启动命令。
 
         python_execution=None 时按现有根目录/src 捕获；非空时沿用宿主当轮快照。
         命令输出必须稍后通过 bind_run 绑定，目录准备错误抛 PythonExecutionError。
+        readonly=None为普通执行；非空集合表示子执行宿主白名单，始终与只读工具集合取交集。
         """
         self.workspace = workspace.resolve()
         self.runs_root = runs_root.resolve()
@@ -63,6 +67,9 @@ class ToolExecutor:
         self.tasks: TaskController | None = None  # 当前会话工作项及宿主校验入口。
         self.memory: MemoryController | None = None  # 当前项目固定读取集，模型只能提出候选。
         self.memory_phase = "execution"  # 宿主在模型请求前更新，验收修复阶段为 verification。
+        self.readonly = None if readonly is None else READONLY_TOOLS.intersection(readonly)  # 子权限与父可用工具取交集，不能由模型参数提升。
+        self.subagents: SubagentController | None = None  # 仅根Agent绑定；子执行没有委派或管理权限。
+        self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -94,6 +101,10 @@ class ToolExecutor:
     def _enabled_names(self) -> list[str]:
         """返回实际工具名；启用压缩时自动提供只读read_context，额外定义参与输入计量。"""
         names = list(self.config.tools)
+        if self.handoff:
+            return []
+        if self.readonly is not None:
+            return sorted(self.readonly)
         if self.config.context.compression != "off":
             names.append("read_context")
         if self.planning is not None:
@@ -107,6 +118,8 @@ class ToolExecutor:
                 names.extend(["memory_search", "memory_get"])
             if self.config.memory.capture:
                 names.append("memory_propose")
+        if self.subagents is not None:
+            names.extend(SUBAGENT_TOOLS)
         return names
 
     @property
@@ -154,6 +167,10 @@ class ToolExecutor:
     async def execute(self, name: str, arguments_json: str) -> dict:
         """严格校验并执行一个工具；业务错误回传模型，存储错误立即上抛。"""
         self.cancelled_result = None
+        if self.handoff:
+            return _error("handoff_tools_disabled", "收尾交接阶段只允许总结已有证据，不执行任何新工具。")
+        if self.readonly is not None and name not in self.readonly:
+            return _error("subagent_read_only", "子Agent仅允许父级授予的读取和检索，不能修改文件、执行命令或委派。")
         if name not in _TOOL_SPECS or name not in self._enabled_names():
             return _error("unknown_tool", "该工具未启用，请使用当前工具声明中的名称。")
         try:
@@ -169,6 +186,12 @@ class ToolExecutor:
             if self.memory is not None:
                 phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
                 self.memory.before_tool(name, arguments, phase)
+            if name in SUBAGENT_TOOLS and self.subagents is not None:
+                data = await self.subagents.execute(name, arguments)
+                child = data.get("subagent")
+                ok = child is None or (child["status"] == "completed" and not child["report"]["partial"])
+                return {"ok": ok, "data": data, "error": None if ok else {"code": "subagent_not_completed", "message": "子研究未完成，请核对状态和轨迹。"},
+                        "truncated": not data.get("eof", True)}
             if name == "read_context":
                 if self.context_archive is None:
                     return _error("context_not_ready", "历史证据尚未绑定。")
@@ -210,6 +233,8 @@ class ToolExecutor:
             raise
         except StorageError:
             raise
+        except SubagentError as error:
+            return _error(error.code, error.message)
         except MemoryError as error:
             return _error(error.code, error.message)
         except TaskError as error:

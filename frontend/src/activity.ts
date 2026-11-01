@@ -10,6 +10,8 @@ export interface ActivityStep {
   errorMessage: string | null; // 局部编辑的真实失败说明；无失败或字段无法核对时为空。
 }
 const toolLabels: Record<string, string> = {
+  delegate_readonly: '委派只读子 Agent',
+  read_subagent: '回读子 Agent 报告',
   memory_search: '搜索项目记忆',
   memory_get: '回读项目记忆',
   memory_propose: '提出记忆候选',

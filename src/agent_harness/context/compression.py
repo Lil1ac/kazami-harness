@@ -353,7 +353,7 @@ class ContextCompressor:
         """
         from agent_harness.runtime.runner import AgentStopped
 
-        if self.context.result.model_turns + 1 + reserve_model_turns >= self.context.manifest.config.limits.max_model_turns:
+        if self.context.available("model_turns") <= 1 + reserve_model_turns:
             return False
         region = self._region(messages)
         # 摘要请求本身也必须适配输入预算；不能把超限历史直接发给摘要模型。

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getSubagent } from '../api';
+import { cancelSubagent, getSubagent } from '../api';
 import type { SubagentDetail, SubagentRecord } from '../types';
 import { SubagentsPanel } from './SubagentsPanel';
 
@@ -10,6 +10,7 @@ vi.mock(
   '../api',
   /* 保留真实查询及展示，只替换HTTP读边界。 */ () => ({
     getSubagent: vi.fn(),
+    cancelSubagent: vi.fn(),
     errorMessage: (error: Error) => error.message,
   }),
 );
@@ -181,4 +182,20 @@ it('父运行停止而子缺终态时明确中断，读取失败不会展示成�
   await user.click(screen.getByText('检查调用方'));
   expect(await screen.findByText('子执行记录无法核对。')).toBeInTheDocument();
   expect(screen.queryByText(/报告已返回/)).not.toBeInTheDocument();
+});
+
+it('活动子任务可单独停止，失败保留提示并可重试，历史不提供停止入口', async () => {
+  // 单项停止必须绑定父子编号；失败不把页面伪装为已取消。
+  const user = userEvent.setup();
+  const active = { ...record, status: 'running' as const, report: null };
+  vi.mocked(getSubagent).mockResolvedValue({ ...detail(), subagent: active });
+  vi.mocked(cancelSubagent).mockRejectedValueOnce(new Error('停止暂未确认'));
+  vi.mocked(cancelSubagent).mockResolvedValueOnce({ subagent: { ...active, status: 'cancelled' } });
+  show(active, true);
+  await user.click(screen.getByText('检查调用方'));
+  await user.click(await screen.findByRole('button', { name: '停止此子任务' }));
+  expect(await screen.findByText('停止暂未确认')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '停止此子任务' }));
+  await waitFor(() => expect(cancelSubagent).toHaveBeenCalledTimes(2));
+  expect(cancelSubagent).toHaveBeenLastCalledWith('parent-a', 'child-a');
 });

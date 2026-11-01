@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button } from 'antd';
-import { errorMessage, getSubagent } from '../api';
+import { cancelSubagent, errorMessage, getSubagent } from '../api';
 import { duration } from '../format';
 import { MarkdownMessage } from './MarkdownMessage';
 import { EventTrail } from './EventTrail';
@@ -31,6 +31,25 @@ function SubagentDetails({
   record: SubagentRecord;
   active: boolean;
 }) {
+  const client = useQueryClient(); // 停止后刷新父快照及子详情，实际状态由后端决定。
+  const [stopping, setStopping] = useState(false); // 请求期间防止重复点击。
+  const [stopError, setStopError] = useState<string | null>(null); // 错误保留，允许明确重试。
+  /** 停止当前直属子项并刷新结果；不触发父任务停止或重新执行，返回Promise<void>。 */
+  async function stopChild() {
+    setStopping(true);
+    setStopError(null);
+    try {
+      await cancelSubagent(parentId, record.run_id);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['subagent', parentId, record.run_id] }),
+        client.invalidateQueries({ queryKey: ['run', parentId] }),
+      ]);
+    } catch (error) {
+      setStopError(errorMessage(error));
+    } finally {
+      setStopping(false);
+    }
+  }
   const [after, setAfter] = useState(0); // 当前子事件页起点，零为首条。
   const [offset, setOffset] = useState(0); // 当前报告页UTF-8字节起点，使用服务端next_offset前进。
   const query = useQuery({
@@ -45,6 +64,12 @@ function SubagentDetails({
   return (
     <div className="subagent-details">
       <p>{record.objective}</p>
+      {active && (data?.subagent.status ?? record.status) === 'running' && (
+        <Button danger loading={stopping} onClick={stopChild}>
+          停止此子任务
+        </Button>
+      )}
+      {stopError && <Alert type="error" title={stopError} />}
       {record.task_id && (
         <p className="muted">
           关联工作项：<code>{record.task_id}</code>
@@ -222,7 +247,7 @@ export function SubagentsPanel({
   return (
     <section className="subagents-panel" aria-label="只读子 Agent">
       <h3>子 Agent</h3>
-      <p className="muted">探索与审阅报告供主 Agent 核对；停止主任务会同时停止子执行。</p>
+      <p className="muted">最多两个子任务并发研究；报告供主 Agent 核对，停止主任务会同时停止所有子执行。</p>
       {records.map(
         /* 每项保持真实子编号；历史只读，不提供重新执行按钮。 */ (source) => {
           const record: SubagentRecord =

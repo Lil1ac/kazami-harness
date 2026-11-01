@@ -5,7 +5,8 @@ import json
 from collections.abc import Callable
 import traceback
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from contextvars import ContextVar
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,10 @@ from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.work.planning import PlanningController
 from agent_harness.work.tasks import WorkStore, TaskController, ExecutionLease
 from agent_harness.runtime.verifier import Verifier
+
+
+# 请求归属随asyncio任务隔离；共享HTTP客户端的回调不能依赖全局活动子项。
+REQUEST_CONTEXT = ContextVar("request_context", default=None)
 
 
 @dataclass
@@ -55,11 +60,13 @@ class RunContext:
     phase: str = "starting"
     started_at: float = 0.0  # 本次运行的单调起点，用于计量实际执行时长。
     record_root: Path | None = None  # 子日志嵌套保存时仍使用真实运行根保护文件和记忆边界；None取日志父目录。
-    budget_parent: "RunContext | None" = None  # 串行子执行的共享预算归属，根运行为None。
-    active_child: "RunContext | None" = None  # 当前只读子执行；用于供应商HTTP回调路由，结束后清空。
+    budget_parent: "RunContext | None" = None  # 子执行的共享预算归属，根运行为None。
+    reserved: dict[str, int] = field(default_factory=dict)  # 根记录未消费的子预算；子记录自己的未消费分配。
+    subagent_controller: object | None = None  # 根运行的生命周期控制器，未绑定时为空。
     on_event: Callable[[str, dict], None] | None = None  # 子事件落盘后通知父级进度，None不发布额外快照。
     timeout_scope: asyncio.Timeout | None = None  # 根运行实际超时管理器；None为尚未进入，避免Windows时钟粒度误判取消来源。
     delegation_used: bool = False  # 曾尝试委派后启用父级末轮交接；失败接纳也须为父保留总结机会。
+    request_turn: int = 0  # 当前自身请求启动时的轮号；父总计数可能被并行子项推进，不能拿响应时总数配对。
 
     @property
     def runs_root(self) -> Path:
@@ -70,15 +77,26 @@ class RunContext:
         """接纳一次model或tool调用并累计父子计数；超出任一级限额时先抛AgentStopped。
 
         kind仅由执行核心传入model/tool；返回None，不发送请求或执行工具。
-        子预算是父预算的子集，检查和累计无await，串行执行不会在其间穿插其他调用。
+        子预算是父预算的子集，检查、消费预留和累计无await，同一事件循环不会在其间穿插其他调用。
         """
         field, limit = ("model_turns", "max_model_turns") if kind == "model" else ("tool_calls", "max_tool_calls")
+        if self.budget_parent is None and self.available(field) <= 0:
+            raise AgentStopped("limit_exceeded", limit)
         contexts = [self] if self.budget_parent is None else [self, self.budget_parent]
         for item in contexts:
             if getattr(item.result, field) >= getattr(item.manifest.config.limits, limit):
                 raise AgentStopped("limit_exceeded", limit)
         for item in contexts:
             setattr(item.result, field, getattr(item.result, field) + 1)
+        if self.budget_parent is not None and self.reserved.get(field, 0):
+            self.reserved[field] -= 1
+            self.budget_parent.reserved[field] -= 1
+
+    def available(self, field: str) -> int:
+        """返回field模型/工具未使用且未预留次数；不改变预算，子运行以自身上限计算。"""
+        limit = "max_model_turns" if field == "model_turns" else "max_tool_calls"
+        held = self.reserved.get(field, 0) if self.budget_parent is None else 0
+        return max(0, getattr(self.manifest.config.limits, limit) - getattr(self.result, field) - held)
 
     def active_duration(self) -> float:
         """返回本次运行耗时秒数；使用单调时间，不受系统时间校准影响。"""
@@ -115,8 +133,9 @@ class RunContext:
 
     def http_attempt(self, attempt: int) -> None:
         """登记单轮 HTTP 尝试；出现重试时，用量可能含未知部分，因此取消完整标记。"""
-        if self.active_child is not None:
-            self.active_child.http_attempt(attempt)
+        owner = REQUEST_CONTEXT.get()
+        if owner is not None and owner is not self:
+            owner.http_attempt(attempt)
             return
         self.result.http_attempts += 1
         if self.budget_parent is not None:
@@ -125,7 +144,7 @@ class RunContext:
                 self.budget_parent.result.usage_complete = False
         if attempt > 1:
             self.result.usage_complete = False
-        self.emit("model_http_attempt", {"model_turn": self.result.model_turns, "attempt": attempt})
+        self.emit("model_http_attempt", {"model_turn": self.request_turn or self.result.model_turns, "attempt": attempt})
 
 
 class AgentStopped(Exception):

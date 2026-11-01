@@ -1,6 +1,7 @@
-"""串行只读委派：独立上下文与日志，共享父预算，不进入单槽队列或递归创建执行者。"""
+"""受控只读委派：同步等待或异步并行，独立上下文与日志，共享父预算和生命周期。"""
 
 import asyncio
+from copy import copy
 import codecs
 import json
 from pathlib import Path
@@ -32,6 +33,7 @@ class DelegateReadonly(DataModel):
     skill_names: list[str] = Field(default_factory=list, max_length=8, description="明确委派给子角色的技能名，只能选父本轮已冻结技能；默认空，不自动继承。")
     max_model_turns: int = Field(default=4, ge=1, le=12, description="子执行最多模型轮数，默认4，包含摘要，不增加父额度。")
     max_tool_calls: int = Field(default=8, ge=1, le=30, description="子执行最多工具次数，默认8，非法调用也占用。")
+    background: bool = Field(default=False, description="False等待本次报告；True异步启动，最多两个活动子任务，随后用wait_subagents等待。")
     timeout_seconds: float = Field(default=60.0, gt=0, le=180, allow_inf_nan=False, description="子执行总秒数，默认60；父级截止时间优先。")
 
 
@@ -43,8 +45,24 @@ class ReadSubagent(DataModel):
     max_bytes: int = Field(default=8192, ge=4, le=8192, description="每页最大UTF-8字节数，默认8192，最小4避免字符内死循环。")
 
 
+class WaitSubagents(DataModel):
+    """选择直属子项等待；超时仅返回进度，不取消仍在研究的子项。"""
+
+    run_ids: list[UUID] = Field(default_factory=list, max_length=8, description="待观察子编号，默认空表示本轮全部；跨父编号拒绝。")
+    mode: Literal["all", "any"] = Field(default="all", description="all等全部终态，any等任一终态。")
+    timeout_seconds: float = Field(default=30.0, ge=0, le=60, allow_inf_nan=False, description="等待秒数；0仅查询，最长60，父总截止优先。")
+
+
+class CancelSubagent(DataModel):
+    """停止一个直属子任务，重复停止返回原终态，不影响其他子项。"""
+
+    run_id: UUID = Field(description="本轮登记的直属子编号。")
+
+
 SUBAGENT_TOOLS = {
-    "delegate_readonly": (DelegateReadonly, "串行委派独立只读探索/审阅；技能须显式选择父级快照。返回精简结构报告和核验来源，partial表示未完整交接。共用原预算并为父保留收尾额度；返回后同批剩余调用不执行，须阅读结果后重新决定。报告不代表父任务完成或验收通过。"),
+    "delegate_readonly": (DelegateReadonly, "委派独立只读探索/审阅；background=true异步启动并返回编号，最多两个活动子任务；技能须显式选择父级快照。返回精简结构报告和核验来源，partial表示未完整交接。共用原预算并为父保留收尾额度；返回后同批剩余调用不执行，须阅读结果后重新决定。报告不代表父任务完成或验收通过。"),
+    "wait_subagents": (WaitSubagents, "查询或等待直属子项，返回各自真实状态和已固定报告；等待超时不取消研究。"),
+    "cancel_subagent": (CancelSubagent, "单独停止一个直属子任务并等待封存，不影响其他子任务；不能继续或重新执行。"),
     "read_subagent": (ReadSubagent, "只读当前Run内已登记子报告，按UTF-8字节分页；失败/中断不视为成功。不会重新运行子Agent或注入完整子对话。"),
 }
 
@@ -100,14 +118,62 @@ def report_page(history: RunHistory, offset: int, max_bytes: int) -> dict:
 
 
 class SubagentController:
-    """父Run内的唯一委派入口；同步等待子执行，所有生命周期变化先落盘再对外返回。"""
+    """父Run内的唯一委派入口；最多两个活动子项，所有生命周期变化先落盘再对外返回。"""
 
     def __init__(self, parent: "RunContext", client: "ModelClient", executor: "ToolExecutor"):
         """绑定parent预算、已开启client和父executor；返回None，不立即调用模型。"""
         self.parent = parent  # 共享预算与取消归属，委派不另占队列槽。
         self.client = client  # 复用同一供应商连接及模型配置，不新增凭据来源。
         self.executor = executor  # 读取父级工具白名单及当前规划、任务权限。
+        self.jobs: dict[UUID, asyncio.Task] = {}  # 本轮已创建任务；终态仍保留以便幂等查询和检查异常。
+        self.pending_reports: set[UUID] = set()  # 异步报告尚未通过等待/读取回执交给父模型，防止提前声称完成。
+        self.cancel_reasons: dict[UUID, str] = {}  # 只有明确单项停止时使用user_cancelled，其余为parent_stopped。
         self.inputs: "ContextBuilder | None" = None  # 首次模型输入准备后绑定固定约定、技能和记忆。
+
+    @property
+    def active(self) -> bool:
+        """返回本轮是否还有未结束子协程；不读取磁盘或改变状态。"""
+        return any(not task.done() for task in self.jobs.values())
+
+    def check_errors(self) -> None:
+        """检查已结束jobs的致命异常；返回None，存储等故障必须向父传播。"""
+        for task in self.jobs.values():
+            if task.done() and not task.cancelled() and task.exception() is not None:
+                raise task.exception()
+
+    async def wait_all(self) -> list[dict]:
+        """等待本轮所有jobs并返回固定快照；父取消通过外层close收拢，不丢子终态。"""
+        if self.jobs:
+            await asyncio.wait(self.jobs.values())
+        self.check_errors()
+        self.pending_reports.clear()
+        return [item.model_dump(mode="json") for item in self.parent.result.subagents]
+
+    async def close(self) -> None:
+        """取消并等待所有未完成子项，返回None；在父终态及客户端关闭之前封存，存储错误上抛。"""
+        for task in self.jobs.values():
+            if not task.done():
+                task.cancel()
+        if self.jobs:
+            await asyncio.gather(*self.jobs.values(), return_exceptions=True)
+        self.check_errors()
+
+    async def cancel(self, run_id: UUID, received: bool = False) -> dict:
+        """停止直属run_id并返回真实快照；received只在模型工具已接收报告时为True。
+
+        默认False用于网页停止，仍须向父模型交接结果；未知编号抛SubagentError，终态不增加事件。
+        """
+        task = self.jobs.get(run_id)
+        if task is None:
+            raise SubagentError("subagent_not_found", "该子执行不属于当前运行。")
+        if not task.done():
+            self.cancel_reasons[run_id] = "user_cancelled"
+            task.cancel()
+        await asyncio.shield(task)
+        self.check_errors()
+        if received:
+            self.pending_reports.discard(run_id)
+        return {"subagent": next(item.model_dump(mode="json") for item in self.parent.result.subagents if item.run_id == run_id)}
 
     def bind_inputs(self, inputs: "ContextBuilder") -> None:
         """固定父级inputs引用供后续委派继承；返回None，不继承消息或子历史。"""
@@ -123,16 +189,38 @@ class SubagentController:
     async def execute(self, name: str, arguments) -> dict:
         """处理已校验name/arguments并返回委派回执；无效归属抛SubagentError。
 
-        delegate_readonly串行执行并保存独立轨迹；read_subagent仅分页读报告。
+        delegate_readonly按background选择等待或异步启动；wait_subagents查询/等待，read_subagent分页读报告。
         子超时或模型失败回传明确错误状态；父取消、父总超时和存储故障继续向上传播。
         """
         parent = self.parent
+        self.check_errors()
+        if name == "cancel_subagent":
+            return await self.cancel(arguments.run_id, received=True)
+        if name == "wait_subagents":
+            identifiers = list(dict.fromkeys(arguments.run_ids or list(self.jobs)))
+            if any(identifier not in self.jobs for identifier in identifiers):
+                raise SubagentError("subagent_not_found", "等待集合包含不属于当前运行的子执行。")
+            selected_jobs = [self.jobs[identifier] for identifier in identifiers]
+            ready = any(task.done() for task in selected_jobs)
+            if selected_jobs and not (arguments.mode == "any" and ready):
+                await asyncio.wait(selected_jobs, timeout=arguments.timeout_seconds,
+                                   return_when=asyncio.ALL_COMPLETED if arguments.mode == "all" else asyncio.FIRST_COMPLETED)
+            self.check_errors()
+            self.pending_reports.difference_update(identifier for identifier in identifiers if self.jobs[identifier].done())
+            return {"items": [item.model_dump(mode="json") for item in parent.result.subagents if item.run_id in identifiers],
+                    "finished": all(self.jobs[identifier].done() for identifier in identifiers)}
         if name == "read_subagent":
             if not any(item.run_id == arguments.run_id for item in parent.result.subagents):
                 raise SubagentError("subagent_not_found", "该子执行不属于当前运行。")
-            return report_page(read_child(parent.runs_root, parent.manifest.run_id, arguments.run_id), arguments.offset, arguments.max_bytes)
+            page = report_page(read_child(parent.runs_root, parent.manifest.run_id, arguments.run_id), arguments.offset, arguments.max_bytes)
+            page["status"] = next(item.status for item in parent.result.subagents if item.run_id == arguments.run_id)
+            if self.jobs[arguments.run_id].done() and page["eof"]:
+                self.pending_reports.discard(arguments.run_id)
+            return page
         if self.inputs is None or not arguments.title.strip() or not arguments.objective.strip():
             raise SubagentError("invalid_arguments", "委派标题和研究范围不能为空。")
+        if sum(not task.done() for task in self.jobs.values()) >= 2:
+            raise SubagentError("subagent_concurrency_limit", "最多两个活动子任务，请先等待或停止已有子项。")
         selected = set(arguments.skill_names)
         if len(selected) != len(arguments.skill_names) or not selected.issubset({item.name for item in self.inputs.skills}):
             raise SubagentError("subagent_skill_unavailable", "子角色只能显式选择父本轮已冻结的技能，名称不能重复。")
@@ -147,13 +235,12 @@ class SubagentController:
         available_seconds = max(0.0, parent.deadline - asyncio.get_running_loop().time())
         reserve = {"model_turns": 2.0, "tool_calls": 1.0 if {"write_file", "edit_file", "run_command"}.intersection(self.executor._enabled_names()) else 0.0,
                    "seconds": min(10.0, available_seconds / 4)}  # 保留父执行/总结与一次实际修改空间；不是延长总预算。
-        turns = min(arguments.max_model_turns, limits.max_model_turns - parent.result.model_turns - int(reserve["model_turns"]))
-        calls = min(arguments.max_tool_calls, limits.max_tool_calls - parent.result.tool_calls - int(reserve["tool_calls"]))
+        turns = min(arguments.max_model_turns, parent.available("model_turns") - int(reserve["model_turns"]))
+        calls = min(arguments.max_tool_calls, parent.available("tool_calls") - int(reserve["tool_calls"]))
         seconds = min(arguments.timeout_seconds, available_seconds - reserve["seconds"])
         if turns < 1 or calls < 1 or seconds <= 0:
             raise SubagentError("subagent_budget_exhausted", "为父任务保留收尾额度后剩余预算不足，未创建子执行。")
-        from agent_harness.runtime.agent import run_agent
-        from agent_harness.runtime.runner import AgentStopped, RunContext
+        from agent_harness.runtime.runner import RunContext
         from agent_harness.tools.registry import ToolExecutor
 
         profile = PROFILES[arguments.role]
@@ -189,11 +276,37 @@ class SubagentController:
             self._publish(record, child)
 
         child.on_event = progress
-        parent.active_child = child
+        # 无await地接纳分配，其他任务无法重复领取这份预算；消费/释放均在同一事件循环。
+        for field, value in (("model_turns", turns), ("tool_calls", calls)):
+            child.reserved[field] = value
+            parent.reserved[field] = parent.reserved.get(field, 0) + value
+        inputs = copy(self.inputs)
+        inputs.memory = self.inputs.memory.fork(manifest, child.emit)
+        task = asyncio.create_task(self._run_child(child, record, allowed, inputs))
+        self.jobs[manifest.run_id] = task
+        if arguments.background:
+            self.pending_reports.add(manifest.run_id)
+        await asyncio.sleep(0)  # 让子协程进入try/finally，启动回执之后立即取消也能封存终态。
+        if not arguments.background:
+            await asyncio.shield(task)
+            self.check_errors()
+        return {"subagent": record.model_dump(mode="json"), "accepted": arguments.background,
+                "notice": "启动不代表研究完成；先wait_subagents/read_subagent核对结果，再决定修改。子用量已计入父总数。"}
+
+    async def _run_child(self, child, record, allowed, inputs) -> None:
+        """用child独立上下文执行record，只授予allowed工具；inputs已固定，返回None并释放未用额度。
+
+        受控失败写终态和部分证据，存储错误上抛，由父生命周期收拢；不进入顶层队列。
+        """
+        from agent_harness.runtime.agent import run_agent
+        from agent_harness.runtime.runner import AgentStopped
+        from agent_harness.tools.registry import ToolExecutor
+        parent, manifest, result, store = self.parent, child.manifest, child.result, child.store
+        config = manifest.config
         try:
             executor = ToolExecutor(manifest.task.workspace, parent.runs_root, config, python_execution=manifest.task.python_execution, readonly=allowed)
             async with asyncio.timeout_at(child.deadline):
-                await run_agent(child, self.client, executor, inherited_context=self.inputs)
+                await run_agent(child, self.client, executor, inherited_context=inputs)
             result.execution_status = "completed"
         except AgentStopped as error:
             result.execution_status, result.stop_reason = error.status, error.reason
@@ -201,8 +314,7 @@ class SubagentController:
             result.execution_status, result.stop_reason, result.usage_complete = "timed_out", "subagent_timeout", False
         except asyncio.CancelledError:
             result.execution_status = "timed_out" if parent.timeout_scope is not None and parent.timeout_scope.expired() else "cancelled"
-            result.stop_reason, result.usage_complete = "parent_stopped", False
-            raise
+            result.stop_reason, result.usage_complete = self.cancel_reasons.get(manifest.run_id, "parent_stopped"), False
         except ModelError as error:
             result.execution_status, result.stop_reason, result.usage_complete = "failed", error.code, False
             child.emit("model_request_failed", {"code": error.code})
@@ -211,10 +323,12 @@ class SubagentController:
         except Exception:
             result.execution_status, result.stop_reason, result.usage_complete = "failed", "subagent_internal_error", False
         finally:
-            parent.active_child = None
+            for field, value in child.reserved.items():
+                parent.reserved[field] -= value
+            child.reserved.clear()
             if not result.usage_complete:
                 parent.result.usage_complete = False
-            # 同一协程内无后台命令；父取消时同步封存子终态，然后继续向Runner传播取消。
+            # 子项不启动命令；生命周期收拢等待此处完成，再允许父封存或关闭共享模型客户端。
             if result.execution_status != "running":
                 events = read_child(parent.runs_root, parent.manifest.run_id, manifest.run_id).events
                 result.subagent_report = finalize_report(result, events)
@@ -224,8 +338,3 @@ class SubagentController:
                 record.status, record.stop_reason = result.execution_status, result.stop_reason
                 record.report = result.subagent_report
                 self._publish(record, child)
-        return {"subagent": record.model_dump(mode="json"),
-                "remaining_budget": {"model_turns": limits.max_model_turns - parent.result.model_turns,
-                                     "tool_calls": limits.max_tool_calls - parent.result.tool_calls,
-                                     "seconds": max(0.0, parent.deadline - asyncio.get_running_loop().time())},
-                "notice": "报告属于待核对研究资料，optional不扩大任务范围。请先读取结果，再重新决定后续动作；子用量已计入父总数。"}

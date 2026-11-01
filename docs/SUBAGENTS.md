@@ -1,58 +1,55 @@
 # 只读子 Agent（C07）
 
-本轮按用户批准的 Plan 交付探索／审阅型串行委派。主 Agent 在当前 Run 中调用 `delegate_readonly`，等待独立子执行返回有界报告，再决定下一步修改和验收。子执行不进入单机队列，不另占执行槽；不会出现父 Run 占槽等待子 Run 排队的死锁。
+当前提供探索/审阅型只读委派：同步等待与异步并行共用同一个delegate_readonly接口，通过background明确选择执行方式。异步最多两个活动子任务，父模型可以继续独立读取或思考；子执行不进入顶层单机队列，不另占执行槽。当前模型、供应商与实际工作区沿用父运行。
 
-## 权限、输入与任务关系
+## 角色、权限和输入
 
-子执行使用父级实际工作区，只能使用父级当前已开放的读取工具与宿主只读集合的交集：`read_file`、`search_files`、`list_files`、`read_context`、`memory_search`、`memory_get`。宿主在参数分发前拒绝其他调用；文件修改、命令、任务与记忆写入、人机决定和递归委派均不可用。没有进程或写入者需要单独清理。
+explore和review使用独立系统职责及宿主只读集合，与父已开放能力取交集：read_file、search_files、list_files、read_context、memory_search、memory_get。子项不能写文件、执行命令、修改任务/记忆、提问或递归委派。父聊天及工具正文不自动传给子模型，完整子对话不回灌父模型。
 
-explore和review使用宿主内置的独立角色提示与只读工具集合，不复制父级system_prompt；共同宿主规则继续生效。子上下文包含明确研究范围、作为背景的父轮要求与批准方案，以及可选关联工作项的范围和完成条件。根AGENTS.md和项目记忆修订继承父运行固定快照；技能默认为空，只有delegate_readonly.skill_names显式选择的父级已冻结技能才进入子输入，未知或重复名称在创建前拒绝。子模型拥有独立的路径观察、记忆选择、回读和压缩状态。父聊天历史及工具输出不会自动注入子上下文，完整子对话也不会自动回灌父上下文。
+明确objective为执行目标，父要求、批准方案和可选同会话task_id只是背景及关联，不表示子项认领或完成工作项。根AGENTS.md、记忆修订与实际阶段在接纳时固定；skill_names只能选择父已冻结的技能，默认空，不继承父角色system_prompt或全部技能。每个子项独立观察路径、选择记忆、压缩和保存日志。
 
-可选 `task_id` 必须属于父会话清单，仅建立研究关联，不认领、完成或修改工作项。父 Agent 继续承担代码修改、任务状态更新和最终交付；报告返回不代表任务完成、检查通过或用户采纳。
+当前共享目录没有文件快照隔离。因此存在活动子项时，宿主拒绝父write_file、edit_file、run_command、memory_propose，以及进入/提交新计划，返回subagent_readers_active；先等待或停止研究，再修改。外部程序/用户修改目录仍可能使来源过期，父须核对指纹；本能力不提供文件系统沙箱或外部写入锁。
 
-## 工具、额度与失败语义
+## 模型工具与交接
 
-`delegate_readonly`参数为非空title、objective，可选role=explore/review、task_id、skill_names及子预算。默认最多4次模型、8次工具、60秒；参数上限为12次模型、30次工具、180秒。分配时从父剩余额度中保留2次模型、父有写入/编辑/命令能力时1次工具，以及剩余时间的四分之一（最多10秒）；记录parent_reserve与实际子额度。不足一次子模型或工具时返回subagent_budget_exhausted，不创建子执行。单轮最多8次委派，无自动递归和无限重试。
+- delegate_readonly(title, objective, role, task_id, skill_names, background, max_model_turns, max_tool_calls, timeout_seconds)：background默认false，同步返回当前研究报告；true接纳后立即返回子编号、当前状态及accepted，不等同完成。两个活动槽占满返回subagent_concurrency_limit，单轮最多8次接纳。同批连续委派可接纳多个独立研究；后续预生成的其他动作仍跳过，让父重新决定。
+- wait_subagents(run_ids=[], mode="all", timeout_seconds=30)：空集合表示本轮全部；all等全部终态，any等任一终态；有终态时any立即返回。0秒只查询，最长60秒，等待超时不会取消研究。返回各子真实状态、已有结构报告和finished（所选全部终态）；跨父编号整批拒绝。
+- read_subagent(run_id, offset=0, max_bytes=8192)：当前父Run范围内读取固定结构报告，返回content、真实状态和UTF-8安全next_offset；每页4—8192字节，字符内部或越界偏移拒绝，不执行模型。
+- cancel_subagent(run_id)：单独停止并等待封存，返回真实部分报告，兄弟及父继续；重复取消返回原终态。子上下文不能resume，重新研究必须明确创建新委派。
 
-父子共用模型轮数、工具调用数和父总截止时间；摘要及非法工具调用也计数，HTTP重试及已知token同样累计。子明细已经包含在父总数中，页面不能重复相加。父级每次尝试委派返回后，无论成功、失败或拒绝接纳，同批剩余工具均以subagent_result_requires_review跳过且不占实际工具额度；父模型必须看到回执，再重新提交后续动作，避免执行报告产生前已生成的修改。
+父模型最终回答前，宿主等待并交接尚未收取的异步报告，要求父再核对。网页单项停止不假设父模型已经看过结果。父取消、超时、等待用户、额度耗尽或异常退出均在客户端关闭和父终态前取消并等待所有未完成子协程，保留各自终态。存储故障向父传播，不吞为研究成功；服务重启只读旧记录，不恢复模型或重放工具。
 
-子运行以及已经尝试委派的父运行，在最后一次可用模型请求或工具额度耗尽后进入收尾：发送工具列表为空，仅在此次输入投影追加交接通知，不污染原始消息、压缩索引或续轮历史；摘要不得吃掉保留的末轮。供应商仍返回工具调用时宿主全部跳过，以limit_exceeded/handoff_tools_disabled结束。正常总结仍由原有独立检查判断交付结果；超时、取消和输入超限保持硬边界，不额外调用模型。预留额度只提供收尾空间，不保证研究或父任务一定完成。
+## 预算和用量
 
-父运行等待子执行期间保持可取消；父取消、服务关闭及父总超时向子传播，子终态先封存再继续父级收尾。子自身失败、超时、额度耗尽或partial报告以subagent_not_completed和真实子状态回传，父可以解释限制或使用剩余额度继续。模型失败和中断用量保留未知标记，存储错误直接上抛，不能伪造成功。
+默认子上限为4次模型、8次工具、60秒，参数最大12次模型、30次工具、180秒；实际额度裁剪到父级未使用且未分配余额。仍在原总预算内为父保留2次模型、父有写入/编辑/命令能力时1次工具，以及剩余时间四分之一（最多10秒）。预算不够一次子模型/工具时拒绝接纳，不创建执行。
+
+接纳时无await地预留子模型/工具额度；每次子调用消费自己分配并在父累计一次，终态归还未消费余额。父自己只能消费未预留部分，多个子项不能重复领取同一余额。非法调用和摘要也占预算，跳过未执行调用不占工具次数。所有模型请求与HTTP尝试通过ContextVar按asyncio任务归属路由，复用同一HTTP客户端也不会将父或兄弟用量写入错误子日志。已知token、HTTP尝试及模型/工具次数已计入父总数，页面不能重复相加；缺失用量保持未知。
+
+子项及已尝试委派的父在最后可用模型轮或工具耗尽后以空工具声明总结；宿主再次拒绝违规工具请求，保留部分证据。摘要不能吃掉末轮或其他子项的预留。硬超时、取消和输入超限不追加模型请求；收尾空间不保证研究或交付必然完成。
 
 ## 统一结构报告
 
-模型最终提交JSON：summary、findings、limitations、pending及complete。summary最多1200字符；findings最多8项，每项title最多160、detail最多600字符、最多2个evidence_call_ids；limitations/pending各最多8项，每项240字符。发现分required、optional、observation；required必须引用实际读取，optional不授予父Agent扩大任务范围的权限。complete=false必须给出限制或未完成事项。
+模型提交summary、findings、limitations、pending及complete。summary最多1200字符；findings最多8项，每项title160、detail600字符、最多2个evidence_call_ids；limitations/pending各最多8项、每项240字符。required表示范围内必须修复的缺陷，optional是可选加强，observation是事实观察；分类不扩大授权，required必须引用真实成功只读回执。complete=false必须提供限制或未完成事项。
 
-宿主只从本子运行成功只读回执核验引用、补充evidence（最多24项），并计算partial和reason；文件依据保留实际path、sha256及截断事实，搜索/记忆依据以真实tool_call_id追到子轨迹。不把模型写出的路径、指纹、行号或验收作为已核验元数据；引用存在不等于自然语言判断、分类和行号语义正确，父Agent仍须核对。全文UTF-8最多32KiB。普通文本、结构超限、伪造引用分别拒绝为稳定报告错误；原始模型输出仍在子日志，返回无虚构发现的部分报告和实际证据。失败、取消、超时和限额永远partial；模型正常结束也可主动partial，不能据此显示完整交接。
+宿主核验引用属于本子运行的实际成功读取，补充最多24条evidence和partial/reason，文件保留真实path、sha256及截断事实。UTF-8总上限32KiB；结构/超长/伪造引用无效则封存失败，原模型输出留在日志，回传不虚构发现的部分证据。失败、取消、超时和限额始终partial；执行completed也可为partial。引用存在不证明自然语言、行号或分类判断正确，父须核对并实际交付。
 
-同一份SubagentReport固定在子RunResult.subagent_report、父SubagentRecord.report和父工具回执中。`read_subagent(run_id, offset, max_bytes)`仅分页读取该结构JSON，返回content，单页最多8192个UTF-8字节；偏移必须落在字符边界。该工具只读取当前父Run已登记子项，不重新运行子Agent。新协议直接替换旧字符串预览和report_truncated，不提供旧会话格式兼容层。
+统一报告固定在子RunResult.subagent_report、父SubagentRecord.report及回执；新协议直接替换旧字符串预览，无旧格式兼容层。子报告不代表任务完成、用户采纳或项目独立检查通过。
 
-## 持久记录、接口和界面
+## 持久接口与前端
 
-完整子日志位于 `<runs_root>/<parent_run_id>/subagents/<child_run_id>/`，复用 RunStore 的清单、连续事件和唯一终态协议。`RunManifest.delegation` 保存父归属，与多轮会话 `parent_run_id` 分开；子项不出现在顶层会话索引或后台队列。嵌套日志仍使用真实 runs_root 保护运行记录及记忆边界。
+子日志位于<runs_root>/<parent_id>/subagents/<child_id>/。RunManifest.delegation表达直属归属，不与会话续轮parent_run_id混用；子项不进入顶层会话索引。subagent_snapshot持久发布有界进度，历史缺父终态时各子最新计数只累计一次；无子终态且父不活动时显示interrupted。
 
-父日志以 `subagent_snapshot` 保存有界进度，`RunResult.subagents` 固定该轮委派。父历史缺少终态时，以各子最新快照累计一次计数，不重复累计每条快照；父已经停止且子缺终态时显示中断，不自动恢复。
+- GET /api/runs/{run_id}/subagents：本轮快照及父活动状态。
+- GET /api/runs/{run_id}/subagents/{child_id}?after=0&limit=100&offset=0：subagent、report_page.content、events、context、warnings。事件序号与报告字节偏移独立；未知直属项404、非法偏移422、归属或日志损坏503。
+- POST /api/runs/{run_id}/subagents/{child_id}/cancel：同源校验及会话生命周期控制下单项停止；只允许当前父控制器操作，历史已终态只读返回，未活动返回409。重复操作幂等，不停止其他子项。
 
-- `GET /api/runs/{run_id}/subagents`：本轮委派列表及父活动状态。
-- `GET /api/runs/{run_id}/subagents/{child_id}?after=0&limit=100&offset=0`：返回subagent、report_page（正文content）、events、context、warnings；报告及来源统一由subagent.report提供，不再重复顶层report/sources。after为子事件序号，offset为报告字节偏移，不能混用。
-- 未登记子项返回404；非法报告偏移返回422；日志损坏或归属变化返回503。读取不投递作业、不调用模型、不重放工具。
+会话和详情展示所有子项的真实状态、摘要、分类发现、限制和待办；partial明确提示。展开读取实际来源、技能、额度与父预留、已计入父级的用量，完整结构/轨迹/上下文按需折叠和分页。活动子项提供“停止此子任务”，请求期间防双击，失败保持提示并可重试；历史隐藏停止。手机与桌面共用同一HTTP界面；未增加原生权限或凭据来源。
 
-会话内及本轮详情显示委派目标、职责、状态，展开后读取摘要、分类发现、限制、未完成事项及实际来源；partial有明确提醒，completed与partial组合显示“报告部分返回”。显式技能、子预算、父预留和已计入父级的用量一并可查；完整结构JSON、轨迹和上下文继续折叠，报告及轨迹各自分页。历史只读，后续轮不修改旧报告。Windows桌面复用同源HTTP界面和已有父任务停止入口，子Agent没有新增原生权限或凭据来源。
+## 参考与后续边界
 
-## 官方参考与本项目取舍
+最初参考[Claude Code公开文档](https://code.claude.com/docs/en/sub-agents)的独立角色/上下文和显式技能，[Deep Agents文档](https://docs.langchain.com/oss/python/deepagents/subagents)及[开源实现](https://github.com/langchain-ai/deepagents/blob/main/libs/deepagents/deepagents/middleware/subagents.py)的隔离结果交接，以及[OpenCode](https://opencode.ai/v2/docs/agents#steps)的末轮总结。未声称审阅Claude闭源调度实现；并发限流、额度预留和收拢协议是本项目的设计判断。
 
-- [Claude Code](https://code.claude.com/docs/en/sub-agents)：公开文档描述独立系统提示、独立上下文、显式子技能及maxTurns行为。Claude Code本体闭源，此处不声称审阅了其内部调度源码。
-- [Deep Agents文档](https://docs.langchain.com/oss/python/deepagents/subagents)和[开源中间件](https://github.com/langchain-ai/deepagents/blob/main/libs/deepagents/deepagents/middleware/subagents.py)：同步委派、子消息隔离及最终文本/结构结果回收支持当前串行方向。
-- [OpenCode steps](https://opencode.ai/v2/docs/agents#steps)：参考最后一轮关闭工具并要求总结的方式。
-
-同批工具屏障、固定父预留额度、有界统一报告及宿主证据核验是本项目结合原有Runner、预算和验收体系做出的设计判断，不表述为上述产品全部采用同一实现。并行、resume和子模型路由继续保留后续，不在本轮扩展。
-
-## 验收范围与后续边界
-
-验收覆盖真实Runner与HTTP队列：报告被父模型用于文件交付、上下文隔离、父权限交集、运行记录保护、固定项目约定、共享预算及同批跳过、供应商失败、子限额、父取消/超时、子局部超时、中文报告分页、重复作业及重启只读。前端覆盖展开才读取、来源和用量语义、独立分页以及中断/读取错误展示；真实页面验证从新建操作到独立检查和手机布局。
-
-当前仍是同一供应商、同一模型、一个活动子执行的串行研究。并行、独立停止子项、写入委派、隔离工作区集成和Teams不在本轮范围。工程和确定性离线模型只能证明链路与约束，不证明真实模型委派收益、无人干预成功率或token节省；G02—G04保持原状态。
+子上下文续接、多模型路由、写入委派、工作区隔离集成和Teams继续保留后续。确定性回归证明生命周期与边界，有限真实样例不证明稳定成功率、普遍节省token或G02—G04完成。
 
 ## 2026-11-01 首版历史验收记录
 
@@ -122,3 +119,16 @@ explore和review使用宿主内置的独立角色提示与只读工具集合，�
 | review审阅合计计算并由父修复 | 8733e790-8d46-489e-96dc-da741bc5543e | completed/passed，8次模型、7次工具，49444已知token；父只将加法改为乘法，可选参数校验未扩大实现范围 |
 
 两次共100738已知token，均为供应商实报，不推算费用。探索样例把普通事实标为required，说明结构及引用核验无法保证模型分类和自然语言结论正确；随后收紧角色提示，明确事实归observation，此提示措辞未追加真实请求复测。两例可证明有限样例的实际交接和交付，不能推导稳定成功率、普遍节省token或因果收益；G02—G04保持原状态。
+
+## 2026-11-01 受控并行只读迭代验收
+
+本轮按获批范围交付双槽异步委派、查询/等待、单项取消、原总预算预留及父退出收拢；同步等待仍是同一个delegate_readonly的明确执行选项，未保留另一套旧接口。目录基于同期重组后的runtime/、subagents/、context/等包，未回退其他功能改动。
+
+- 新增5项并发专项用门闩确认两个子请求真实重叠，覆盖父/子模型、HTTP及token归属只计一次、第三项限流、未消费预算不得重复分配、等待0秒仅查询、共享目录父写入拒绝、单项取消后兄弟继续、父停止全部封存以及跨父编号拒绝。
+- 后端全量814通过、11项Windows权限或POSIX能力跳过，报告.runtime/parallel-backend-all.xml。最后固定并发请求/响应轮号后，运行核心、子Agent、HTTP、压缩和规划关联136项通过，报告.runtime/parallel-final-related-v2.xml；该集合与全量重叠，不相加。早期一轮关联69通过、2失败来自拒绝回执data=None时的屏障读取，修复后关联72项通过，再完成后续全量及最终关联；原日志保留。
+- 前端全量165项通过，报告.runtime/parallel-frontend-all.json；类型检查及生产构建通过，日志.runtime/parallel-typecheck.txt和.runtime/parallel-frontend-build.txt。新增单项停止失败提示、重试和父子编号断言；保留既有jsdom样式/导航与Vite大包提示。
+- 页面使用127.0.0.1:18844与独立D盘夹具D:/Codex/Temp/harness-parallel-browser-20261101。Run 2fc4e502-e799-45cf-aa39-499c8fefc158从正式表单选择独立金额检查，两个子项均返回完整报告，父生成result.json金额4200分，completed/passed。
+- 手机390×844上的Run 2dc26ae3-39ac-4c02-9b0b-8cdd99f79680从页面单独停止第一项后，第一项cancelled/user_cancelled，第二项仍running；随后父正式确认停止，第二项cancelled/parent_stopped，第一项原因不变。文档宽390，无横向溢出；部分报告和取消状态均可回看。
+- 停止并重启专属服务后，两运行的报告、父终态、父子快照与事件数逐项一致，无模型重跑或工具重放。审计.runtime/parallel-browser-audit.json及parallel-browser-restart.json，截图output/playwright/parallel-20261101。最初Run 21ebfa76-1bec-4692-be9c-25444e85d984因离线夹具把注入AGENTS当用户要求而走同步路径；修正夹具从实际TaskSpec取场景后重新验证，原记录保留且不作为并行证据。
+
+本轮模型响应均确定化，实际前端、HTTP、队列、Runner、文件工具及独立检查使用真实实现；未新增外部真实模型请求，不将离线并发测试视为真实模型质量或性能收益证明。服务和专属浏览器在验收后关闭。Git暂存、提交及推送仍需单独明确授权；同期会话管理、目录重组及原有文档改动独立保留。

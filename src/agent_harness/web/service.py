@@ -618,6 +618,20 @@ class WebRunManager:
         except (StorageError, ValidationError):
             raise WebServiceError(503, "subagent_unreadable", "子执行记录无法核对，请检查本地日志。") from None
 
+    async def cancel_subagent(self, run_id: UUID, child_id: UUID) -> dict:
+        """停止run_id直属child_id并返回真实子快照；历史仅读取，其他父归属返回404。
+
+        仅当前活动父控制器可停止子项；未绑定时返回409，取消不停止兄弟研究或父模型。
+        """
+        detail = self.get_subagent(run_id, child_id, 0, 1, 0)
+        if detail["subagent"]["status"] != "running":
+            return {"subagent": detail["subagent"]}
+        item = self._active
+        controller = item.context.subagent_controller if item is not None and item.context is not None else None
+        if controller is None or item.context.manifest.run_id != run_id:
+            raise WebServiceError(409, "subagent_not_active", "子研究已停止或正在收尾，请刷新记录。")
+        return await controller.cancel(child_id)
+
     def list_events(self, run_id: UUID | str, after: int, limit: int) -> EventPage:
         """返回 run_id 中 seq>after 的最多 limit 条有效事件；after 从零开始。
 

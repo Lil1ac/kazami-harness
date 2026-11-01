@@ -171,6 +171,8 @@ class ToolExecutor:
             return _error("handoff_tools_disabled", "收尾交接阶段只允许总结已有证据，不执行任何新工具。")
         if self.readonly is not None and name not in self.readonly:
             return _error("subagent_read_only", "子Agent仅允许父级授予的读取和检索，不能修改文件、执行命令或委派。")
+        if self.subagents is not None and self.subagents.active and name in {"write_file", "edit_file", "run_command", "memory_propose", "enter_plan_mode", "submit_plan"}:
+            return _error("subagent_readers_active", "子研究仍在读取共享目录，请先等待或停止，再执行变更或切换计划。")
         if name not in _TOOL_SPECS or name not in self._enabled_names():
             return _error("unknown_tool", "该工具未启用，请使用当前工具声明中的名称。")
         try:
@@ -189,7 +191,7 @@ class ToolExecutor:
             if name in SUBAGENT_TOOLS and self.subagents is not None:
                 data = await self.subagents.execute(name, arguments)
                 child = data.get("subagent")
-                ok = child is None or (child["status"] == "completed" and not child["report"]["partial"])
+                ok = data.get("accepted", False) or child is None or (child["status"] == "completed" and not child["report"]["partial"])
                 return {"ok": ok, "data": data, "error": None if ok else {"code": "subagent_not_completed", "message": "子研究未完成，请核对状态和轨迹。"},
                         "truncated": not data.get("eof", True)}
             if name == "read_context":

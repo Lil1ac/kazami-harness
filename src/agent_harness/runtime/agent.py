@@ -79,22 +79,28 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     时在请求前抛AgentStopped；供应商超时和错误原样交给Runner。摘要也受总截止时间约束。
     """
     context.consume("model")
+    context.request_turn = context.result.model_turns
     context.emit("model_request_started", {
-        "model_turn": context.result.model_turns,
+        "model_turn": context.request_turn,
         "requested_model": context.manifest.config.requested_model,
         "message_count": len(messages), "purpose": purpose,
     })
-    response = await client.complete(messages, tools)
+    from agent_harness.runtime.runner import REQUEST_CONTEXT
+    token = REQUEST_CONTEXT.set(context)
+    try:
+        response = await client.complete(messages, tools)
+    finally:
+        REQUEST_CONTEXT.reset(token)
     _collect_usage(context, response.usage)
     context.emit("model_response", {
-        "model_turn": context.result.model_turns, "response_id": response.response_id,
+        "model_turn": context.request_turn, "response_id": response.response_id,
         "response_model": response.response_model, "system_fingerprint": response.system_fingerprint,
         "finish_reason": response.finish_reason, "usage": response.usage, "purpose": purpose,
     })
     return response
 
 
-async def run_agent(
+async def _run_agent(
     context: "RunContext", client: ModelClient, executor: ToolExecutor,
     *, on_completion: Callable[[], Awaitable[str | None]] | None = None,
     inherited_context: ContextBuilder | None = None,
@@ -134,6 +140,7 @@ async def run_agent(
     if isinstance(executor, ToolExecutor) and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
         from agent_harness.subagents.service import SubagentController
         executor.subagents = SubagentController(context, client, executor)
+        context.subagent_controller = executor.subagents
     context.emit("context_prepared", {
         "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
         "skills": [item.model_dump(mode="json") for item in builder.skills],
@@ -206,8 +213,14 @@ async def run_agent(
     while context.result.model_turns < config.limits.max_model_turns:
         # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
         await asyncio.sleep(0)
+        controller = getattr(executor, "subagents", None)
+        if controller is not None:
+            controller.check_errors()
+            if controller.active and context.available("model_turns") <= 1:
+                reports = await controller.wait_all()
+                messages.append({"role": "user", "content": "宿主收回并行研究报告：" + json.dumps(reports, ensure_ascii=False)})
         delegated = context.manifest.delegation is not None or context.delegation_used
-        handoff = delegated and (config.limits.max_model_turns - context.result.model_turns == 1
+        handoff = delegated and (context.available("model_turns") == 1
                                  or context.result.tool_calls >= config.limits.max_tool_calls)
         if isinstance(executor, ToolExecutor):
             executor.handoff = handoff
@@ -244,11 +257,17 @@ async def run_agent(
             raise AgentStopped("limit_exceeded", "max_model_turns")
         builder.memory.record_use(context.result.model_turns + 1, prepared.messages)
         response = await request_model(prepared.messages, prepared.tools, "execution")
+        if controller is not None:
+            controller.check_errors()
         builder.observe_usage(prepared.check.input_bytes, response.usage)
-        context.emit("assistant_message", {"model_turn": context.result.model_turns, "message": response.message})
+        context.emit("assistant_message", {"model_turn": context.request_turn, "message": response.message})
         # 完整保留 assistant 消息及其调用 ID，下一轮才能正确对应每个 tool 结果。
         messages.append(response.message)
         if not response.tool_calls:
+            if controller is not None and controller.pending_reports:
+                reports = await controller.wait_all()
+                messages.append({"role": "user", "content": "子研究已结束，请核对报告后交付：" + json.dumps(reports, ensure_ascii=False)})
+                continue
             context.result.final_answer = response.message["content"]
             feedback = await on_completion() if on_completion is not None else None
             if feedback is None:
@@ -291,6 +310,8 @@ async def run_agent(
                 _record_tool(context, call, result, messages)
                 started = False
                 if call.name == "delegate_readonly" and context.manifest.delegation is None:
+                    if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name == "delegate_readonly":
+                        continue  # 同批独立研究可并发接纳；后续修改仍由交接屏障跳过。
                     # 后续参数在子报告产生前已经生成；成功、失败或拒绝接纳都先交回模型重新决定。
                     for remaining in batch[index + 1:]:
                         pending = _skipped("subagent_result_requires_review")
@@ -341,3 +362,16 @@ async def run_agent(
                 _record_tool(context, call, _skipped(code), messages)
             raise AgentStopped("failed", "tool_internal_error") from None
     raise AgentStopped("limit_exceeded", "max_model_turns")
+
+
+async def run_agent(context, client, executor, *, on_completion=None, inherited_context=None) -> None:
+    """用context/client/executor执行单轮并收拢子任务；可选完成回调与继承输入同核心，返回None。
+
+    正常或异常退出均取消并等待未结束子项，确保客户端关闭、独立检查和父终态前没有后台读者。
+    """
+    try:
+        await _run_agent(context, client, executor, on_completion=on_completion, inherited_context=inherited_context)
+    finally:
+        controller = getattr(executor, "subagents", None)
+        if controller is not None:
+            await controller.close()

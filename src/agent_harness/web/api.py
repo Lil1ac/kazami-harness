@@ -338,6 +338,11 @@ def create_app(
         return manager.get_subagent(run_id, child_id, after, limit, offset)
 
 
+    @app.post("/api/runs/{run_id}/subagents/{child_id}/cancel")
+    async def cancel_subagent(run_id: UUID, child_id: UUID) -> dict:
+        """停止run_id直属child_id，返回封存快照；同源与会话生命周期校验沿用公共中间件。"""
+        return await manager.cancel_subagent(run_id, child_id)
+
     @app.post("/api/runs/{run_id}/cancel", response_model=RunView)
     async def cancel(run_id: UUID) -> RunView:
         """幂等取消 run_id 并返回当前视图；收尾期间 cancelling=True，不提前声称已取消。"""

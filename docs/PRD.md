@@ -4,7 +4,7 @@
 - 更新日期：2026-11-01
 - 状态：产品需求基线及功能盘点；第 0 节记录截至更新日期的完成情况、缺口与验收依据，阶段概览见 [项目概览](../PROJECT.md)
 - 产品工作名：Agent Harness
-- 当前交付重点：V0.2 既定范围、C03 主动规划、C04/C06 任务与单机队列及 C09 项目记忆首版已交付；本轮按获批 Plan 交付 C07 只读串行子 Agent，协议与验收见[子 Agent](SUBAGENTS.md)。V0.3 的 G02—G04 继续作为独立质量改进，不以委派链路或有限样例替代同条件比较。
+- 当前交付重点：V0.2 既定范围、C03 主动规划、C04/C06 任务与单机队列及 C09 项目记忆首版已交付；本轮按获批 Plan 交付 C07 受控并行只读子 Agent，协议与验收见[子 Agent](SUBAGENTS.md)。V0.3 的 G02—G04 继续作为独立质量改进，不以委派链路或有限样例替代同条件比较。
 - 配套设计：[V0.1 技术设计](TECH_DESIGN_V0.1.md)
 - 前端交付要求：[前端运行控制台](FRONTEND_REQUIREMENTS.md)（基础控制台已实现，后续能力继续同步交付）
 - 长期能力全景：[能力全景与建设顺序](CAPABILITY_MAP.md)（覆盖 Plan Mode、Agent Tasks、后台执行、Subagents、Agent Teams、Memory 等 18 个大功能；规划范围不等于开发授权）
@@ -41,7 +41,7 @@
 | 代码差异与人工审阅 | 原目录和隔离共用分文件差异、行号、文件清单与补丁下载；仅隔离会话最新轮可保留/丢弃，历史证据仍可读；保留不自动提交或合并 | M02、X05、第 5.5 节；[差异组件](../frontend/src/components/FileChangesPanel.tsx)、[审阅组件](../frontend/src/components/ProjectReviewPanel.tsx) |
 | 多轮任务交互 | 持续消息区、底部输入、Markdown/代码复制、折叠执行过程；继承历史与当前代码，每轮有独立预算/结果/测试/差异；请求编号防重复执行 | M01—M06；[会话服务](../src/agent_harness/web/conversations.py)、[会话页面回归](../frontend/src/pages/RunDetailPage.test.tsx) |
 | 主动规划与用户决定 | Agent 可主动进入规划、提问、提交版本化方案和更新步骤；网页回答、批准、修改或拒绝，宿主限制规划写入/命令并绑定版本和目录身份；等待跨轮持久化，最终验收单列 | PM01—PM09、第16节；[规划协议](PLANNING.md)、[API回归](../tests/web/test_planning_api.py) |
-| 只读子 Agent | 探索/审阅串行委派、独立角色与显式技能、父权限交集、共享预算与取消；报告返回后重新决定后续动作，保留父收尾额度及末轮总结；有界结构报告核验实际引用，部分结果保留限制和证据；页面及历史同步展示 | C07；[委派协议与验收](SUBAGENTS.md)、[核心回归](../tests/subagents/test_subagents.py)、[HTTP回归](../tests/web/test_subagents_api.py) |
+| 只读子 Agent | 探索/审阅同步或双槽异步委派、查询等待和单项取消、独立角色与显式技能、父权限交集、共享预算与取消；报告返回后重新决定后续动作，保留父收尾额度及末轮总结；有界结构报告核验实际引用，部分结果保留限制和证据；页面及历史同步展示 | C07；[委派协议与验收](SUBAGENTS.md)、[核心回归](../tests/subagents/test_subagents.py)、[HTTP回归](../tests/web/test_subagents_api.py) |
 | 中断后接续 | 原会话发送“继续”产生新运行；核对持久事件与当前代码，标记未知工具结果；刷新/重启只读，不重放工具，不提供任意步骤精确恢复 | M03、M05、AR08；[中断接续回归](../tests/web/test_interrupted_continue.py)、[多轮协议](MULTITURN_TASKS.md) |
 | 上下文管理 | 固定根 AGENTS.md；完整消息及工具定义的字节预算、可选 token 估算；输出外置、旧成功结果遮蔽、结构化摘要、跨轮复用与只读 read_context；摘要占预算 | M06；[压缩实现](../src/agent_harness/context/compression.py)、[上下文协议](CONTEXT_MANAGEMENT.md) |
 | 手动技能 | 宿主登记 SKILL.md，页面手动选择，续轮继承/更换/清空，逐轮冻结正文与指纹；计入输入预算，不增加工具权限 | 第 9 节；[技能实现](../src/agent_harness/context/skills.py)、[技能联动回归](../tests/web/test_skills_api.py) |
@@ -85,7 +85,7 @@ G01 的当前实现复验已完成；G02—G04 仍共同构成待独立安排的
 | Agent Tasks | 首版已实现：持久工作项、父子/依赖、版本更新、宿主认领、完成证据和跨轮接续；规划进度由任务投影，验收见[任务协议](TASKS.md) | C04 |
 | 运行中人机协作 | 部分实现：已有提问等待、方案批准/修改/拒绝、取消等待和跨轮接续；任意动作审批、运行中纠偏及暂停仍待建设 | C05 |
 | 后台执行与持久调度 | 部分实现：已有持久单机队列、幂等接纳、停止、重启待核对和后台中心；后台命令、并发及自动故障恢复保留后续 | C06 |
-| Subagents | 只读串行及委派交接已实现：独立角色/技能、批次屏障、共享预算下的收尾预留、核验引用的结构报告和partial展示；并行、resume和写入委派保留后续，见[子 Agent 协议](SUBAGENTS.md) | C07 |
+| Subagents | 受控并行只读委派已实现：独立角色/技能、批次屏障、共享预算下的收尾预留、核验引用的结构报告和partial展示；resume和写入委派保留后续，见[子 Agent 协议](SUBAGENTS.md) | C07 |
 | Agent Teams | 未实现：需要团队成员、共享任务认领、成员通信、代码归属与集成验收 | C08 |
 | Memory | 项目级首版已实现：持久知识、候选确认、检索、来源修订、纠错删除及固定运行快照；已接入类型专属策略；用户全局记忆保留后续 | C09 |
 | Skills、MCP 与工具扩展 | 部分实现：已有手动技能正文；缺按需资源、MCP 连接与授权、扩展管理及 Hooks | C10 |

@@ -10,6 +10,7 @@ import sys
 import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
+from agent_harness.runtime.runner import REQUEST_CONTEXT
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebVerifier, WebWorkspace
@@ -26,7 +27,7 @@ class SubagentFixtureModel:
         """
         await asyncio.sleep(0.4)
         observations = [json.loads(item["content"]) for item in messages if item["role"] == "tool"]
-        prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        prompt = REQUEST_CONTEXT.get().manifest.task.prompt  # 从真实任务取场景，避免误将注入的项目约定当用户要求。
         calls, content = [], None
         if "你是只读子Agent" in messages[0]["content"]:
             if "取消" in prompt:
@@ -42,13 +43,25 @@ class SubagentFixtureModel:
                                       "limitations": ["本次只进行了初步读取。"] if partial else [],
                                       "pending": ["尚未核对调用方。"] if partial else [], "complete": not partial}, ensure_ascii=False)
         elif not observations:
-            calls = [ToolCall("research", "delegate_readonly", json.dumps({"title": "研究金额接口", "objective": "读取service.py，核对金额单位和返回值。" + prompt, "role": "explore", "timeout_seconds": 180.0 if "取消" in prompt else 60.0}, ensure_ascii=False))]
+            calls = [ToolCall("research-" + str(index), "delegate_readonly", json.dumps({"title": "研究金额接口" + (str(index + 1) if "并行" in prompt else ""), "objective": "读取service.py，核对金额单位和返回值。" + prompt, "role": "explore", "background": "并行" in prompt, "timeout_seconds": 180.0 if "取消" in prompt else 60.0}, ensure_ascii=False)) for index in range(2 if "并行" in prompt else 1)]
         elif not observations[-1].get("ok"):
             content = "子研究未完成，本轮没有生成新文件，请核对失败原因。"
         elif "subagent" in (observations[-1].get("data") or {}):
-            report = observations[-1]["data"]["subagent"]["report"]
-            amount = int(re.search(r"金额(\d+)分", report["summary"]).group(1))
-            calls = [ToolCall("deliver", "write_file", json.dumps({"path": "result.json", "content": json.dumps({"amount_minor": amount}), "overwrite": True}))]
+            if observations[-1]["data"].get("accepted"):
+                calls = [ToolCall("wait", "wait_subagents", '{"timeout_seconds":60}')]
+                report = None
+            else:
+                report = observations[-1]["data"]["subagent"]["report"]
+            amount = int(re.search(r"金额(\d+)分", report["summary"]).group(1)) if report else None
+            calls = [ToolCall("deliver", "write_file", json.dumps({"path": "result.json", "content": json.dumps({"amount_minor": amount}), "overwrite": True}))] if report else calls
+        elif "items" in (observations[-1].get("data") or {}):
+            items = observations[-1]["data"]["items"]
+            if any(item["status"] == "running" for item in items):
+                calls = [ToolCall("wait-again", "wait_subagents", '{"timeout_seconds":60}')]
+            elif any(item["report"]["partial"] for item in items):
+                content = "子研究部分完成，请核对取消状态和未完成事项。"
+            else:
+                calls = [ToolCall("deliver", "write_file", json.dumps({"path": "result.json", "content": json.dumps({"amount_minor": 4200}), "overwrite": True}))]
         else:
             content = "已使用子 Agent 的读取报告生成result.json，独立检查结果请查看本轮详情。"
         message = {"role": "assistant", "content": content}

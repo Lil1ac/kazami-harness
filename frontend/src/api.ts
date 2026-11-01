@@ -110,6 +110,17 @@ export function getSubagent(
   );
 }
 
+/** 停止parentId直属childId并等待封存；重复调用返回原终态，不停止父或兄弟研究。 */
+export function cancelSubagent(
+  parentId: string,
+  childId: string,
+): Promise<{ subagent: import('./types').SubagentRecord }> {
+  return request(
+    `/api/runs/${encodeURIComponent(parentId)}/subagents/${encodeURIComponent(childId)}/cancel`,
+    { method: 'POST' },
+  );
+}
+
 /** 返回后台清单与暂停状态，供后台中心刷新。 */
 export function getJobs(): Promise<{ items: JobView[]; paused: boolean }> {
   return request('/api/jobs');

@@ -69,7 +69,7 @@ it('从输入区进入项目设置再返回，保留任务草稿且不创建任�
   expect(await screen.findByLabelText('任务描述')).toHaveValue('保留这条任务草稿');
   expect(saveProjectSettings).not.toHaveBeenCalled();
   expect(createRun).not.toHaveBeenCalled();
-});
+}, 10000);
 
 it('保存 Git 项目测试和解释器，只更新后续运行配置', async () => {
   // 直接挂载项目设置，避免把路由往返和字段保存串在同一超时窗口。

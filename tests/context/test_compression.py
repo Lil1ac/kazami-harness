@@ -1,5 +1,7 @@
 """验证分层压缩的真实工具链、原始证据、预算和失败边界。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -83,15 +85,15 @@ class CompressionServer:
             self.summary_started.set()
             if self.block_summary:
                 await asyncio.Event().wait()
-            return httpx.Response(200, json=_response(self.summary))
+            return model_stream_response(200, json=_response(self.summary))
         self.execution.append(deepcopy(payload))
         index = len(self.execution)
         if index <= self.observations:
-            return httpx.Response(200, json=_response(
+            return model_stream_response(200, json=_response(
                 "已分析当前文件，保留兼容性。" + ("历史分析细节abcd；" * 95),
                 _call("read-" + str(index), "read_file", {"path": "small.txt"}),
             ))
-        return httpx.Response(200, json=_response("完成 USER_CONSTRAINT，保留 RULE_COMPRESSION。"))
+        return model_stream_response(200, json=_response("完成 USER_CONSTRAINT，保留 RULE_COMPRESSION。"))
 
 
 def test_archive_utf8_pagination_integrity_and_foreign_scope(tmp_path: Path) -> None:
@@ -165,15 +167,15 @@ def test_offload_readback_uses_real_tool_and_keeps_raw_history(tmp_path: Path) -
         body = json.loads(request.content)
         requests.append(body)
         if len(requests) == 1:
-            return httpx.Response(200, json=_response("", _call("large", "read_file", {"path": "large.txt", "max_bytes": 12000})))
+            return model_stream_response(200, json=_response("", _call("large", "read_file", {"path": "large.txt", "max_bytes": 12000})))
         tool_result = json.loads(body["messages"][-1]["content"])
         if len(requests) == 2:
             assert "MIDDLE_EVIDENCE" not in tool_result["data"]["preview"]
             reference = tool_result["data"]["context_reference"]
-            return httpx.Response(200, json=_response("", _call("recover", "read_context", {"reference": reference, "max_bytes": 16384})))
+            return model_stream_response(200, json=_response("", _call("recover", "read_context", {"reference": reference, "max_bytes": 16384})))
         recovered = json.loads(tool_result["data"]["content"])
         assert recovered["data"]["content"] == payload
-        return httpx.Response(200, json=_response("从原始证据读到 MIDDLE_EVIDENCE。"))
+        return model_stream_response(200, json=_response("从原始证据读到 MIDDLE_EVIDENCE。"))
 
     outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline-key", transport=httpx.MockTransport(handle)))
     assert outcome.result.execution_status == "completed", outcome.result.model_dump()
@@ -264,10 +266,10 @@ def test_masking_preserves_failed_result_and_recent_batch(tmp_path: Path) -> Non
         captured.append(body)
         index = len(captured)
         if index <= 6:
-            return httpx.Response(200, json=_response(
+            return model_stream_response(200, json=_response(
                 "读取证据", _call("mask-" + str(index), "read_file", {"path": "missing.txt" if index == 1 else "small.txt"}),
             ))
-        return httpx.Response(200, json=_response("本轮检查结束"))
+        return model_stream_response(200, json=_response("本轮检查结束"))
 
     outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline-key", transport=httpx.MockTransport(handle)))
     assert outcome.result.execution_status == "completed", outcome.result.model_dump()
@@ -293,16 +295,16 @@ def test_command_captured_stdout_is_recoverable_beyond_preview(tmp_path: Path) -
         body = json.loads(request.content)
         captured.append(body)
         if len(captured) == 1:
-            return httpx.Response(200, json=_response("", _call("command", "run_command", {
+            return model_stream_response(200, json=_response("", _call("command", "run_command", {
                 "argv": ["python", "-c", "print('HEAD'+'x'*4000+'CAPTURE_MIDDLE'+'y'*4000+'TAIL')"],
             })))
         result = json.loads(body["messages"][-1]["content"])
         if len(captured) == 2:
             assert result["data"]["source_truncated"]
             reference = result["data"]["captured_streams"]["stdout"]
-            return httpx.Response(200, json=_response("", _call("capture", "read_context", {"reference": reference, "max_bytes": 16384})))
+            return model_stream_response(200, json=_response("", _call("capture", "read_context", {"reference": reference, "max_bytes": 16384})))
         assert result["data"]["eof"] and "CAPTURE_MIDDLE" in result["data"]["content"]
-        return httpx.Response(200, json=_response("已读取完整捕获流"))
+        return model_stream_response(200, json=_response("已读取完整捕获流"))
 
     outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline-key", transport=httpx.MockTransport(handle)))
     assert outcome.result.execution_status == "completed", outcome.result.model_dump()

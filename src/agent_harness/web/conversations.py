@@ -124,12 +124,16 @@ class ConversationService:
                 self._ready(latest_history)
             except (SessionError, SnapshotError, ProjectError) as error:
                 blocked = SessionError(error.code, error.message)
-        return ConversationView(source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, busy_run_id=busy, continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
+        management = self.manager.management.view(str(session_id))
+        if management.state != "active":
+            blocked = SessionError("conversation_inactive", "请先恢复会话，再继续发送或处理计划。")
+        return ConversationView(title=management.title, management=management, source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, busy_run_id=busy, continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
 
     async def submit(self, parent_id: UUID, request: FollowupRequest):
         """幂等接纳追加 request；HTTP断开不取消准备，同进程重复请求共享原任务等待。"""
         parent = self.manager._read_history(parent_id)
         session_id = parent.manifest.session_id or parent_id
+        self.manager.management.require_active(str(session_id))
         digest = payload_digest({'parent_run_id': str(parent_id), **request.model_dump(mode='json', exclude={'request_id'})})
         if self.submission_key == (session_id, request.request_id) and self.manager._submission is not None and not self.manager._submission.done():
             if self.submission_digest != digest:

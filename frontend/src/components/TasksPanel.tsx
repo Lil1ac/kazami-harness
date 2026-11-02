@@ -1,11 +1,18 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Input, Modal, Select } from 'antd';
+import { Alert, Button, Drawer, Input, Modal, Select } from 'antd';
+import {
+  PlusOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  LoadingOutlined,
+  MinusCircleOutlined,
+  ArrowRightOutlined,
+} from '@ant-design/icons';
 import { Link } from 'react-router';
 import { errorMessage, getTasks, mutateTask } from '../api';
 import type { AgentTask } from '../types';
 import './TasksPanel.css';
-import { useWorkEvents } from '../hooks/useWorkEvents';
 
 const labels = {
   pending: '待处理',
@@ -19,17 +26,19 @@ export function TasksPanel({
   runId,
   active,
   historical = false,
+  readOnly = false,
 }: {
   runId: string; // 查询及操作的可信运行编号。
   active: boolean; // 当前会话是否持有执行槽。
   historical?: boolean; // true 隐藏修改入口，只展示当轮记录。
+  readOnly?: boolean; // 归档会话保留当前清单读取，但不提供修改入口。
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null); // 当前阅读的任务，详情关闭不改变任务状态。
   const cache = useQueryClient();
-  useWorkEvents(!historical);
   const query = useQuery({
     queryKey: ['tasks', runId, historical],
     queryFn: /* 只读事实。 */ () => getTasks(runId, historical),
-    refetchInterval: historical ? false : 1500,
+    refetchInterval: !historical && active ? 1500 : false,
   });
   const [editing, setEditing] = useState<AgentTask | 'new' | null>(null); // 编辑对象，null 关闭表单。
   const [subject, setSubject] = useState(''); // 用户修改的标题。
@@ -110,123 +119,201 @@ export function TasksPanel({
     });
   }
   const tasks = query.data?.items || [];
+  const leafTasks = tasks.filter(/* 分组不重复计算工作进度。 */ (task) => !task.is_group);
+  const completed = leafTasks.filter(
+    /* 前置变化后的待复核项仍保留证据，但不计为完成。 */ (task) =>
+      task.status === 'completed' && !task.blocked_reason,
+  ).length;
+  const selected = tasks.find(/* 详情始终显示服务端最新版本。 */ (task) => task.id === selectedId);
   return (
-    <details
-      className="tasks-panel"
-      open={tasks.some(
-        /* 当前任务或阻塞优先可见。 */ (task) =>
-          task.status === 'in_progress' || task.blocked_reason,
+    <section className="tasks-panel" aria-label="任务清单">
+      <header className="work-panel-heading">
+        <div>
+          <h3>
+            任务 · {completed}/{leafTasks.length}
+          </h3>
+          <span className="muted">
+            {active ? '执行进度实时更新' : historical ? '本轮固定记录' : '会话工作项'}
+          </span>
+        </div>
+        {!historical && !readOnly && (
+          <Button
+            type="text"
+            icon={<PlusOutlined />}
+            aria-label="新增工作项"
+            disabled={active}
+            onClick={/* 创建编辑副本，不直接启动运行。 */ () => edit('new')}
+          />
+        )}
+      </header>
+      {leafTasks.length > 0 && (
+        <progress
+          className="task-progress"
+          value={completed}
+          max={leafTasks.length}
+          aria-label="任务完成进度"
+        />
       )}
-    >
-      <summary>
-        任务 ·{' '}
-        {
-          tasks.filter(
-            /* 仅计入当前依赖仍有效的完成项，待复核证据保留但不计完成。 */ (task) =>
-              !task.is_group && task.status === 'completed' && !task.blocked_reason,
-          ).length
-        }
-        /{tasks.filter(/* 父任务不重复计数。 */ (task) => !task.is_group).length}
-      </summary>
       {(query.error || mutation.error) && (
         <Alert type="error" title={errorMessage(query.error || mutation.error)} />
       )}
-      {!tasks.length && <p>尚无工作项</p>}
-      <ol>
+      {!tasks.length && (
+        <div className="panel-empty">
+          {query.isPending ? '正在读取任务…' : '尚无工作项'}
+          {!historical && !readOnly && (
+            <Button
+              type="link"
+              disabled={active}
+              onClick={/* 空状态与标题入口复用同一编辑流程。 */ () => edit('new')}
+            >
+              创建任务
+            </Button>
+          )}
+        </div>
+      )}
+      <ol className="task-list">
         {tasks.map(
-          /* 任务稳定编号跨 Run 保持。 */ (task) => (
+          /* 稳定任务编号与父子关系决定行身份，点击只打开详情。 */ (task) => (
             <li
               key={task.id}
-              className="task-row"
-              style={{ marginLeft: task.parent_task_id ? 16 : 0 }}
+              className={`task-row task-${task.blocked_reason ? 'blocked' : task.status} ${task.parent_task_id ? 'task-child' : ''}`}
             >
-              <div>
-                <strong>
-                  #{task.display_id} {task.subject}
-                </strong>
-                <span>
+              <button
+                className="task-open"
+                type="button"
+                onClick={/* 详情使用最新缓存，不发起执行。 */ () => setSelectedId(task.id)}
+              >
+                <span className="task-status-icon">
+                  {task.status === 'completed' && !task.blocked_reason ? (
+                    <CheckCircleOutlined />
+                  ) : task.status === 'cancelled' ? (
+                    <MinusCircleOutlined />
+                  ) : task.status === 'in_progress' ? (
+                    <LoadingOutlined spin />
+                  ) : (
+                    <ClockCircleOutlined />
+                  )}
+                </span>
+                <span className="task-row-copy">
+                  <strong>
+                    #{task.display_id} {task.subject}
+                  </strong>
+                  {task.blocked_reason ? (
+                    <small>{task.blocked_reason}</small>
+                  ) : task.depends_on.length > 0 ? (
+                    <small>{task.depends_on.length} 项前置任务</small>
+                  ) : null}
+                </span>
+                <span className="task-state-label">
                   {task.blocked_reason && task.status !== 'cancelled'
                     ? '阻塞'
                     : labels[task.status]}
                 </span>
-              </div>
-              {task.blocked_reason && <p role="status">{task.blocked_reason}</p>}
-              <details>
-                <summary>条件与证据</summary>
-                <p>{task.description}</p>
-                <ul>
-                  {task.acceptance.map(
-                    /* 条件为只读文字。 */ (value, index) => (
-                      <li key={index}>{value}</li>
-                    ),
-                  )}
-                </ul>
-                {task.completion_summary && <p>{task.completion_summary}</p>}
-                {task.run_ids.map(
-                  /* 从任务定位真实运行证据。 */ (id) => (
-                    <Link key={id} to={'/runs/' + id}>
-                      查看运行 {id.slice(0, 8)}{' '}
+                <ArrowRightOutlined className="task-row-arrow" />
+              </button>
+            </li>
+          ),
+        )}
+      </ol>
+      <Drawer
+        title={selected ? `工作项 #${selected.display_id}` : '任务详情'}
+        size={440}
+        styles={{ wrapper: { maxWidth: '100vw' } }}
+        open={Boolean(selected)}
+        onClose={/* 关闭阅读层，不修改任务。 */ () => setSelectedId(null)}
+        className="task-detail-drawer"
+      >
+        {selected && (
+          <div className="task-detail">
+            <div className="task-detail-status">
+              {selected.blocked_reason ? '阻塞' : labels[selected.status]}
+            </div>
+            <h2>{selected.subject}</h2>
+            {selected.blocked_reason && <Alert type="warning" title={selected.blocked_reason} />}
+            <section>
+              <h3>工作范围</h3>
+              <p>{selected.description || '未填写工作范围'}</p>
+            </section>
+            <section>
+              <h3>完成条件</h3>
+              <ul>
+                {selected.acceptance.map(
+                  /* 保留后端原始条件。 */ (value, index) => (
+                    <li key={index}>{value}</li>
+                  ),
+                )}
+              </ul>
+            </section>
+            {selected.depends_on.length > 0 && (
+              <section>
+                <h3>前置任务</h3>
+                {selected.depends_on.map(
+                  /* 从同清单解析标题，缺失时保留编号。 */ (id) => (
+                    <p key={id}>{tasks.find((task) => task.id === id)?.subject || id}</p>
+                  ),
+                )}
+              </section>
+            )}
+            {(selected.completion_summary ||
+              selected.run_ids.length > 0 ||
+              selected.evidence_refs.length > 0) && (
+              <section>
+                <h3>完成与证据</h3>
+                {selected.completion_summary && <p>{selected.completion_summary}</p>}
+                {selected.run_ids.map(
+                  /* 跳转对应真实运行。 */ (id) => (
+                    <Link className="task-evidence-link" key={id} to={'/runs/' + id}>
+                      查看运行 {id.slice(0, 8)} <ArrowRightOutlined />
                     </Link>
                   ),
                 )}
-                {task.evidence_refs.map(
-                  /* 保留工具或人工证据来源，避免把自评当验收。 */ (reference, index) => (
-                    <p key={index}>
+                {selected.evidence_refs.map(
+                  /* 不把人工确认等同于自动测试通过。 */ (reference, index) => (
+                    <p className="muted" key={index}>
                       {reference.kind === 'manual_confirmation'
                         ? '人工确认'
                         : '工具结果：' + reference.tool_call_id}
                     </p>
                   ),
                 )}
-              </details>
-              {!historical && (
-                <div className="task-actions">
-                  {!active && !task.source && task.status === 'pending' && (
-                    <Button size="small" onClick={/* 只编辑副本。 */ () => edit(task)}>
-                      编辑
-                    </Button>
-                  )}
-                  {!active && !task.is_group && task.status === 'pending' && (
+              </section>
+            )}
+            {!historical && !readOnly && (
+              <div className="task-actions">
+                {!active && !selected.source && selected.status === 'pending' && (
+                  <Button onClick={/* 创建独立编辑副本。 */ () => edit(selected)}>编辑</Button>
+                )}
+                {!active && !selected.is_group && selected.status === 'pending' && (
+                  <Button
+                    onClick={/* 完成必须经过说明确认。 */ () => transition(selected, 'completed')}
+                  >
+                    人工完成
+                  </Button>
+                )}
+                {!active &&
+                  (selected.status === 'completed' ||
+                    selected.blocked_reason ||
+                    selected.status === 'cancelled') && (
                     <Button
-                      size="small"
-                      onClick={/* 打开人工完成确认。 */ () => transition(task, 'completed')}
+                      onClick={/* 重新核对时保留原有证据。 */ () => transition(selected, 'pending')}
                     >
-                      人工完成
+                      重新打开
                     </Button>
                   )}
-                  {!active &&
-                    (task.status === 'completed' ||
-                      task.blocked_reason ||
-                      task.status === 'cancelled') && (
-                      <Button
-                        size="small"
-                        onClick={/* 保留证据重新核对。 */ () => transition(task, 'pending')}
-                      >
-                        重新打开
-                      </Button>
-                    )}
-                  {task.status !== 'cancelled' && task.status !== 'completed' && (
-                    <Button
-                      size="small"
-                      disabled={mutation.isPending}
-                      onClick={
-                        /* 取消执行项会由宿主停止对应 Run。 */ () => transition(task, 'cancelled')
-                      }
-                    >
-                      取消任务
-                    </Button>
-                  )}
-                </div>
-              )}
-            </li>
-          ),
+                {!['cancelled', 'completed'].includes(selected.status) && (
+                  <Button
+                    danger
+                    disabled={mutation.isPending}
+                    onClick={/* 后端负责停止关联执行。 */ () => transition(selected, 'cancelled')}
+                  >
+                    取消任务
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
         )}
-      </ol>
-      {!historical && (
-        <Button disabled={active} onClick={/* 明确新增，不从文字自动创建。 */ () => edit('new')}>
-          新增工作项
-        </Button>
-      )}
+      </Drawer>
       <Modal
         title={editing === 'new' ? '新增工作项' : '编辑工作项'}
         open={editing !== null}
@@ -278,6 +365,6 @@ export function TasksPanel({
         </label>
         {mutation.error && <Alert type="error" title={errorMessage(mutation.error)} />}
       </Modal>
-    </details>
+    </section>
   );
 }

@@ -1,9 +1,19 @@
+import { makeConversationManagement } from '../test/fixtures';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { cancelRun, createFollowup, getConversation, getOptions, getRun, getTasks } from '../api';
+import {
+  cancelRun,
+  createFollowup,
+  getConversation,
+  getConversationManagement,
+  getOptions,
+  getRun,
+  getTasks,
+  manageConversation,
+} from '../api';
 import { ConfigDraftProvider } from '../config';
 import { makeRun, options } from '../test/fixtures';
 import { makeJob } from '../test/fixtures';
@@ -17,6 +27,8 @@ vi.mock(
     getTasks: vi.fn(),
     getOptions: vi.fn(),
     getConversation: vi.fn(),
+    getConversationManagement: vi.fn(),
+    manageConversation: vi.fn(),
     createFollowup: vi.fn(),
     cancelRun: vi.fn(),
     getEvents: vi.fn(),
@@ -101,6 +113,8 @@ beforeEach(
     const root = sessionRun('run-a');
     runs.set(root.run_id, root);
     record = {
+      title: '统计日志',
+      management: makeConversationManagement(),
       session_id: 'run-a',
       latest_run_id: 'run-a',
       can_continue: true,
@@ -282,10 +296,9 @@ it('查看旧轮时停止按钮仍明确取消最新活动运行', async () => {
   });
   show('/runs/run-a');
   await user.click(await screen.findByRole('button', { name: '停止当前执行' }));
-  expect(cancelRun).not.toHaveBeenCalled();
-  await user.click(await screen.findByRole('button', { name: '停止执行' }));
   await waitFor(
-    /* 明确确认后才发送最新轮取消请求。 */ () => expect(cancelRun).toHaveBeenCalledWith('run-b'),
+    /* 输入区停止按钮始终指向最新轮，已有输出和草稿不清空。 */ () =>
+      expect(cancelRun).toHaveBeenCalledWith('run-b'),
   );
 });
 
@@ -340,6 +353,42 @@ it('手机直接打开诊断链接时自动显示对应详情抽屉', async () =
   } finally {
     vi.mocked(window.matchMedia).mockImplementation(original);
   }
+});
+
+it('回收站旧轮链接恢复后清除410并重新读取，保持原轮次且不自动执行', async () => {
+  const user = userEvent.setup();
+  const older = sessionRun('run-b', 2, '原第二轮');
+  runs.set('run-b', older);
+  record = { ...record, latest_run_id: 'run-b', turns: [...record.turns, turn(older)] };
+  let management = makeConversationManagement({
+    state: 'trashed',
+    title: '恢复用例',
+    can_purge: true,
+  });
+  vi.mocked(getConversationManagement).mockImplementation(
+    /* 以实际保存后的管理状态回应刷新。 */ async () => management,
+  );
+  vi.mocked(getRun).mockRejectedValueOnce(
+    Object.assign(new Error('对话已删除'), {
+      code: 'conversation_deleted',
+      details: { session_id: 'run-a' },
+    }),
+  );
+  vi.mocked(manageConversation).mockImplementation(
+    /* 明确恢复只改变管理状态，不创建运行。 */ async () => {
+      management = { ...management, state: 'active', revision: 1 };
+      return management;
+    },
+  );
+  const client = show('/runs/run-b');
+  expect(await screen.findByText('对话已在回收站')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '管理对话：恢复用例' }));
+  await user.click(screen.getByRole('menuitem', { name: '恢复对话' }));
+  expect(await screen.findByLabelText('输入消息')).toBeInTheDocument();
+  expect(client.getQueryState(['run', 'run-b'])?.error).toBeNull();
+  expect(client.getQueryData(['run', 'run-b'])).toMatchObject({ run_id: 'run-b' });
+  expect(screen.getByText('原第二轮')).toBeInTheDocument();
+  expect(createFollowup).not.toHaveBeenCalled();
 });
 
 it('中断后直接发送继续，沿用输入节点并保留旧记录，不出现独立恢复入口', async () => {

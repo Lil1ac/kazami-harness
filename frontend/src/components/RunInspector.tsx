@@ -4,6 +4,7 @@ import { Alert, Skeleton, Tabs } from 'antd';
 import { getRun, errorMessage } from '../api';
 import { duration, phaseLabel } from '../format';
 import { useRunEvents } from '../hooks/useRunEvents';
+import { useRunPlanning } from '../hooks/useRunPlanning';
 import { StateBreakdown } from './RunStatus';
 import { VerificationPanel } from './VerificationPanel';
 import { ProjectReviewPanel } from './ProjectReviewPanel';
@@ -27,10 +28,19 @@ interface InspectorPanelsProps {
   tab: string; // result/files/diagnostics 三种查看分类。
   onTab: (value: string) => void; // 只更新查看位置，不改变执行目标。
   historical?: boolean; // true 表示历史只读，即使缓存仍保留过去的最新轮状态。
+  readOnly?: boolean; // 归档会话可查看所有内容，不提供任务修改操作。
 }
 
 /** 分离测试结果、交付文件和内部诊断；参数沿用真实运行事实，返回只读面板及明确的审阅入口。 */
-function InspectorPanels({ run, events, tab, onTab, historical = false }: InspectorPanelsProps) {
+function InspectorPanels({
+  run,
+  events,
+  tab,
+  onTab,
+  historical = false,
+  readOnly = false,
+}: InspectorPanelsProps) {
+  const { planning } = useRunPlanning(run, historical);
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
   const container = useRef<HTMLDivElement>(null); // 仅定位详情滚动区，不触碰会话消息与草稿。
   useLayoutEffect(
@@ -43,19 +53,50 @@ function InspectorPanels({ run, events, tab, onTab, historical = false }: Inspec
   return (
     <div className="inspector-panels" ref={container}>
       <Tabs
-        activeKey={['result', 'files', 'diagnostics'].includes(tab) ? tab : 'result'}
+        activeKey={
+          ['tasks', 'plan', 'agents', 'result', 'files', 'diagnostics'].includes(tab)
+            ? tab
+            : 'result'
+        }
         onChange={onTab}
         destroyOnHidden
         items={[
+          {
+            key: 'tasks',
+            label: '任务',
+            children: (
+              <TasksPanel
+                runId={run.run_id}
+                active={run.active && !historical}
+                historical={historical}
+                readOnly={readOnly}
+              />
+            ),
+          },
+          {
+            key: 'plan',
+            label: '计划',
+            children: <PlanningPanel runId={run.run_id} state={planning!} />,
+          },
+          {
+            key: 'agents',
+            label: 'Agent',
+            children: run.result.subagents?.length ? (
+              <SubagentsPanel
+                parentId={run.run_id}
+                records={run.result.subagents}
+                active={run.active && !historical}
+              />
+            ) : (
+              <p className="panel-empty">本轮尚未委派子 Agent。</p>
+            ),
+          },
           {
             key: 'result',
             label: '结果',
             children: (
               <div className="inspector-overview">
                 <StateBreakdown run={run} />
-                {Boolean(run.result.subagents?.length) && <SubagentsPanel parentId={run.run_id} records={run.result.subagents!} active={run.active && !historical} />}
-                {historical && <TasksPanel runId={run.run_id} active={false} historical />}
-                <PlanningPanel runId={run.run_id} state={run.result.planning} />
                 <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>
                 {run.interrupted && (
                   <Alert type="warning" title="该运行缺少可信结束记录，请核对已有输出。" />
@@ -251,15 +292,17 @@ export function RunInspector({
   liveEvents,
   tab,
   onTab,
+  readOnly = false,
 }: {
   selectedId: string;
   latest: RunView;
   liveEvents: RunEventView;
   tab: string;
   onTab: (value: string) => void;
+  readOnly?: boolean; // 归档会话仅提供查看，不允许任务修改。
 }) {
   return selectedId === latest.run_id ? (
-    <InspectorPanels run={latest} events={liveEvents} tab={tab} onTab={onTab} />
+    <InspectorPanels run={latest} events={liveEvents} tab={tab} onTab={onTab} readOnly={readOnly} />
   ) : (
     <HistoricalInspector key={selectedId} runId={selectedId} tab={tab} onTab={onTab} />
   );

@@ -2,8 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ConfigProvider } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
+import { ThemeProvider } from './theme';
 import { App } from './App';
 import { ConfigDraftProvider } from './config';
 import './styles.css';
@@ -18,31 +17,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
-        token: {
-          colorPrimary: '#b95632',
-          colorInfo: '#b95632',
-          colorSuccess: '#3e7759',
-          colorWarning: '#a67529',
-          colorError: '#b7473f',
-          colorText: '#292821',
-          colorTextSecondary: '#77756b',
-          colorTextPlaceholder: '#8c897e',
-          colorBgContainer: '#fffefa',
-          colorBorder: '#dfdace',
-          borderRadius: 8,
-          fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif',
-          controlHeight: 36,
-        },
-        components: {
-          Button: { primaryShadow: 'none' },
-          Tabs: { horizontalItemGutter: 30 },
-          Tag: { defaultBg: '#eeece4' },
-        },
-      }}
-    >
+    <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <ConfigDraftProvider>
@@ -50,6 +25,6 @@ createRoot(document.getElementById('root')!).render(
           </ConfigDraftProvider>
         </BrowserRouter>
       </QueryClientProvider>
-    </ConfigProvider>
+    </ThemeProvider>
   </StrictMode>,
 );

@@ -1,5 +1,7 @@
 """验证四工具真实文件与子进程副作用，以及预算、取消和产物记录的集成边界。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 import json
 from pathlib import Path
@@ -43,7 +45,7 @@ def _transport(replies: list[dict], requests: list) -> httpx.MockTransport:
     def handler(request):
         """记录发送给供应商的消息体，再返回下一项固定响应。"""
         requests.append(json.loads(request.content))
-        return httpx.Response(200, json=replies[len(requests) - 1])
+        return model_stream_response(200, json=replies[len(requests) - 1])
     return httpx.MockTransport(handler)
 
 

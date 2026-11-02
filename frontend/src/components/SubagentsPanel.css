@@ -1,35 +1,145 @@
+/* 子 Agent 主列表只展示任务、角色与真实状态；报告在独立阅读面板。 */
 .subagents-panel {
-  margin-block: 18px;
   min-width: 0;
 }
-.subagents-panel h3 {
-  margin-bottom: 8px;
+.agent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
-.subagents-panel > details {
-  border-top: 1px solid var(--border-color, #e5e7eb);
-  padding-block: 12px;
+.agent-row {
+  border-bottom: 1px solid var(--line);
 }
-.subagents-panel summary {
-  cursor: pointer;
+.agent-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 18px 4px;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.14s;
+}
+.agent-open:hover {
+  background: var(--raised);
+}
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 15px;
+}
+.agent-running .agent-avatar {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.agent-row-copy {
+  flex: 1;
+  min-width: 0;
+}
+.agent-row-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.subagents-panel > details > summary {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+.agent-row-copy small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--muted);
 }
-.subagents-panel > details > summary span {
-  color: #667085;
+.agent-row-copy > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 9px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.agent-status-icon {
   font-size: 12px;
+  padding-top: 4px;
+  color: var(--muted);
+}
+.agent-running .agent-status-icon {
+  color: var(--accent);
+}
+.agent-completed .agent-status-icon {
+  color: var(--success);
+}
+.agent-failed .agent-status-icon,
+.agent-interrupted .agent-status-icon {
+  color: var(--danger);
+}
+.agent-row-arrow {
+  padding-top: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0;
+}
+.agent-open:hover .agent-row-arrow,
+.agent-open:focus-visible .agent-row-arrow {
+  opacity: 1;
 }
 .subagent-details {
-  padding-top: 12px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.agent-objective {
+  font-size: 14px;
+  line-height: 1.85;
+  margin-bottom: 16px;
+}
+.agent-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 24px;
+}
+.agent-runtime,
 .subagent-details > details {
-  margin-block: 12px;
+  margin: 20px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.agent-runtime > summary,
+.subagent-details > details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-runtime p:first-of-type {
+  margin-top: 12px;
+}
+.subagent-report > article {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.subagent-report > article > strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.subagent-report .markdown-message {
+  font-size: 13px;
+}
+.subagent-report > div {
+  padding-top: 18px;
+  font-size: 12px;
 }
 .subagent-details pre {
   max-width: 100%;
@@ -40,13 +150,20 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-block: 10px;
+  margin: 12px 0;
 }
 .subagent-pagination span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.subagent-sources {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
   font-size: 12px;
-  color: #667085;
 }
 .subagent-sources ul {
-  margin-block: 6px 12px;
-  padding-left: 20px;
+  padding-left: 17px;
+  margin: 10px 0;
+  line-height: 1.9;
 }

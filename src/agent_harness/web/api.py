@@ -4,6 +4,7 @@ import asyncio
 import codecs
 from contextlib import asynccontextmanager
 import json
+import re
 from pathlib import Path
 from typing import AsyncIterator, Literal
 from uuid import UUID
@@ -24,6 +25,7 @@ from agent_harness.web.schemas import ConversationPage, CreateProjectRequest, Pr
 from agent_harness.web.service import WebRunManager, WebServiceError
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.jobs import JobRequest
+from agent_harness.web.conversation_management import ConversationError, ConversationChange, ConversationBatch, ConversationPurge
 from agent_harness.work.tasks import TaskError, TaskService, TaskCreate, TaskUpdate
 from agent_harness.work.planning import PlanningError
 from agent_harness.memory.service import MemoryError
@@ -77,6 +79,17 @@ def create_app(
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
     install_memory_routes(app, manager)
+
+    @app.exception_handler(ConversationError)
+    async def conversation_error(request: Request, error: ConversationError) -> JSONResponse:
+        """将request会话管理error返回为受控状态；只附恢复所需会话编号，不泄露消息。"""
+        # 410可被浏览器启发式缓存；生命周期可恢复，前置拦截也必须禁止缓存。
+        return JSONResponse(status_code=error.status, headers={"Cache-Control": "no-store"}, content={"error": {"code": error.code, "message": error.message, "details": {"session_id": error.session_id} if error.session_id else None}})
+
+    @app.exception_handler(StorageError)
+    async def storage_error(request: Request, error: StorageError) -> JSONResponse:
+        """将request持久存储故障转为503；保留原文件，不把系统异常正文传给页面。"""
+        return _error(503, "storage_unavailable", "记录暂时无法读取或保存，请检查本地数据目录。")
 
     @app.exception_handler(MemoryError)
     async def memory_error(request: Request, error: MemoryError) -> JSONResponse:
@@ -218,6 +231,15 @@ def create_app(
                 or (origin is not None and origin not in allowed_origins)
             ):
                 return _error(403, "cross_origin_forbidden", "任务操作必须来自本地控制台同源页面。")
+        run_match = re.fullmatch(r"/api/runs/([0-9a-fA-F-]{36})(?:/.*)?", request.url.path)
+        if run_match:
+            try:
+                identifier = str(UUID(run_match[1]))
+                manager.management.check_run(identifier, writing=request.method not in {"GET", "HEAD", "OPTIONS"})
+            except ConversationError as error:
+                return await conversation_error(request, error)
+            except ValueError:
+                return _error(422, "invalid_request", "运行编号必须是有效UUID。")
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
@@ -311,10 +333,34 @@ def create_app(
         limit: int = Query(default=20, ge=1, le=100),
         project_id: str | None = Query(default=None, min_length=1, max_length=64),
         status: Literal["created", "running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "waiting_input"] | None = None,
+        state: Literal["active", "archived", "trashed"] = "active",
+        q: str = Query(default="", max_length=200),
+        ungrouped: bool = False,
     ) -> ConversationPage:
         """按最新状态和当前项目身份聚合分页；只读磁盘事实，不打开目录或启动模型。"""
         # 与现有运行列表一样串行读取，共享的历史LRU不跨线程修改。
-        return manager.conversation_index.list(offset, limit, project_id, status)
+        return manager.conversation_index.list(offset, limit, project_id, status, state=state, query=q, ungrouped=ungrouped)
+
+    @app.post("/api/conversations/batch")
+    async def manage_conversations(body: ConversationBatch) -> dict:
+        """逐项管理body明确选择的会话；失败项保留原因，读取或整理不发起运行。"""
+        return await manager.management.batch(body)
+
+    @app.get("/api/conversations/{session_id}")
+    async def conversation_metadata(session_id: UUID) -> dict:
+        """返回session_id管理视图；回收站和清理墓碑仍可读取恢复状态，不返回消息。"""
+        return manager.management.view(str(session_id)).model_dump(mode="json")
+
+    @app.patch("/api/conversations/{session_id}")
+    async def manage_conversation(session_id: UUID, body: ConversationChange) -> dict:
+        """按body幂等更新session_id标题、归属或生命周期；执行来源固定不变。"""
+        return (await manager.management.change(str(session_id), body)).model_dump(mode="json")
+
+    @app.delete("/api/conversations/{session_id}")
+    async def purge_conversation(session_id: UUID, body: ConversationPurge) -> dict:
+        """明确确认后彻底清理session_id专属记录；项目源码及另存记忆保持，失败允许重试。"""
+        pending = asyncio.create_task(manager.management.purge(str(session_id), body))
+        return (await asyncio.shield(pending)).model_dump(mode="json")
 
     @app.get("/api/runs/{run_id}", response_model=RunView)
     async def run_detail(run_id: UUID) -> RunView:
@@ -411,6 +457,10 @@ def create_app(
             heartbeat = asyncio.get_running_loop().time()
             while True:
                 if await request.is_disconnected():
+                    return
+                try:
+                    manager.management.check_run(str(run_id))
+                except ConversationError:
                     return
                 page = manager.list_events(run_id, current, 100)
                 for event in page.items:

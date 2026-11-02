@@ -1,4 +1,4 @@
-import { isValidElement, useState } from 'react';
+import { isValidElement, memo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,7 +45,7 @@ function messageUrl(url: string): string {
 }
 
 /** 将模型正文渲染为安全 Markdown；text 是真实回答，不解释原始 HTML、不自动加载外部图片。 */
-export function MarkdownMessage({ text }: { text: string }) {
+export const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
   return (
     <div className="markdown-message">
       <Markdown
@@ -76,4 +76,4 @@ export function MarkdownMessage({ text }: { text: string }) {
       </Markdown>
     </div>
   );
-}
+});

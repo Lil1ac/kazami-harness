@@ -12,6 +12,9 @@ export interface ActivityStep {
 const toolLabels: Record<string, string> = {
   delegate_readonly: '委派只读子 Agent',
   read_subagent: '回读子 Agent 报告',
+  list_subagents: '查看子 Agent',
+  wait_subagents: '等待子 Agent',
+  cancel_subagent: '停止子 Agent',
   memory_search: '搜索项目记忆',
   memory_get: '回读项目记忆',
   memory_propose: '提出记忆候选',
@@ -68,9 +71,29 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
           ? args.path
           : '';
       const name = String(payload.name || '工具调用');
+      const command =
+        name === 'run_command' &&
+        args &&
+        typeof args === 'object' &&
+        'argv' in args &&
+        Array.isArray(args.argv)
+          ? args.argv
+              .filter(/* 只展示文本参数，不解释为 shell。 */ (value) => typeof value === 'string')
+              .join(' ')
+              .slice(0, 140)
+          : '';
+      const query =
+        name === 'search_files' &&
+        args &&
+        typeof args === 'object' &&
+        'query' in args &&
+        typeof args.query === 'string'
+          ? args.query.slice(0, 80)
+          : '';
+      const detail = path || command || query; // 文件、命令或搜索词帮助用户判断实际动作。
       const step: ActivityStep = {
         id,
-        label: `${toolLabels[name] || name}${path ? ` · ${path}` : ''}`,
+        label: `${toolLabels[name] || name}${detail ? ` · ${detail}` : ''}`,
         state: 'running',
         arguments: args,
         result: null,

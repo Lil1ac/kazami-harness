@@ -8,6 +8,7 @@ import { useConfigDraft, effectiveConfig } from '../config';
 import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
+import { ModeSelect } from './ModeSelect';
 
 /** 新任务的可编辑内容；项目来源由用户明确选择，不从示例默认推断。 */
 interface TaskValues {
@@ -266,16 +267,7 @@ export function TaskForm({
           </Form.Item>
           <div className="start-input-toolbar">
             <div className="start-send-area">
-              <Select
-                aria-label="工作模式"
-                value={mode}
-                virtual={false}
-                onChange={setMode}
-                options={[
-                  { value: 'auto', label: '自动' },
-                  { value: 'plan', label: '先规划' },
-                ]}
-              />
+              <ModeSelect value={mode} onChange={setMode} />
               <span className="start-model" title={config.requested_model}>
                 {config.requested_model}
               </span>
@@ -344,8 +336,30 @@ export function TaskForm({
               <span>{config.requested_model}</span>
               <Link to="/settings">调整模型与预算</Link>
             </div>
-            <Checkbox checked={config.memory.use} onChange={/* 只覆盖公开选择，内部预算由宿主维护。 */ (event) => setDraft({ ...draft, memory: { use: event.target.checked, capture: config.memory.capture } })}>使用项目记忆</Checkbox>
-            <Checkbox checked={config.memory.capture} onChange={/* 新增候选不自动生效。 */ (event) => setDraft({ ...draft, memory: { use: config.memory.use, capture: event.target.checked } })}>允许提出记忆候选</Checkbox>
+            <Checkbox
+              checked={config.memory.use}
+              onChange={
+                /* 只覆盖公开选择，内部预算由宿主维护。 */ (event) =>
+                  setDraft({
+                    ...draft,
+                    memory: { use: event.target.checked, capture: config.memory.capture },
+                  })
+              }
+            >
+              使用项目记忆
+            </Checkbox>
+            <Checkbox
+              checked={config.memory.capture}
+              onChange={
+                /* 新增候选不自动生效。 */ (event) =>
+                  setDraft({
+                    ...draft,
+                    memory: { use: config.memory.use, capture: event.target.checked },
+                  })
+              }
+            >
+              允许提出记忆候选
+            </Checkbox>
             {((options.skills?.length || 0) > 0 || (config.skills?.length || 0) > 0) && (
               <SkillSelector
                 options={options.skills || []}

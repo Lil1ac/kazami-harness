@@ -1,3 +1,4 @@
+import type { ConversationManagement } from '../types';
 import type {
   OptionsResponse,
   LocalProjectOption,
@@ -169,6 +170,31 @@ export function makeProject(overrides: Partial<ProjectReview> = {}): ProjectRevi
     files: [{ path: 'app.py', status: 'modified', binary: false }],
     patch_available: true,
     warnings: [],
+    ...overrides,
+  };
+}
+
+/** 构造完整管理视图；overrides仅覆盖明确的测试状态，不从消息或目录猜测权限。 */
+export function makeConversationManagement(
+  overrides: Partial<ConversationManagement> = {},
+): ConversationManagement {
+  return {
+    session_id: 'run-a',
+    title: '统计日志',
+    title_override: null,
+    assigned_project_id: null,
+    assigned_project: null,
+    state: 'active',
+    pinned_at: null,
+    deleted_at: null,
+    restore_state: 'active',
+    revision: 0,
+    can_organize: true,
+    blocked_reason: null,
+    can_purge: false,
+    purge_blocked_reason: '请先移入回收站',
+    run_count: 1,
+    memory_references: 0,
     ...overrides,
   };
 }

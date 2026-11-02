@@ -1,52 +1,157 @@
+/* 任务以可扫描的列表呈现，详情编辑与执行状态分开。 */
 .tasks-panel {
-  border-block: 1px solid var(--border-color, #e5e5e5);
-  margin: 12px 0;
-  padding: 12px 0;
+  min-width: 0;
 }
-.tasks-panel > summary {
-  cursor: pointer;
-  font-weight: 600;
+.task-progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 3px;
+  border: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--line);
+  margin-bottom: 16px;
 }
-.tasks-panel ol {
+.task-progress::-webkit-progress-bar {
+  background: var(--line);
+}
+.task-progress::-webkit-progress-value {
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.task-progress::-moz-progress-bar {
+  background: var(--accent);
+}
+.task-list {
   list-style: none;
+  margin: 0;
   padding: 0;
 }
 .task-row {
-  padding: 12px 0;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--line);
+}
+.task-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 3px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  transition: background 0.14s;
+}
+.task-open:hover {
+  background: var(--raised);
+}
+.task-child .task-open {
+  padding-left: 19px;
+}
+.task-status-icon {
+  align-self: flex-start;
+  font-size: 15px;
+  color: var(--subtle);
+  padding-top: 2px;
+}
+.task-in_progress .task-status-icon {
+  color: var(--accent);
+}
+.task-completed .task-status-icon {
+  color: var(--success);
+}
+.task-blocked .task-status-icon {
+  color: var(--warning);
+}
+.task-cancelled {
+  opacity: 0.65;
+}
+.task-row-copy {
+  flex: 1;
+  min-width: 0;
+}
+.task-row-copy strong {
+  font-size: 12px;
+  line-height: 1.6;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
-.task-row > div:first-child {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+.task-row-copy small {
+  display: block;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: 4px;
 }
-.task-row p {
-  margin: 8px 0;
+.task-blocked .task-row-copy small {
+  color: var(--warning);
 }
-.task-row span {
+.task-state-label {
+  font-size: 10px;
+  color: var(--muted);
   white-space: nowrap;
-  color: #666;
+}
+.task-row-arrow {
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.task-open:hover .task-row-arrow,
+.task-open:focus-visible .task-row-arrow {
+  opacity: 1;
+}
+.task-detail h2 {
+  font-size: 21px;
+  line-height: 1.5;
+  margin: 12px 0 24px;
+}
+.task-detail-status {
+  display: inline-block;
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+.task-detail section {
+  margin-top: 26px;
+}
+.task-detail section h3 {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.task-detail section p,
+.task-detail section li {
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.task-detail section ul {
+  padding-left: 18px;
+}
+.task-evidence-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  padding: 8px 0;
+  font-size: 12px;
 }
 .task-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 30px;
+  padding-top: 20px;
 }
-.jobs-list {
-  list-style: none;
-  padding: 0;
-}
-.jobs-list li {
-  padding: 20px 0;
-  border-bottom: 1px solid #eee;
-  overflow-wrap: anywhere;
-}
-.jobs-list li > div {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-block: 8px;
+.ant-modal-body > label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  margin: 16px 0;
 }

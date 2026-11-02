@@ -1,4 +1,4 @@
-"""DeepSeek Chat Completions 的异步非流式适配器。"""
+"""DeepSeek Chat Completions 的异步流式适配器。"""
 
 import asyncio
 from copy import deepcopy
@@ -9,7 +9,8 @@ import httpx
 
 from agent_harness.schemas import RunConfig
 
-from agent_harness.providers.base import ModelError, ModelResponse, ToolCall
+from agent_harness.providers.base import ModelDelta, ModelError, ModelResponse, ToolCall
+from agent_harness.providers.streaming import StreamAssembler
 
 
 _ENDPOINT = "https://api.deepseek.com/chat/completions"
@@ -161,14 +162,16 @@ class DeepSeekClient:
         config: RunConfig,
         *,
         on_attempt: Callable[[int], None] | None = None,
+        on_delta: Callable[[ModelDelta], None] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        """校验密钥并保存配置副本；可注入尝试回调和测试传输层，此时尚未发请求。"""
+        """保存凭据、config 和测试 transport；on_attempt 观察重试，on_delta 观察真实增量，None 不通知。"""
         # 提前拒绝非法 header 字符，避免第三方异常包含原始凭据。
         if not isinstance(api_key, str) or not api_key or any(ord(char) < 33 or ord(char) > 126 for char in api_key):
             raise ModelError("model_credentials_invalid", "API 密钥格式无效，请检查环境变量。")
         self._config = config.model_copy(deep=True)
         self._on_attempt = on_attempt
+        self._on_delta = on_delta  # 完整响应验证前的展示观察器，不允许执行工具。
         self._entered = False
         # 固定官方地址、禁用环境代理与重定向，避免把 Authorization 发向其他主机。
         self._client = httpx.AsyncClient(
@@ -196,13 +199,14 @@ class DeepSeekClient:
         await self._client.__aexit__(exc_type, exc_value, traceback)
 
     async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
-        """发送一个非流式模型轮次，单轮预算同时覆盖请求、重试和退避等待。"""
+        """流式发送 messages/tools 并返回完整响应；单轮预算覆盖读流、重试与退避。"""
         if not self._entered:
             raise ModelError("model_not_ready", "模型客户端必须在异步上下文中使用。")
         body = {
             "model": self._config.requested_model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
             "thinking": {"type": "disabled"},
             "max_tokens": self._config.limits.model_max_output_tokens,
         }
@@ -216,29 +220,27 @@ class DeepSeekClient:
             raise ModelError("model_timeout", "模型轮次超时，已停止本轮请求。") from None
 
     async def _complete_with_retries(self, body: dict) -> ModelResponse:
-        """在尝试次数内重发同一请求，仅重试选定的临时故障，成功后解析响应。"""
+        """发送 body，首个内容片段前可重试临时故障；开始输出后断流立即停止，返回完整校验结果。"""
         attempts = self._config.limits.max_http_attempts_per_turn
         for attempt in range(1, attempts + 1):
             if self._on_attempt is not None:
                 self._on_attempt(attempt)
+            assembler = StreamAssembler(self._on_delta)
             try:
-                response = await self._client.post(_ENDPOINT, json=body)
+                async with self._client.stream("POST", _ENDPOINT, json=body) as response:
+                    if response.status_code in _RETRYABLE_STATUSES and attempt < attempts:
+                        pass
+                    elif response.status_code != 200:
+                        raise _http_error(response.status_code)
+                    else:
+                        return _parse_response(await assembler.read(response))
             except _RETRYABLE_TRANSPORT_ERRORS:
+                if assembler.received_content:
+                    raise ModelError("model_stream_interrupted", "模型输出连接中断，已保留收到的内容，未重新执行请求。") from None
                 if attempt == attempts:
                     raise ModelError("model_transport", "模型服务连接失败，已用完本轮重试次数。") from None
             except httpx.RequestError:
                 raise ModelError("model_transport", "模型请求传输失败，已停止本轮请求。") from None
-            else:
-                if response.status_code in _RETRYABLE_STATUSES and attempt < attempts:
-                    pass
-                elif response.status_code != 200:
-                    raise _http_error(response.status_code)
-                else:
-                    try:
-                        payload = response.json()
-                    except (ValueError, UnicodeError):
-                        raise _protocol_error() from None
-                    return _parse_response(payload)
             # 固定上限防止服务端 Retry-After 或连续故障消耗无界等待时间。
             await asyncio.sleep(min(0.1 * (2 ** min(attempt - 1, 4)), 1.0))
         raise ModelError("model_unavailable", "模型服务暂时不可用，已停止本轮请求。")

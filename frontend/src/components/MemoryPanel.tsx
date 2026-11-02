@@ -415,7 +415,9 @@ export function MemorySource({ item }: { item: MemoryEntry }) {
       <span>
         v{item.revision} · {memoryTypes[item.type]} · {memoryStatuses[item.status]}
       </span>
-      {item.source.run_id ? (
+      {item.source.unavailable ? (
+        <span>来源对话已删除</span>
+      ) : item.source.run_id ? (
         <Link to={'/runs/' + item.source.run_id}>
           来源运行{item.source.seq ? ' · 事件 ' + item.source.seq : ''}
         </Link>
@@ -490,7 +492,15 @@ function MemoryHistory({ scope, id }: { scope: string; id: string }) {
 }
 
 /** 管理项目列表或运行候选；projectId 与 runId 必须有一个，运行模式只显示本轮待确认候选。 */
-export function MemoryPanel({ projectId, runId }: { projectId?: string; runId?: string }) {
+export function MemoryPanel({
+  projectId,
+  runId,
+  readOnly = false,
+}: {
+  projectId?: string;
+  runId?: string;
+  readOnly?: boolean; /* 归档会话仅查看候选，不接受或修改项目记忆。 */
+}) {
   const scope = projectId
     ? 'projects/' + encodeURIComponent(projectId)
     : 'runs/' + encodeURIComponent(runId!);
@@ -618,48 +628,50 @@ export function MemoryPanel({ projectId, runId }: { projectId?: string; runId?: 
             <MemorySource item={item} />
             {item.unavailable_reason && <p role="status">{item.unavailable_reason}</p>}
             {projectId && <MemoryHistory scope={scope} id={item.id} />}
-            <div className="memory-actions">
-              {item.status === 'proposed' && (
-                <>
+            {!readOnly && (
+              <div className="memory-actions">
+                {item.status === 'proposed' && (
+                  <>
+                    <Button
+                      disabled={mutation.isPending}
+                      onClick={
+                        /* 明确接受后才跨会话生效。 */ () =>
+                          item.conflicts?.length ? setEditing(item) : decide(item, 'accept')
+                      }
+                    >
+                      保存记忆
+                    </Button>
+                    <Button
+                      disabled={mutation.isPending}
+                      onClick={/* 记录拒绝防止同源候选反复出现。 */ () => decide(item, 'reject')}
+                    >
+                      拒绝
+                    </Button>
+                  </>
+                )}
+                {['active', 'proposed'].includes(item.status) && (
+                  <Button onClick={/* 来源和版本只读，正文按副本编辑。 */ () => setEditing(item)}>
+                    编辑
+                  </Button>
+                )}
+                {item.status !== 'deleted' && (
                   <Button
+                    danger
                     disabled={mutation.isPending}
                     onClick={
-                      /* 明确接受后才跨会话生效。 */ () =>
-                        item.conflicts?.length ? setEditing(item) : decide(item, 'accept')
+                      /* 删除须明确说明历史快照仍保留。 */ () =>
+                        Modal.confirm({
+                          title: '删除这条项目记忆？',
+                          content: '后续运行不再使用，已有运行快照仍保留。',
+                          onOk: /* 决定使用当前版本。 */ () => decide(item, 'delete'),
+                        })
                     }
                   >
-                    保存记忆
+                    删除
                   </Button>
-                  <Button
-                    disabled={mutation.isPending}
-                    onClick={/* 记录拒绝防止同源候选反复出现。 */ () => decide(item, 'reject')}
-                  >
-                    拒绝
-                  </Button>
-                </>
-              )}
-              {['active', 'proposed'].includes(item.status) && (
-                <Button onClick={/* 来源和版本只读，正文按副本编辑。 */ () => setEditing(item)}>
-                  编辑
-                </Button>
-              )}
-              {item.status !== 'deleted' && (
-                <Button
-                  danger
-                  disabled={mutation.isPending}
-                  onClick={
-                    /* 删除须明确说明历史快照仍保留。 */ () =>
-                      Modal.confirm({
-                        title: '删除这条项目记忆？',
-                        content: '后续运行不再使用，已有运行快照仍保留。',
-                        onOk: /* 决定使用当前版本。 */ () => decide(item, 'delete'),
-                      })
-                  }
-                >
-                  删除
-                </Button>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </article>
         ),
       )}

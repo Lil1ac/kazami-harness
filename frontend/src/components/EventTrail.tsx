@@ -32,6 +32,7 @@ const eventLabels: Record<string, string> = {
   http_attempt_failed: 'HTTP 请求失败',
   model_response: '模型响应',
   assistant_message: '模型消息',
+  model_delta: '模型增量',
   tool_started: '工具调用',
   tool_result: '工具返回',
   execution_completed: '执行完成',

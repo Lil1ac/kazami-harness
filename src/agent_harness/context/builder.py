@@ -141,6 +141,9 @@ class ContextBuilder:
             "content": self._config.system_prompt
             + f"\n操作系统：{platform.system()}；工作区：{self._task.workspace}。"
             + python_description
+            # 对外进度是可读消息，不请求模型暴露内部推理；供同一轮实时对话按顺序展示。
+            + "工具调用前用一两句简短文字说明接下来要做什么；有重要结果或调整方向时说明进度，避免重复状态。"
+            + "面向用户说明实际动作，不输出内部推理。全部工作和检查结束后再给出最终答复，清楚区分完成、失败和未验证事项。"
             + "仅使用本轮声明的工具。读取 UTF-8 文件时按 next_offset 分页到 eof=true。"
             + "搜索结果截断时不要声称已检索全部内容。写入默认不覆盖，修改已有文件需 overwrite=true。"
             + "命令使用 argv 数组，不隐式解析管道和重定向；优先使用 Python 处理文件。"

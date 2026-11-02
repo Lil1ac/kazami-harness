@@ -232,7 +232,26 @@ class MemoryStore:
             latest = db.execute("SELECT COALESCE(MAX(seq),0) FROM revisions WHERE scope=?", (scope,)).fetchone()[0]
             cutoff = latest if sequence is None else sequence
             rows = db.execute("SELECT body FROM revisions WHERE seq IN (SELECT MAX(seq) FROM revisions WHERE scope=? AND seq<=? GROUP BY id) ORDER BY seq DESC", (scope, cutoff)).fetchall()
-            return {"scope_id": scope, "sequence": cutoff, "items": [json.loads(row[0]) for row in rows]}
+            items = [json.loads(row[0]) for row in rows]
+            for item in items:
+                if self.source_deleted(item.get("source", {}).get("run_id")):
+                    item["source"]["unavailable"] = True  # 只投影当前来源可用性，旧记忆修订和Run快照保持原字节。
+            return {"scope_id": scope, "sequence": cutoff, "items": items}
+
+    def source_deleted(self, run_id: str | None) -> bool:
+        """只读核对run_id是否属于已开始彻底清理的会话；None/无管理仓储返回False。"""
+        path = self.root / ".work" / "work.sqlite3"
+        if not run_id or not path.exists():
+            return False
+        if path.resolve() != path:
+            raise MemoryError("memory_storage_error", "会话来源状态路径发生变化。")
+        try:
+            with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5) as db:
+                if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversations'").fetchone():
+                    return False
+                return db.execute("SELECT 1 FROM conversations,json_each(json_extract(body,'$.purge_ids')) AS item WHERE json_extract(body,'$.state') IN ('purging','purged') AND item.value=? LIMIT 1", (run_id,)).fetchone() is not None
+        except sqlite3.Error:
+            raise MemoryError("memory_storage_error", "记忆来源的会话状态无法核对。") from None
 
     def mutate(self, source: Path, operation: str, payload: dict, change):
         """在 source 中幂等执行 change(db,scope)；operation 相同载荷复用回执，不同载荷拒绝。"""
@@ -249,13 +268,17 @@ class MemoryStore:
             return receipt
 
     def revisions(self, source: Path, identifier: str) -> list[dict]:
-        """返回 source 内 identifier 的全部不可变修订；不存在抛 MemoryError，不读取其他项目。"""
+        """返回source内identifier全部修订并投影来源当前可用性；不改写修订，不存在抛MemoryError。"""
         with self.transaction() as db:
             scope = self.scope(db, source)
             rows = db.execute("SELECT body FROM revisions WHERE scope=? AND id=? ORDER BY revision DESC", (scope, identifier)).fetchall() if db else []
             if not rows:
                 raise MemoryError("memory_not_found", "当前项目没有这条记忆。")
-            return [json.loads(row[0]) for row in rows]
+            items = [json.loads(row[0]) for row in rows]
+            for item in items:
+                if self.source_deleted(item.get("source", {}).get("run_id")):
+                    item["source"]["unavailable"] = True
+            return items
 
     @staticmethod
     def current(db, scope: str, identifier: str) -> dict:
@@ -371,6 +394,8 @@ class MemoryService:
 
 def applicability(item: dict, workspace: Path, root: Path, git: dict) -> str | None:
     """核对 item 的条件和文件来源，返回不适用原因；None 表示当前可作为参考。"""
+    if item["type"] == "fact" and item.get("source", {}).get("unavailable"):
+        return "来源对话已删除，事实证据需要重新核验"
     if item["expires_at"] and datetime.fromisoformat(item["expires_at"]) <= datetime.now(UTC):
         return "已到期"
     if item["branch"] and item["branch"] != git["branch"]:

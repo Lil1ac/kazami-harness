@@ -20,7 +20,7 @@
 }
 .memory-row {
   padding: 20px 0;
-  border-bottom: 1px solid var(--border-color, #e6e9ed);
+  border-bottom: 1px solid var(--line);
 }
 .memory-row h3 {
   margin: 0 0 10px;
@@ -30,7 +30,7 @@
   overflow-wrap: anywhere;
 }
 .memory-source {
-  color: var(--text-secondary, #6b7280);
+  color: var(--muted);
   font-size: 12px;
   margin: 10px 0;
   overflow-wrap: anywhere;
@@ -66,7 +66,7 @@
   margin: 10px 0;
 }
 .memory-details dt {
-  color: var(--text-secondary, #667085);
+  color: var(--muted);
   font-size: 12px;
 }
 .memory-details dd {

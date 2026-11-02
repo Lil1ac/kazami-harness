@@ -1,5 +1,7 @@
 """真实Runner与文件工具验证角色隔离、预算及结构化委派交接，全程离线。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 import json
 from pathlib import Path
@@ -216,7 +218,7 @@ def test_profiles_only_use_explicit_frozen_skills(tmp_path: Path, selected: list
         captured.append(json.loads(request.content))
         if len(captured) == 1:
             (skills / "alpha" / "SKILL.md").write_text("CHANGED_SOURCE", encoding="utf-8")
-        return httpx.Response(200, json=replies[len(captured) - 1])
+        return model_stream_response(200, json=replies[len(captured) - 1])
 
     outcome = asyncio.run(run_task(value, tmp_path / "records", "offline", transport=httpx.MockTransport(handler)))
     child_input = json.dumps(captured[1]["messages"], ensure_ascii=False)
@@ -255,7 +257,7 @@ def test_fixed_rules_memory_and_actual_phase_are_inherited(tmp_path: Path):
         if len(captured) == 1:
             instructions.write_text("SECOND_INSTRUCTIONS", encoding="utf-8")
             service.update(item["id"], MemoryChange(request_id=uuid4(), expected_revision=item["revision"], action="edit", content=fact_content("api.py接口", "SECOND_MEMORY")))
-        return httpx.Response(200, json=replies[len(captured) - 1])
+        return model_stream_response(200, json=replies[len(captured) - 1])
 
     outcome = asyncio.run(run_task(value, root, "offline", transport=httpx.MockTransport(handler)))
     child_input = json.dumps(captured[1]["messages"], ensure_ascii=False)

@@ -5,7 +5,6 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { errorMessage, getJob, getJobs, jobAction, resumeQueue } from '../api';
 import type { JobView } from '../types';
 import '../components/TasksPanel.css';
-import { useWorkEvents } from '../hooks/useWorkEvents';
 
 const labels: Record<JobView['status'], string> = {
   queued: '排队中',
@@ -18,12 +17,18 @@ const labels: Record<JobView['status'], string> = {
   needs_review: '待核对',
 }; // 执行与验收分别展示。
 
+/** 返回job当前整理归属；首轮未建会话时使用冻结来源，移至未分组时不回退原项目。 */
+function groupFor(job: JobView): { id: string; label: string } {
+  if (job.assigned_project !== undefined)
+    return job.assigned_project || { id: 'ungrouped', label: '未分组' };
+  return { id: job.project_id, label: job.project_label };
+}
+
 /** 后台中心及作业深链接；只有已建立 Run 才跳转，排队中保持可取消入口。 */
 export function JobsPage() {
   const { jobId } = useParams(); // 单个作业入口为空时展示全部。
   const navigate = useNavigate();
   const cache = useQueryClient();
-  useWorkEvents();
   const [project, setProject] = useState<string | undefined>(); // 项目筛选，不改变队列顺序。
   const query = useQuery({ queryKey: ['jobs'], queryFn: getJobs, refetchInterval: 1000 });
   const detail = useQuery({
@@ -86,24 +91,25 @@ export function JobsPage() {
           value={project}
           onChange={setProject}
           style={{ minWidth: 180 }}
-          options={[...new Set(jobs.map(/* 仅聚合归属。 */ (job) => job.project_id))].map(
-            /* 编号用于筛选，名称来自宿主固定的项目归属。 */ (id) => ({
+          options={[
+            ...new Set(jobs.map(/* 按会话当前整理归属筛选。 */ (job) => groupFor(job).id)),
+          ].map(
+            /* 同编号只展示一个分组，原始执行项目仍保存在job.project_id。 */ (id) => ({
               value: id,
-              label: jobs.find(/* 同编号查找接纳时名称。 */ (job) => job.project_id === id)!
-                .project_label,
+              label: groupFor(jobs.find((job) => groupFor(job).id === id)!).label,
             }),
           )}
         />
       )}
       <ul className="jobs-list">
         {jobs
-          .filter(/* 筛选不改变执行队列。 */ (job) => !project || job.project_id === project)
+          .filter(/* 筛选不改变执行队列。 */ (job) => !project || groupFor(job).id === project)
           .map(
             /* 作业编号用于去重及深链接。 */ (job) => (
               <li key={job.id}>
-                <strong>{job.title}</strong>
+                <strong>{job.conversation_title || job.title}</strong>
                 <div>
-                  <span>{job.project_label}</span>
+                  <span>{groupFor(job).label}</span>
                   <span>{labels[job.status]}</span>
                   <span>
                     {

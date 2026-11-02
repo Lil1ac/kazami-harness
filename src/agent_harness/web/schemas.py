@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 
 from agent_harness.schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from agent_harness.projects import ProjectReview, ProjectWorkspace
+from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
 from agent_harness.schemas import MemorySelection
 
@@ -99,7 +100,8 @@ class ConversationSummary(DataModel):
     """一个会话只有一条导航记录；无法核对最新轮时保留入口并明确提示。"""
 
     session_id: UUID  # 稳定会话编号，等于首次运行编号。
-    title: str  # 从首条用户要求生成，后续消息不替换标题。
+    title: str  # 统一有效标题；人工名称优先，否则从首条要求生成。
+    management: ConversationManagement  # 统一管理标题、整理归属及生命周期，不替换执行来源。
     entry_run_id: UUID  # 正常指向最新轮；记录异常时指向仍可读取的入口。
     latest_run_id: UUID | None  # 以会话元数据为准，无法核对元数据时为空。
     turn_count: int | None  # 已接纳用户轮数；元数据损坏时不猜测。
@@ -120,7 +122,9 @@ class ConversationPage(DataModel):
 
 # 会话读取不启动任何任务，can_continue仅为初步条件，提交时重新核验代码。
 class ConversationView(DataModel):
-    source: ConversationSource | None = None  # 只读项目身份，供返回项目和新建对话导航。
+    title: str  # 与列表和侧栏一致的有效标题。
+    management: ConversationManagement  # 当前管理状态，历史轮也使用同一会话管理身份。
+    source: ConversationSource | None = None  # 不可变执行来源；整理导航使用management.assigned_project。
     session_id: UUID  # 会话根运行编号。
     latest_run_id: UUID  # 线性会话最新已提交轮次。
     turns: list[ConversationTurn]  # 顺序展示用户要求和各轮回答。

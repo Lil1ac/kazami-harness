@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button } from 'antd';
+import { Alert, Button, Drawer } from 'antd';
+import {
+  CheckCircleOutlined,
+  LoadingOutlined,
+  CloseCircleOutlined,
+  ArrowRightOutlined,
+  SearchOutlined,
+  CodeOutlined,
+} from '@ant-design/icons';
 import { cancelSubagent, errorMessage, getSubagent } from '../api';
 import { duration } from '../format';
 import { MarkdownMessage } from './MarkdownMessage';
@@ -63,41 +71,49 @@ function SubagentDetails({
   const report = data?.subagent.report ?? record.report; // 失败或中断也显示宿主保存的部分证据。
   return (
     <div className="subagent-details">
-      <p>{record.objective}</p>
+      <p className="agent-objective">{record.objective}</p>
+      <div className="agent-detail-meta">
+        <span>{record.role === 'explore' ? '探索' : '审阅'}</span>
+        <span>{duration(record.elapsed_seconds * 1000)}</span>
+        <span>{(record.usage.total_tokens ?? 0).toLocaleString()} token</span>
+      </div>
       {active && (data?.subagent.status ?? record.status) === 'running' && (
         <Button danger loading={stopping} onClick={stopChild}>
           停止此子任务
         </Button>
       )}
       {stopError && <Alert type="error" title={stopError} />}
-      {record.task_id && (
+      <details className="agent-runtime">
+        <summary>执行信息</summary>
+        {record.task_id && (
+          <p className="muted">
+            关联工作项：<code>{record.task_id}</code>
+          </p>
+        )}
         <p className="muted">
-          关联工作项：<code>{record.task_id}</code>
+          {record.model_turns}/{record.max_model_turns} 次模型 · {record.tool_calls}/
+          {record.max_tool_calls} 次工具 · {duration(record.elapsed_seconds * 1000)}
         </p>
-      )}
-      <p className="muted">
-        {record.model_turns}/{record.max_model_turns} 次模型 · {record.tool_calls}/
-        {record.max_tool_calls} 次工具 · {duration(record.elapsed_seconds * 1000)}
-      </p>
-      {record.skill_names.length > 0 && (
-        <p className="muted">本次技能：{record.skill_names.join('、')}</p>
-      )}
-      {record.parent_reserve.model_turns !== undefined && (
+        {record.skill_names.length > 0 && (
+          <p className="muted">本次技能：{record.skill_names.join('、')}</p>
+        )}
+        {record.parent_reserve.model_turns !== undefined && (
+          <p className="muted">
+            分配时为父任务保留 {record.parent_reserve.model_turns} 次模型、
+            {record.parent_reserve.tool_calls ?? 0} 次工具；均包含在原总预算。
+          </p>
+        )}
         <p className="muted">
-          分配时为父任务保留 {record.parent_reserve.model_turns} 次模型、
-          {record.parent_reserve.tool_calls ?? 0} 次工具；均包含在原总预算。
+          {(record.usage.total_tokens ?? 0).toLocaleString()} token
+          {!record.usage_complete || record.status === 'running' ? ' · 已知部分' : ''}
+          ，已计入父运行；子时限 {record.timeout_seconds.toFixed(1)} 秒。
         </p>
-      )}
-      <p className="muted">
-        {(record.usage.total_tokens ?? 0).toLocaleString()} token
-        {!record.usage_complete || record.status === 'running' ? ' · 已知部分' : ''}
-        ，已计入父运行；子时限 {record.timeout_seconds.toFixed(1)} 秒。
-      </p>
-      {record.stop_reason && (
-        <p>
-          结束原因：<code>{record.stop_reason}</code>
-        </p>
-      )}
+        {record.stop_reason && (
+          <p>
+            结束原因：<code>{record.stop_reason}</code>
+          </p>
+        )}
+      </details>
       {query.isPending && <p role="status">正在读取子执行记录…</p>}
       {query.error && <Alert type="error" title={errorMessage(query.error)} />}
       {data && (
@@ -242,54 +258,84 @@ export function SubagentsPanel({
   records: SubagentRecord[];
   active: boolean;
 }) {
-  const [open, setOpen] = useState<string | null>(null); // 一次展开一项，避免创建多个高频读取器。
+  const [open, setOpen] = useState<string | null>(null); // 一次仅打开一个详情，避免多个高频读取器。
+  const normalized = records.map(
+    /* 历史缺失终态时保留中断事实。 */ (record): SubagentRecord =>
+      !active && record.status === 'running'
+        ? { ...record, status: 'interrupted', stop_reason: 'missing_terminal' }
+        : record,
+  );
+  const selected = normalized.find(
+    /* 列表和详情共享同一份真实状态。 */ (record) => record.run_id === open,
+  );
   if (!records.length) return null;
   return (
     <section className="subagents-panel" aria-label="只读子 Agent">
-      <h3>子 Agent</h3>
-      <p className="muted">最多两个子任务并发研究；报告供主 Agent 核对，停止主任务会同时停止所有子执行。</p>
-      {records.map(
-        /* 每项保持真实子编号；历史只读，不提供重新执行按钮。 */ (source) => {
-          const record: SubagentRecord =
-            !active && source.status === 'running'
-              ? { ...source, status: 'interrupted', stop_reason: 'missing_terminal' }
-              : source;
-          return (
-            <details
-              key={record.run_id}
-              open={open === record.run_id}
-              onToggle={
-                /* 原生details支持键盘，展开后才读取完整轨迹。 */ (event) => {
-                  if (event.currentTarget.open) setOpen(record.run_id);
-                  else
-                    setOpen(
-                      /* 关闭旧项不能误关新展开项。 */ (value) =>
-                        value === record.run_id ? null : value,
-                    );
-                }
-              }
-            >
-              <summary>
-                <strong>{record.title}</strong>
-                <span>
-                  {record.role === 'explore' ? '探索' : '审阅'} ·{' '}
-                  {record.status === 'completed' && record.report?.partial
-                    ? '报告部分返回'
-                    : statusLabels[record.status]}
+      <header className="work-panel-heading">
+        <div>
+          <h3>
+            子 Agent <small>{records.length}</small>
+          </h3>
+          <span className="muted">
+            {normalized.filter((record) => record.status === 'running').length} 个运行中
+          </span>
+        </div>
+      </header>
+      <ul className="agent-list">
+        {normalized.map(
+          /* 主列表保持紧凑，报告及轨迹在独立阅读层。 */ (record) => (
+            <li key={record.run_id} className={`agent-row agent-${record.status}`}>
+              <button
+                type="button"
+                className="agent-open"
+                onClick={/* 仅打开报告，不调度子任务。 */ () => setOpen(record.run_id)}
+              >
+                <span className="agent-avatar">
+                  {record.role === 'explore' ? <SearchOutlined /> : <CodeOutlined />}
                 </span>
-              </summary>
-              {open === record.run_id && (
-                <SubagentDetails
-                  key={record.run_id}
-                  parentId={parentId}
-                  record={record}
-                  active={active}
-                />
-              )}
-            </details>
-          );
-        },
-      )}
+                <span className="agent-row-copy">
+                  <strong>{record.title}</strong>
+                  <small>
+                    {record.role === 'explore' ? '探索' : '审阅'} ·{' '}
+                    {record.status === 'completed' && record.report?.partial
+                      ? '报告部分返回'
+                      : statusLabels[record.status]}
+                  </small>
+                  <span>{record.objective}</span>
+                </span>
+                <span className="agent-status-icon">
+                  {record.status === 'running' ? (
+                    <LoadingOutlined spin />
+                  ) : record.status === 'completed' ? (
+                    <CheckCircleOutlined />
+                  ) : (
+                    <CloseCircleOutlined />
+                  )}
+                </span>
+                <ArrowRightOutlined className="agent-row-arrow" />
+              </button>
+            </li>
+          ),
+        )}
+      </ul>
+      <Drawer
+        title={selected?.title || 'Agent 详情'}
+        open={Boolean(selected)}
+        size={560}
+        styles={{ wrapper: { maxWidth: '100vw' } }}
+        onClose={/* 返回列表只停止读取，不取消执行。 */ () => setOpen(null)}
+        className="agent-detail-drawer"
+        destroyOnHidden
+      >
+        {selected && (
+          <SubagentDetails
+            key={selected.run_id}
+            parentId={parentId}
+            record={selected}
+            active={active}
+          />
+        )}
+      </Drawer>
     </section>
   );
 }

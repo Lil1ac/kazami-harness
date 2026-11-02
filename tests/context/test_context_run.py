@@ -1,5 +1,7 @@
 """通过真实 Runner 和离线 HTTP 适配器验证上下文检查与执行计数的边界。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 import json
 from pathlib import Path
@@ -48,7 +50,7 @@ def scripted_run(value: RunManifest, root: Path, replies: list[dict], *, rewrite
         if rewrite_rule is not None and len(requests) == 1:
             (value.task.workspace / "AGENTS.md").write_text(rewrite_rule, encoding="utf-8")
         assert len(requests) <= len(replies), "发生了预算之外的请求"
-        return httpx.Response(200, json=replies[len(requests) - 1])
+        return model_stream_response(200, json=replies[len(requests) - 1])
 
     outcome = asyncio.run(run_task(value, root, "dummy-key", transport=httpx.MockTransport(handler)))
     return outcome, requests, RunStore.read(root, str(value.run_id))

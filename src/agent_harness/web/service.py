@@ -227,6 +227,8 @@ class WebRunManager:
         self._closing = False  # 关停后永久拒绝新提交。
         self.conversation_index = ConversationIndex(self)  # 项目下按会话聚合的只读导航。
         self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
+        from agent_harness.web.conversation_management import ConversationManager
+        self.management = ConversationManager(self)  # 可变标题、归属及生命周期，与不可变运行事实分开。
         self._queued_run_id: UUID | None = None  # 出队时预分配的稳定 Run 编号，仅队列写入。
         self._execution_lease = None  # 队列从项目准备到证据收尾一直持有的操作系统锁。
         from agent_harness.web.jobs import JobQueue

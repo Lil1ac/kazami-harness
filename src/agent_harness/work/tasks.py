@@ -122,6 +122,8 @@ class WorkStore:
                 CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, digest TEXT, result TEXT);
                 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS conversation_operations(id TEXT PRIMARY KEY, session TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL);
             """)
             connection.execute("BEGIN IMMEDIATE")
             yield connection
@@ -223,6 +225,7 @@ class WorkStore:
         """
         key, digest = session + ":" + operation, hashlib.sha256(encode(payload).encode()).hexdigest()
         with self.transaction() as db:
+            self.require_active(db, session)
             previous = db.execute("SELECT digest,result FROM operations WHERE id=?", (key,)).fetchone()
             if previous:
                 if previous[0] != digest:
@@ -240,6 +243,13 @@ class WorkStore:
                                     "items": [item for item in state["items"] if before.get(item["id"]) != encode(item)]})
             return result
 
+    @staticmethod
+    def require_active(db, session: str) -> None:
+        """在调用者db事务核对session允许写入；归档、回收站及清理状态抛TaskError，返回None。"""
+        row = db.execute("SELECT body FROM conversations WHERE id=?", (session,)).fetchone()
+        if row and json.loads(row[0])["state"] != "active":
+            raise TaskError("conversation_inactive", "请先恢复会话，再继续执行或修改任务。")
+
     def event(self, db, scope: str, body: dict) -> None:
         """在调用者 db 事务记录 scope 的 body 事件；补 UTC 时间，不单独提交。"""
         db.execute("INSERT INTO events(scope,body) VALUES (?,?)", (scope, encode({**body, "at": now()})))
@@ -248,7 +258,18 @@ class WorkStore:
         """返回 after 之后至多一百条事件；scope=None 读取全部，不触发执行。"""
         with self.transaction() as db:
             rows = db.execute("SELECT seq,scope,body FROM events WHERE seq>? AND (? IS NULL OR scope=?) ORDER BY seq LIMIT 100", (after, scope, scope)).fetchall()
-        return [{"seq": row[0], "scope": row[1], **json.loads(row[2])} for row in rows]
+            results = []
+            for row in rows:
+                body = json.loads(row[2])
+                owner = row[1]
+                job = db.execute("SELECT body FROM jobs WHERE id=?", (owner,)).fetchone()
+                if job:
+                    owner = json.loads(job[0]).get("session_id") or owner
+                metadata = db.execute("SELECT body FROM conversations WHERE id=?", (owner,)).fetchone()
+                if metadata and json.loads(metadata[0])["state"] in {"trashed", "purging", "purged"}:
+                    body = {"type": "conversation_updated", "session_id": owner, "at": body.get("at")}
+                results.append({"seq": row[0], "scope": row[1], **body})
+        return results
 
     def latest_seq(self) -> int:
         """返回当前已提交事件末游标；未建立仓储返回零，不启动作业。"""

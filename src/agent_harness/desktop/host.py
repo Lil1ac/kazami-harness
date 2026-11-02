@@ -96,6 +96,7 @@ class DesktopHost:
             raise WebServiceError(400, "invalid_artifact", "请选择当前任务中已登记的产物。")
         try:
             identifier = UUID(match[1])
+            self.manager.management.check_run(str(identifier))  # 桌面下载与定位也遵守回收站访问限制。
             query = parse_qs(url.query, strict_parsing=True)
         except ValueError:
             raise WebServiceError(400, "invalid_artifact", "产物地址无效。") from None

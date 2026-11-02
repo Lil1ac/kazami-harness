@@ -1,3 +1,4 @@
+import { makeConversationManagement } from './test/fixtures';
 import { expect, it } from 'vitest';
 import { mergeConfirmedRun } from './conversation';
 import { makeRun } from './test/fixtures';
@@ -6,6 +7,8 @@ import type { ConversationView, RunView } from './types';
 /** 构造已有中断首轮；返回仅含一条用户消息的真实契约视图，不产生执行尝试。 */
 function original(): ConversationView {
   return {
+    title: '统计日志',
+    management: makeConversationManagement(),
     session_id: 'run-a',
     latest_run_id: 'run-a',
     can_continue: true,

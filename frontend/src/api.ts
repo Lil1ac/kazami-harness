@@ -52,7 +52,7 @@ export function desktopAction(
 export class ApiError extends Error {
   readonly code: string; // 后端稳定错误码或 network_error。
   readonly status: number; // HTTP 状态，网络错误为 0。
-  readonly details: { conflicts?: import('./types').MemoryConflict[] } | null; // 同项目冲突审阅信息，其他错误为空。
+  readonly details: { conflicts?: import('./types').MemoryConflict[]; session_id?: string } | null; // 同项目冲突审阅信息，其他错误为空。
   /** 根据安全提示与状态构建错误；参数不应包含密钥，返回 Error 实例。 */
   constructor(message: string, code: string, status: number, details: ApiError['details'] = null) {
     super(message);
@@ -67,7 +67,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await fetch(path, { ...init, cache: 'no-store' }); // API状态可变，恢复后不能沿用浏览器缓存的410。
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiError('无法连接本地服务，请确认服务仍在运行。', 'network_error', 0);
@@ -299,7 +299,15 @@ export function saveProjectSettings(
 
 /** 查询会话页；默认全项目、offset=0、limit=20，按最新轮状态筛选，只读不执行。 */
 export function getConversations(
-  filters: { projectId?: string; offset?: number; limit?: number; status?: string } = {},
+  filters: {
+    projectId?: string;
+    offset?: number;
+    limit?: number;
+    status?: string;
+    state?: string;
+    query?: string;
+    ungrouped?: boolean;
+  } = {},
   signal?: AbortSignal,
 ): Promise<ConversationPage> {
   const query = new URLSearchParams({
@@ -308,6 +316,9 @@ export function getConversations(
   });
   if (filters.projectId) query.set('project_id', filters.projectId);
   if (filters.status) query.set('status', filters.status);
+  if (filters.state) query.set('state', filters.state);
+  if (filters.query) query.set('q', filters.query);
+  if (filters.ungrouped) query.set('ungrouped', 'true');
   return request('/api/conversations?' + query, { signal });
 }
 
@@ -317,13 +328,58 @@ export function getMemories(scope: string, params = ''): Promise<import('./types
 }
 
 /** 保存或更新 scope 的记忆；body 发送后保持编号及载荷一致，返回服务端修订。 */
-export function mutateMemory(scope: string, id: string | null, body: object): Promise<import('./types').MemoryEntry> {
+export function mutateMemory(
+  scope: string,
+  id: string | null,
+  body: object,
+): Promise<import('./types').MemoryEntry> {
   return request('/api/' + scope + '/memories' + (id ? '/' + encodeURIComponent(id) : ''), {
-    method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: id ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 }
 
 /** 读取 scope 中 id 的不可变修订；仅供人工追溯，不把旧正文注入活动运行。 */
-export function getMemoryRevisions(scope: string, id: string): Promise<{ items: import('./types').MemoryEntry[] }> {
+export function getMemoryRevisions(
+  scope: string,
+  id: string,
+): Promise<{ items: import('./types').MemoryEntry[] }> {
   return request('/api/' + scope + '/memories/' + encodeURIComponent(id) + '/revisions');
+}
+
+/** 读取id会话的管理信息；回收站和清理墓碑仍可读取，不返回消息正文。 */
+export function getConversationManagement(
+  id: string,
+): Promise<import('./types').ConversationManagement> {
+  return request('/api/conversations/' + encodeURIComponent(id));
+}
+
+/** 按id和body中的稳定请求编号修改管理状态；不提交执行目录或模型配置。 */
+export function manageConversation(
+  id: string,
+  body: object,
+  purge = false,
+): Promise<import('./types').ConversationManagement> {
+  return request('/api/conversations/' + encodeURIComponent(id), {
+    method: purge ? 'DELETE' : 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/** 对body明确选中的当前页会话批量整理；逐项返回成功或受控失败，不包含彻底删除。 */
+export function manageConversationBatch(body: object): Promise<{
+  items: {
+    session_id: string;
+    success: boolean;
+    conversation?: import('./types').ConversationManagement;
+    error?: { code: string; message: string };
+  }[];
+}> {
+  return request('/api/conversations/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }

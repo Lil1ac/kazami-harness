@@ -1,5 +1,7 @@
 """通过真实 CLI 进程验证首个切片，不依赖密钥或网络。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import json
 import os
 import subprocess
@@ -91,7 +93,7 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
         else:
             message = {"role": "assistant", "content": "timeout：1 次。"}
             reason = "stop"
-        return httpx.Response(200, json={"model": "mock-deepseek", "choices": [{"message": message, "finish_reason": reason}]})
+        return model_stream_response(200, json={"model": "mock-deepseek", "choices": [{"message": message, "finish_reason": reason}]})
 
     async def offline_run(manifest, root, api_key, **kwargs):
         """保留真实 Runner 行为，仅注入 MockTransport 以避免访问模型网络。"""
@@ -166,7 +168,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     def handler(request):
         """request 是离线HTTP请求；返回最终回答并记次数，检查验收不重新请求模型。"""
         requests.append(request)
-        return httpx.Response(200, json={"model": "offline-model", "choices": [{
+        return model_stream_response(200, json={"model": "offline-model", "choices": [{
             "message": {"role": "assistant", "content": "报告已就绪。"}, "finish_reason": "stop",
         }], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}})
 

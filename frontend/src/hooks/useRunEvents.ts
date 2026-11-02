@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { errorMessage, getEvents } from '../api';
 import { hasEventGap, mergeEvents, parseRunEvent } from '../events';
 import type { RunEvent } from '../types';
+import { projectTranscript } from '../transcript';
 
 /** 单任务订阅状态；断线时仍保留已读取事件。 */
 export type ConnectionState = 'loading' | 'live' | 'reconnecting' | 'closed' | 'error';
@@ -9,6 +10,8 @@ export type ConnectionState = 'loading' | 'live' | 'reconnecting' | 'closed' | '
 /** 管理唯一 SSE 连接；初始分页、断线及缺口均从持久化历史补齐，卸载只关闭订阅。 */
 export function useRunEvents(runId: string, active: boolean, onSettled: () => void) {
   const [events, setEvents] = useState<RunEvent[]>([]); // 有界事件窗口，默认 400 条。
+  const [timeline, setTimeline] = useState<RunEvent[]>([]); // 累计内容块独立于原始事件窗口，长文本不被裁剪。
+  const loadedRun = useRef(''); // 终态刷新不清空同轮已读内容，避免消息闪烁。
   const [connection, setConnection] = useState<ConnectionState>('loading'); // 当前订阅可见状态。
   const [error, setError] = useState<string | null>(null); // 受控读取错误。
   const [loadingOlder, setLoadingOlder] = useState(false); // 防止重复历史展开。
@@ -27,7 +30,11 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
       let disposed = false; // 卸载后不再触发 setState 或刷新缓存。
       let historySettled = false; // 历史已经包含可信终态时，不再等待本次页面错过的 SSE 结束通知。
       windowLimit.current = 400;
-      setEvents([]);
+      if (loadedRun.current !== runId) {
+        setEvents([]);
+        setTimeline([]);
+        loadedRun.current = runId;
+      }
       setConnection('loading');
       setError(null);
       setLoadingOlder(false);
@@ -57,6 +64,10 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
                 mergeEvents(previous, rows, runId, windowLimit.current),
             );
             cursor = rows[rows.length - 1].seq;
+            setTimeline(
+              /* 历史先累积完整块，再连接实时流。 */ (previous) =>
+                projectTranscript(previous, rows, runId),
+            );
           }
           more = page.has_more && rows.length > 0;
         }
@@ -112,6 +123,10 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
               }
               if (event.seq <= cursor) return;
               cursor = event.seq;
+              setTimeline(
+                /* 工具与文字共享持久化顺序，重连不重复追加。 */ (previous) =>
+                  projectTranscript(previous, [event], runId),
+              );
               setEvents(
                 /* 重复事件由序号消除，不依赖网络到达顺序。 */ (previous) =>
                   mergeEvents(previous, [event], runId, windowLimit.current),
@@ -188,6 +203,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
 
   return {
     events,
+    timeline,
     connection,
     error,
     loadingOlder,

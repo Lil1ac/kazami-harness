@@ -1,16 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getTasks } from '../api';
-import { Alert, Button, Checkbox, Input, Select } from 'antd';
-import { ArrowDownOutlined, ArrowUpOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Alert, Button, Checkbox, Input } from 'antd';
+import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  ReloadOutlined,
+  UnorderedListOutlined,
+  AuditOutlined,
+  TeamOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
+import { ModeSelect } from './ModeSelect';
 import { phaseLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
+import { useRunPlanning } from '../hooks/useRunPlanning';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
 import { PlanningPanel } from './PlanningPanel';
-import { TasksPanel } from './TasksPanel';
-import { SubagentsPanel } from './SubagentsPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
@@ -23,6 +29,8 @@ interface ConversationPanelProps {
   skills?: SkillOption[]; // 当前宿主目录仅用于下一条的选择，不改写旧轮证据。
   onInspect: (runId: string, tab?: string) => void; // 查看某轮详情，不更改追加父轮。
   onConfirmed: (run: RunView) => void; // 服务确认新运行后原地更新会话与路由。
+  onStop?: () => void; // 用户点击停止后由宿主取消当前运行；缺省不提供停止入口。
+  stopping?: boolean; // 宿主正在清理或取消请求尚未返回。
 }
 
 /** 简洁说明单轮真实结论；未知和未验收不被展示为成功。 */
@@ -60,14 +68,17 @@ function TurnMessage({
   latestId,
   events,
   onInspect,
+  readOnly,
 }: {
   turn: ConversationTurn; // 本轮唯一已接纳运行及独立结果。
   run?: RunView; // 最新运行快照，缺省时不伪造活动状态。
   latestId: string; // 唯一实时订阅对应的运行。
   events: RunEvent[]; // 最新运行共享的真实事件。
   onInspect: (runId: string, tab?: string) => void; // 只改变检查器选择。
+  readOnly: boolean; // 归档会话仍展示旧消息，但不提供会话写入入口。
 }) {
   const selected = turn.run_id === run?.run_id;
+  const answer = selected && run?.active ? null : turn.final_answer; // 宿主检查和自动修复结束前，文字仍属于过程。
   const interrupted = turn.interrupted ?? (selected && Boolean(run?.interrupted));
   return (
     <div className="assistant-message">
@@ -81,6 +92,7 @@ function TurnMessage({
           liveEvents={turn.run_id === latestId ? events : undefined}
           active={Boolean(selected && run?.active)}
           phase={phaseLabel(run?.phase || 'created')}
+          finalAnswer={answer}
           onInspect={
             /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () =>
               onInspect(turn.run_id, 'diagnostics')
@@ -88,34 +100,27 @@ function TurnMessage({
         />
         {selected && run?.result.planning.pending?.kind === 'question' ? (
           <p className="message-waiting">需要你确认下面的问题。</p>
-        ) : turn.final_answer ? (
-          <MarkdownMessage text={turn.final_answer} />
-        ) : (
+        ) : answer ? (
+          <MarkdownMessage text={answer} />
+        ) : selected && run?.active ? null : (
           <p className="message-waiting">
-            {selected && run?.active
-              ? '正在处理你的要求，结果将在完成后显示。'
-              : turn.execution_status
-                ? turnStatus(turn.execution_status, null, interrupted) + '，本次执行没有最终回答。'
-                : '运行记录待确认，请查看本次详情。'}
+            {turn.execution_status
+              ? turnStatus(turn.execution_status, null, interrupted) + '，本次执行没有最终回答。'
+              : '运行记录待确认，请查看本次详情。'}
           </p>
         )}
-        {selected && Boolean(run?.result.subagents?.length) && (
-          <SubagentsPanel
-            parentId={turn.run_id}
-            records={run!.result.subagents!}
-            active={run!.active}
-          />
-        )}
         <div className="message-actions">
-          {turn.final_answer && <SaveMemoryButton runId={turn.run_id} text={turn.final_answer} />}
-          <span>
-            {turnStatus(
-              turn.execution_status,
-              turn.validation_status,
-              interrupted,
-              turn.stop_reason,
-            )}
-          </span>
+          {answer && !readOnly && <SaveMemoryButton runId={turn.run_id} text={answer} />}
+          {(!selected || !run?.active) && (
+            <span>
+              {turnStatus(
+                turn.execution_status,
+                turn.validation_status,
+                interrupted,
+                turn.stop_reason,
+              )}
+            </span>
+          )}
           <button
             type="button"
             onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'result')}
@@ -144,35 +149,12 @@ export function ConversationPanel({
   events,
   onInspect,
   onConfirmed,
+  onStop,
+  stopping = false,
   skills = [],
 }: ConversationPanelProps) {
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
-  const tasks = useQuery({
-    queryKey: ['tasks', run?.run_id || '', false],
-    queryFn: /* 与任务组件共享同一查询，不读取历史版本来推测当前状态。 */ () =>
-      getTasks(run!.run_id),
-    enabled: Boolean(run),
-    refetchInterval: 1500,
-  });
-  const planning = useMemo(
-    /* 当前方案进度统一投影自工作项；原始 Run 快照始终保持不可变。 */ () => {
-      if (!run) return undefined;
-      const state = structuredClone(run.result.planning);
-      if (tasks.data)
-        for (const plan of state.plans)
-          for (const step of plan.steps) {
-            const task = tasks.data.items.find(
-              /* 版本和稳定步骤编号必须同时匹配。 */ (item) =>
-                item.source?.plan_version === plan.version && item.source.step_id === step.id,
-            );
-            if (task)
-              step.status =
-                task.blocked_reason || task.status === 'cancelled' ? 'blocked' : task.status;
-          }
-      return state;
-    },
-    [run?.result.planning, tasks.data],
-  );
+  const { tasks, planning } = useRunPlanning(run);
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
   const content = useRef<HTMLDivElement>(null); // 用尺寸变化补偿字体加载与过程展开。
   const atBottom = useRef(true); // 用户上翻后关闭跟随，不打断历史阅读。
@@ -216,8 +198,56 @@ export function ConversationPanel({
       /* 未收到POST确认但GET已发现相同后续要求时，避免重复显示同一用户正文。 */ (turn) =>
         turn.parent_run_id === send.pending?.parentId && turn.prompt === send.pending?.body.prompt,
     );
+  const taskItems =
+    tasks.data?.items.filter(/* 分组不重复计入完成进度。 */ (item) => !item.is_group) || [];
+  const completedTasks = taskItems.filter(
+    /* 待复核项不展示为完成。 */ (item) => item.status === 'completed' && !item.blocked_reason,
+  ).length;
+  const currentTask = taskItems.find(
+    /* 优先展示当前执行项。 */ (item) => item.status === 'in_progress',
+  );
   return (
     <section className="conversation-surface" aria-label="连续对话">
+      {run && (taskItems.length > 0 || planning?.plans.length || run.result.subagents?.length) ? (
+        <div className="conversation-context-bar" aria-label="当前工作">
+          {taskItems.length > 0 && (
+            <button
+              type="button"
+              onClick={/* 打开任务，不改变消息和执行目标。 */ () => onInspect(run.run_id, 'tasks')}
+            >
+              <UnorderedListOutlined />
+              <span>任务</span>
+              <small>
+                {completedTasks}/{taskItems.length}
+              </small>
+            </button>
+          )}
+          {Boolean(planning?.plans.length) && (
+            <button
+              type="button"
+              onClick={/* 查看当前计划全文。 */ () => onInspect(run.run_id, 'plan')}
+            >
+              <AuditOutlined />
+              <span>计划</span>
+            </button>
+          )}
+          {Boolean(run.result.subagents?.length) && (
+            <button
+              type="button"
+              onClick={/* 查看本轮子执行列表。 */ () => onInspect(run.run_id, 'agents')}
+            >
+              <TeamOutlined />
+              <span>Agent</span>
+              <small>{run.result.subagents!.length}</small>
+            </button>
+          )}
+          {currentTask && (
+            <span className="context-current-task" title={currentTask.subject}>
+              {currentTask.subject}
+            </span>
+          )}
+        </div>
+      ) : null}
       <div
         className="conversation-scroll"
         ref={viewport}
@@ -248,6 +278,7 @@ export function ConversationPanel({
                   latestId={conversation.latest_run_id}
                   events={events}
                   onInspect={onInspect}
+                  readOnly={conversation.management.state !== 'active'}
                 />
               </article>
             ),
@@ -258,9 +289,10 @@ export function ConversationPanel({
               <div className="user-message-body">{send.pending!.body.prompt}</div>
             </div>
           )}
-          {run && <TasksPanel runId={run.run_id} active={run.active} />}
-          {run?.context?.memory?.proposals?.length ? <MemoryPanel runId={run.run_id} /> : null}
-          {run && (
+          {run?.context?.memory?.proposals?.length ? (
+            <MemoryPanel runId={run.run_id} readOnly={conversation.management.state !== 'active'} />
+          ) : null}
+          {run && planning?.pending && (
             <PlanningPanel
               runId={run.run_id}
               state={planning!}
@@ -295,11 +327,13 @@ export function ConversationPanel({
               上一条发送尚未确认。点击“重试确认”核对原请求，草稿不会自动发送。
             </p>
           )}
-          {conversation.blocked_reason && !send.confirming && (
-            <p className="composer-notice" role="status">
-              {conversation.blocked_reason}
-            </p>
-          )}
+          {conversation.blocked_reason &&
+            conversation.blocked_code !== 'run_busy' &&
+            !send.confirming && (
+              <p className="composer-notice" role="status">
+                {conversation.blocked_reason}
+              </p>
+            )}
           {conversation.continuation_notice && !conversation.blocked_reason && !send.confirming && (
             <p className="composer-notice" role="status">
               {conversation.continuation_notice}
@@ -308,8 +342,7 @@ export function ConversationPanel({
           {run && (
             <details className="composer-skills">
               <summary>
-                下一轮设置 ·{' '}
-                {send.skills.length ? send.skills.join('、') : '未选择'}
+                下一轮设置 · {send.skills.length ? send.skills.join('、') : '未选择'}
               </summary>
               <SkillSelector
                 label="下一轮技能"
@@ -318,8 +351,24 @@ export function ConversationPanel({
                 onChange={send.setSkills}
                 disabled={!run}
               />
-              <Checkbox checked={send.memory.use} onChange={/* 下一轮读取选择不改变当前快照。 */ (event) => send.setMemory({ ...send.memory, use: event.target.checked })}>使用项目记忆</Checkbox>
-              <Checkbox checked={send.memory.capture} onChange={/* 候选仍需人工确认。 */ (event) => send.setMemory({ ...send.memory, capture: event.target.checked })}>允许提出记忆候选</Checkbox>
+              <Checkbox
+                checked={send.memory.use}
+                onChange={
+                  /* 下一轮读取选择不改变当前快照。 */ (event) =>
+                    send.setMemory({ ...send.memory, use: event.target.checked })
+                }
+              >
+                使用项目记忆
+              </Checkbox>
+              <Checkbox
+                checked={send.memory.capture}
+                onChange={
+                  /* 候选仍需人工确认。 */ (event) =>
+                    send.setMemory({ ...send.memory, capture: event.target.checked })
+                }
+              >
+                允许提出记忆候选
+              </Checkbox>
               {run?.verification_kind === 'project_tests' && (
                 <Checkbox
                   checked={send.autoRepair}
@@ -375,34 +424,34 @@ export function ConversationPanel({
               }
             />
             <div className="composer-toolbar">
-              <Select
-                aria-label="下一轮工作模式"
-                value={send.mode}
-                virtual={false}
-                onChange={send.setMode}
-                options={[
-                  { value: 'auto', label: '自动' },
-                  { value: 'plan', label: '先规划' },
-                ]}
-              />
-              <span>
-                {!run
-                  ? '正在核对最新运行状态…'
-                  : run.active
-                    ? '执行中，可以先写下下一条要求'
-                    : 'Enter 发送 · Shift+Enter 换行'}
+              <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
+              <span className="composer-keyboard-hint">
+                {!run ? '正在核对最新运行状态…' : run.active ? '' : 'Enter 发送 · Shift+Enter 换行'}
               </span>
-              <Button
-                type="primary"
-                htmlType="submit"
-                className="send-message"
-                aria-label={send.confirming ? '重试确认' : '发送消息'}
-                disabled={!send.canSend}
-                loading={send.sending}
-                icon={send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />}
-              >
-                {send.confirming ? '重试确认' : '发送'}
-              </Button>
+              {run?.active && onStop ? (
+                <Button
+                  className="send-message"
+                  aria-label="停止当前执行"
+                  icon={<StopOutlined />}
+                  loading={stopping}
+                  disabled={stopping}
+                  onClick={onStop}
+                >
+                  停止
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  className="send-message"
+                  aria-label={send.confirming ? '重试确认' : '发送消息'}
+                  disabled={!send.canSend}
+                  loading={send.sending}
+                  icon={send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />}
+                >
+                  {send.confirming ? '重试确认' : '发送'}
+                </Button>
+              )}
             </div>
           </form>
         </div>

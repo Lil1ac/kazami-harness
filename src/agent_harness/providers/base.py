@@ -1,7 +1,7 @@
 """运行循环依赖的最小模型接口，不向上层暴露 HTTPX 响应。"""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,3 +43,14 @@ class ModelClient(Protocol):
     async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
         """完成一个模型轮次；内部 HTTP 重试仍属于同一轮。"""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDelta:
+    """已收到的模型增量；只用于展示，完整响应校验前不得触发工具执行。"""
+
+    channel: Literal["text", "reasoning", "tool_arguments"]  # 正文、供应商推理内容或工具参数。
+    text: str  # 本次新增文本，工具通道中为尚未完成的 JSON 片段。
+    tool_index: int | None = None  # 工具在本次模型响应中的稳定位置；文字通道为空。
+    tool_id: str | None = None  # 已收到的完整调用编号，尚未提供时为空。
+    tool_name: str | None = None  # 当前累计工具名，尚未提供时为空。

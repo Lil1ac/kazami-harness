@@ -63,6 +63,8 @@ it('显示真实阻塞原因和证据，取消携带当前版本且不启动运�
   const user = userEvent.setup();
   show();
   expect(await screen.findByText('前置任务未完成')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument();
+  await user.click(screen.getByText('#1 实现接口'));
   await user.click(screen.getByRole('button', { name: '取消任务' }));
   await waitFor(
     /* 只发送一次版本化状态变更。 */ () =>
@@ -86,6 +88,7 @@ it('过期更新错误可见，页面不伪造完成', async () => {
   vi.mocked(mutateTask).mockRejectedValue(new Error('任务已更新，请重新读取后操作。'));
   const user = userEvent.setup();
   show();
+  await user.click(await screen.findByText('#1 实现接口'));
   await user.click(await screen.findByRole('button', { name: '取消任务' }));
   expect(await screen.findByText('任务已更新，请重新读取后操作。')).toBeInTheDocument();
   expect(screen.queryByText('已完成')).not.toBeInTheDocument();
@@ -106,5 +109,6 @@ it('前置重开后保留旧完成证据，但当前进度不再计入待复核�
   show();
   expect(await screen.findByText('任务 · 0/1')).toBeInTheDocument();
   expect(screen.getByText('前置变更，需要复核')).toBeInTheDocument();
+  await userEvent.setup().click(screen.getByText('#1 实现接口'));
   expect(screen.getByText('旧轮检查通过')).toBeInTheDocument();
 });

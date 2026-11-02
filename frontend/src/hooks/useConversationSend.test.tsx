@@ -1,3 +1,4 @@
+import { makeConversationManagement } from '../test/fixtures';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
@@ -23,6 +24,8 @@ vi.mock(
 /** 构造可继续会话，latest 为真实最新轮 ID，不读取远端服务。 */
 function conversation(latest = 'run-a'): ConversationView {
   return {
+    title: '统计日志',
+    management: makeConversationManagement(),
     session_id: 'run-a',
     latest_run_id: latest,
     can_continue: true,
@@ -111,7 +114,9 @@ it('更改技能后网络重试固定原始选择，编辑的新选择留给下�
   vi.mocked(createFollowup)
     .mockRejectedValueOnce(new Error('网络断开'))
     .mockResolvedValueOnce(
-      makeJob(makeRun({ run_id: 'run-b', config: { ...makeRun().config, skills: ['changed-skill'] } })),
+      makeJob(
+        makeRun({ run_id: 'run-b', config: { ...makeRun().config, skills: ['changed-skill'] } }),
+      ),
     );
   const { result, confirmed, rerender } = setup();
   act(

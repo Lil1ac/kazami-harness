@@ -51,7 +51,7 @@ class JobQueue:
     def __init__(self, manager):
         """绑定 manager；构造不恢复执行，已有队列默认暂停等待用户明确恢复。"""
         self.manager = manager  # 复用现有工作区准备、会话和 Runner。
-        self.store = WorkStore(manager.runs_root)  # 任务与队列共用事实仓储。
+        self.store = manager.management.store  # 会话、任务与队列共用事务，避免删除与接纳竞态。
         self.worker: asyncio.Task | None = None  # 唯一队列循环句柄。
         self.paused = any(job["status"] in {"queued", "preparing", "running", "needs_review"} for job in self.list())  # 重启只核对，不自动重放历史动作。
         self.closed = False  # 正在退出时停止出队。
@@ -74,15 +74,32 @@ class JobQueue:
             raise TaskError("job_not_found", "后台作业不存在。")
         return json.loads(row[0])
 
-    def public(self, job: dict) -> dict:
+    def public(self, job: dict, db=None) -> dict:
         """返回 job 可展示字段；排除固定内部提交参数，保留归属、结果和错误。"""
-        return {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy"}}
+        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy"}}
+        session = job.get("session_id")
+        if session:
+            record = self.manager.management.stored(session, db)
+            if record is None:
+                # 未人工整理的续轮也使用首条需求标题，不能把本轮输入当成会话名。
+                from agent_harness.web.conversation_management import ConversationError
+                try:
+                    record = self.manager.management.record(session, db)
+                except ConversationError as error:
+                    if error.code != "conversation_not_found":
+                        raise
+                    # 首轮尚在排队准备、尚无Run时，只展示接纳时固定的作业输入。
+            if record:
+                if record["state"] in {"trashed", "purging", "purged"}:
+                    return {key: value for key, value in {**value, "title": "已删除对话", "project_id": "", "project_label": "已删除对话", "assigned_project": None, "source_path": None, "error": None}.items() if key not in {"source_policy", "workspace_identity"}}
+                value.update(conversation_title=record["title_override"] or record["default_title"], assigned_project=self.manager.management.project(record))
+        return value
 
     def save(self, job: dict) -> None:
         """原子保存 job 并提交状态事件；返回 None，不修改运行结果。"""
         with self.store.transaction() as db:
             db.execute("INSERT OR REPLACE INTO jobs VALUES (?,?)", (job["id"], encode(job)))
-            self.store.event(db, job.get("session_id") or job["id"], {"type": "job_updated", "job": self.public(job)})
+            self.store.event(db, job.get("session_id") or job["id"], {"type": "job_updated", "job": self.public(job, db)})
 
     def reconcile(self) -> None:
         """仅在没有其他宿主执行时核对遗留归属；活动锁存在则只暂停本队列，不改他人状态。"""
@@ -142,6 +159,7 @@ class JobQueue:
             self.manager.get_run(request.parent_run_id)  # 统一不存在与损坏运行的 HTTP 语义。
             parent = self.manager._read_history(request.parent_run_id)
             session = str(parent.manifest.session_id or request.parent_run_id)
+            self.manager.management.require_active(session)
             intent_digest = payload_digest({'parent_run_id': str(request.parent_run_id), **request.followup.model_dump(mode='json', exclude={'request_id'})})
             intent = self.manager.conversations.store.lookup(UUID(session), request.request_id, intent_digest)
             if intent is not None:
@@ -211,14 +229,16 @@ class JobQueue:
                 value = json.loads(old[0])
                 if value["digest"] != digest:
                     raise TaskError("request_conflict", "请求编号已用于其他内容。")
-                return self.public(value)
+                return self.public(value, db)
+            if session:
+                self.manager.management.require_active(session, db)
             count = db.execute("SELECT count(*) FROM jobs WHERE json_extract(body,'$.status') IN ('queued','preparing','running')").fetchone()[0]
             if count >= 100:
                 raise TaskError("queue_full", "后台队列最多接纳一百个未结束请求，请先完成或取消已有工作。")
             if session and any(item["session_id"] == session and item["status"] in {"queued", "preparing", "running", "needs_review"} for item in (json.loads(row[0]) for row in db.execute("SELECT body FROM jobs"))):
                 raise TaskError("session_job_pending", "会话已有待处理作业，请先处理或取消。")
             db.execute("INSERT INTO jobs VALUES (?,?)", (identifier, encode(job)))
-            self.store.event(db, session or identifier, {"type": "job_updated", "job": self.public(job)})
+            self.store.event(db, session or identifier, {"type": "job_updated", "job": self.public(job, db)})
         self._ready[identifier] = asyncio.Event()
         idle = self.worker is None or self.worker.done()
         self.kick()
@@ -246,6 +266,8 @@ class JobQueue:
                     return
                 lease.acquire()
                 self.manager._execution_lease = lease
+                if job.get("session_id"):
+                    self.manager.management.require_active(job["session_id"])
                 if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:
                     raise TaskError("workspace_changed", "排队期间目录身份发生变化，请重新打开项目。")
                 selected = next((item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == job["project_id"]), None)

@@ -9,10 +9,14 @@ import {
   DownOutlined,
   RightOutlined,
   MenuOutlined,
+  ThunderboltOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
+import { ThemeToggle } from '../theme';
 import { Link, NavLink, useLocation, useMatch } from 'react-router';
 import { errorMessage, getConversation, getConversations, getOptions, getRun } from '../api';
 import type { LocalProjectOption } from '../types';
+import { ConversationActions } from './ConversationActions';
 
 /** 项目下按会话展示最新五条，展开才查询；更多会话由项目页完整分页。 */
 function ProjectGroup({
@@ -98,6 +102,7 @@ function ProjectGroup({
                       <span>{item.title}</span>
                       {item.latest?.active && <i className="sidebar-running" title="正在执行" />}
                     </Link>
+                    <ConversationActions value={item.management} />
                   </li>
                 ),
               )}
@@ -146,14 +151,17 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
   const activeProject =
     projectRoute?.params.projectId ||
     (runRoute
-      ? conversation.data?.source?.registered
-        ? conversation.data.source.id
+      ? conversation.data?.management.assigned_project?.available
+        ? conversation.data.management.assigned_project.id
         : undefined
       : undefined);
   return (
     <div className="workspace-nav-content">
       <nav className="workspace-nav-links" aria-label="主导航">
-        <NavLink to="/jobs" onClick={onNavigate}><span>后台工作</span></NavLink>
+        <NavLink to="/jobs" onClick={onNavigate}>
+          <AppstoreOutlined />
+          <span>后台工作</span>
+        </NavLink>
         <NavLink
           to="/runs?new=1"
           aria-label="新建对话"
@@ -182,6 +190,13 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
       </nav>
       <div className="sidebar-projects">
         <div className="sidebar-projects-title">项目</div>
+        <Link
+          className="sidebar-ungrouped"
+          to="/runs?view=history&group=ungrouped"
+          onClick={onNavigate}
+        >
+          未分组
+        </Link>
         {options.error && <p className="sidebar-query-error">无法刷新项目列表</p>}
         {options.data ? (
           options.data.recent_projects.length ? (
@@ -204,6 +219,7 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
         )}
       </div>
       <nav className="workspace-nav-links sidebar-settings" aria-label="设置">
+        <ThemeToggle />
         <NavLink to="/settings" onClick={onNavigate}>
           <SettingOutlined />
           <span>运行配置</span>
@@ -229,7 +245,12 @@ export function WorkspaceNavigation() {
     <>
       <aside className="app-sidebar" aria-label="项目与会话导航">
         <Link to="/runs" className="brand" aria-label="Agent Harness 首页">
-          Agent <strong>Harness</strong>
+          <span className="brand-symbol">
+            <ThunderboltOutlined />
+          </span>
+          <span>
+            Agent <strong>Harness</strong>
+          </span>
         </Link>
         <div className="desktop-navigation">
           <NavigationContent onNavigate={close} />

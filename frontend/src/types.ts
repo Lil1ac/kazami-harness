@@ -346,12 +346,14 @@ export interface TaskSnapshot {
 
 /** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
 export interface JobView {
+  conversation_title?: string; // 已建立会话的人工有效标题；首轮排队尚无会话时省略。
+  assigned_project?: { id: string; label: string; path: string; available: boolean } | null; // 会话当前整理归属，执行来源仍看project_id。
   id: string; // 同时是客户端幂等请求编号。
   run_id: string; // 宿主预分配的运行编号，queued/preparing 时尚未建立。
   session_id: string | null; // 首轮开始前为空。
   title: string; // 原始输入的精简标题。
-  project_id: string; // 固定项目归属。
-  project_label: string; // 接纳时固定的项目名称，便于筛选和辨认工作归属。
+  project_id: string; // 固定执行来源；删除后为空字符串，不再公开来源。
+  project_label: string; // 接纳时的执行项目名，删除后显示已删除。
   status:
     | 'queued'
     | 'preparing'
@@ -569,6 +571,8 @@ export interface ConversationTurn {
 
 /** 会话读取结果；可继续为初步条件，提交时后端会重新核验实际代码。 */
 export interface ConversationView {
+  title: string; // 后端统一的有效标题，人工命名优先。
+  management: ConversationManagement; // 当前会话管理状态，与逐轮执行来源分开。
   source?: ConversationSource | null; // 用于返回所属项目和在相同来源新建会话。
   continuation_notice?: string | null; // 中断后可以普通发送继续时的非阻断提示。
   session_id: string; // 会话根编号。
@@ -605,6 +609,7 @@ export interface ConversationRunState {
 export interface ConversationSummary {
   session_id: string; // 稳定会话编号。
   title: string; // 首次用户要求形成的标题。
+  management: ConversationManagement; // 标题、整理归属、生命周期及后端可用操作。
   entry_run_id: string; // 正常进入最新轮，异常时进入可读轮次。
   latest_run_id: string | null; // 以权威会话关系为准，未知时为空。
   turn_count: number | null; // 已接纳用户轮数，记录损坏时未知。
@@ -621,6 +626,30 @@ export interface ConversationPage {
   total: number; // 筛选后的会话总数。
   busy_run_id: string | null; // 真实全局单槽。
 }
+
+/** 会话管理视图；整理项目不授予在另一个目录继续执行的权限。 */
+export interface ConversationManagement {
+  session_id: string; // 首轮UUID，所有管理操作绑定此编号。
+  title: string; // 人工标题优先，默认标题来自首条需求。
+  title_override: string | null; // null表示使用默认标题。
+  assigned_project_id: string | null; // null表示未分组。
+  assigned_project: { id: string; label: string; path: string; available: boolean } | null; // 整理归属快照。
+  state: 'active' | 'archived' | 'trashed' | 'purging' | 'purged'; // 管理生命周期，独立于执行状态。
+  pinned_at: string | null; // UTC置顶时间；归档及恢复保留。
+  deleted_at: string | null; // UTC删除时间；恢复后清空。
+  restore_state: 'active' | 'archived'; // 恢复时原管理状态。
+  revision: number; // 人工变更版本，默认0。
+  can_organize: boolean; // 后端核验作业、准备和清理后允许移动、归档或删除。
+  blocked_reason: string | null; // 不可整理的真实原因。
+  can_purge: boolean; // 回收站且工作树已处理才允许彻底删除。
+  purge_blocked_reason: string | null; // 不可清理原因或上次清理错误。
+  run_count: number; // 删除确认显示的轮次数。
+  memory_references: number; // 另存项目记忆的引用数，清理不连带删除。
+}
+
+/** 明确的单条管理动作；执行来源不可在此修改。 */
+export type ConversationAction =
+  'rename' | 'move' | 'pin' | 'unpin' | 'archive' | 'unarchive' | 'trash' | 'restore';
 
 /** 原目录相对本轮开始状态的变化，不提供自动保留、丢弃或回滚原目录操作。 */
 export interface LocalChangeView {
@@ -694,7 +723,13 @@ export interface MemoryEntry extends MemoryContent {
   revision: number; // 修改必须匹配的版本。
   status: 'active' | 'proposed' | 'rejected' | 'deleted'; // 确认生命周期。
   evidence_refs: { path: string; sha256: string }[]; // 保存时证据指纹；仅事实据此阻止旧断言使用。
-  source: { kind: string; run_id?: string; seq?: number | null; sha256?: string }; // 宿主核验来源。
+  source: {
+    kind: string;
+    run_id?: string;
+    seq?: number | null;
+    sha256?: string;
+    unavailable?: boolean;
+  }; // 宿主核验来源。
   replacements: MemoryReplacement[]; // 明确选择的替代目标。
   conflicts?: MemoryConflict[]; // 当前同主题冲突，候选审阅使用。
   content_sha256: string; // 内容和条件稳定摘要。
@@ -722,9 +757,24 @@ export interface MemorySnapshot {
   use: boolean; // 本轮读取选择。
   capture: boolean; // 本轮候选选择。
   selected: MemoryEntry[]; // 最近一次输入的类型视图，reference 补充正文不展开。
-  uses?: { model_turn: number; phase: string; paths: string[]; selected: MemoryEntry[]; input_text: string; exposed_rule_ids: string[] }[]; // 各次实际输入及完整可见约定，包含显式回读。
+  uses?: {
+    model_turn: number;
+    phase: string;
+    paths: string[];
+    selected: MemoryEntry[];
+    input_text: string;
+    exposed_rule_ids: string[];
+  }[]; // 各次实际输入及完整可见约定，包含显式回读。
   skipped: { id: string; title: string; reason: string }[]; // 跳过原因。
-  reads: { id: string; revision: number; content: string; sha256: string; size_bytes: number; next_offset: number | null; eof: boolean }[]; // 实际读取的 UTF-8 分页。
+  reads: {
+    id: string;
+    revision: number;
+    content: string;
+    sha256: string;
+    size_bytes: number;
+    next_offset: number | null;
+    eof: boolean;
+  }[]; // 实际读取的 UTF-8 分页。
   proposals?: MemoryEntry[]; // 本轮提出的候选事实，当前决定通过管理接口读取。
 }
 

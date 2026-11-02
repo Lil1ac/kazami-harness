@@ -80,6 +80,7 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     """
     context.consume("model")
     context.request_turn = context.result.model_turns
+    context.request_purpose = purpose
     context.emit("model_request_started", {
         "model_turn": context.request_turn,
         "requested_model": context.manifest.config.requested_model,

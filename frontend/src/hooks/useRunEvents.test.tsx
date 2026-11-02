@@ -63,6 +63,40 @@ afterEach(
 );
 
 describe('单任务 SSE 生命周期', /* 覆盖补齐、重连、终态与卸载，不只镜像状态更新。 */ () => {
+  it('长文字跨原始事件窗口仍完整，终态重读期间不清空已显示内容', async () => {
+    const incoming = Array.from(
+      { length: 520 },
+      /* 连续文字增量覆盖默认400条窗口。 */ (_, index) => ({
+        ...makeEvent(index + 1),
+        type: 'model_delta',
+        payload: { model_turn: 1, channel: 'text', delta: '字' },
+      }),
+    );
+    vi.mocked(getEvents).mockImplementation(
+      /* 按实际游标分页，不人为跳过中间增量。 */ async (_id, after = 0, limit = 100) => ({
+        items: incoming.slice(after, after + limit),
+        has_more: after + limit < incoming.length,
+        last_seq: 520,
+      }),
+    );
+    const { result, rerender } = renderHook(
+      /* 状态变化仍保留同一运行的可读文字。 */ ({ active }) =>
+        useRunEvents('run-a', active, vi.fn()),
+      { initialProps: { active: true } },
+    );
+    await waitFor(
+      /* 补齐所有页后才连接实时流。 */ () => expect(FakeSource.instances).toHaveLength(1),
+    );
+    expect(result.current.events).toHaveLength(400);
+    expect(result.current.timeline).toHaveLength(1);
+    expect(result.current.timeline[0].payload.text).toBe('字'.repeat(520));
+    rerender({ active: false });
+    expect(result.current.timeline[0].payload.text).toBe('字'.repeat(520));
+    await waitFor(
+      /* 完成再读不会把文字重复一遍。 */ () => expect(result.current.connection).toBe('closed'),
+    );
+    expect(result.current.timeline[0].payload.text).toBe('字'.repeat(520));
+  });
   it('首次历史已包含终态时刷新会话，不依赖已经错过的 SSE 通知', async () => {
     // 复现快速规划结束时运行已不活跃，但会话查询还保留占槽状态的跨接口竞态。
     vi.mocked(getEvents).mockResolvedValue({

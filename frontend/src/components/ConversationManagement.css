@@ -1,0 +1,129 @@
+/* 复选、正文链接和管理菜单分列，菜单点击不会触发会话导航。 */
+.conversation-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.conversation-list-row > a {
+  flex: 1;
+  min-width: 0;
+}
+.conversation-actions {
+  flex-shrink: 0;
+}
+.conversation-actions .ant-btn {
+  width: 32px;
+  height: 32px;
+}
+.conversation-target {
+  width: 100%;
+}
+.conversation-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+.conversation-history-controls .ant-input-search {
+  flex: 1;
+  min-width: 160px;
+  max-width: 340px;
+}
+.conversation-history-controls .ant-select {
+  min-width: 140px;
+}
+.conversation-batch-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 0;
+}
+.conversation-row-meta > small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.sidebar-project-conversations li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-project-conversations li > a {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-project-conversations .conversation-actions .ant-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--muted);
+}
+.sidebar-ungrouped {
+  display: block;
+  margin: 0 0 10px 26px;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .conversation-history-controls {
+    gap: 8px;
+  }
+  .conversation-history-controls .ant-input-search {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .conversation-history-controls .ant-select {
+    flex: 1;
+    min-width: 0;
+  }
+  .conversation-list-row {
+    gap: 6px;
+  }
+  .conversation-list-row > a {
+    gap: 8px;
+  }
+  .conversation-list-row .conversation-row-meta {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+    max-width: 42%;
+  }
+}
+
+/* 分类是浏览视图而非表单字段；批量选择只在显式多选时出现。 */
+.conversation-category-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.conversation-category-tabs button {
+  position: relative;
+  padding: 14px 0 11px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.conversation-category-tabs button:hover {
+  color: var(--text);
+}
+.conversation-category-tabs button[aria-selected='true'] {
+  color: var(--text);
+  font-weight: 550;
+}
+.conversation-category-tabs button[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.conversation-history-controls {
+  align-items: center;
+}
+.conversation-history-controls .has-filter {
+  color: var(--accent);
+  background: var(--accent-soft);
+}

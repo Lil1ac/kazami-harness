@@ -1,5 +1,7 @@
 """使用真实适配器与 MockTransport 验证模型—工具闭环，全程不联网。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 import json
 from pathlib import Path
@@ -52,7 +54,7 @@ def run_script(value: RunManifest, root: Path, replies: list[dict | int]):
         """依次消费预置响应，整数模拟 HTTP 错误码，字典模拟成功响应。"""
         requests.append(json.loads(request.content))
         item = replies[len(requests) - 1]
-        return httpx.Response(item, json={"error": SECRET}) if isinstance(item, int) else httpx.Response(200, json=item)
+        return httpx.Response(item, json={"error": SECRET}) if isinstance(item, int) else model_stream_response(200, json=item)
 
     outcome = asyncio.run(run_task(value, root, SECRET, transport=httpx.MockTransport(handler)))
     return outcome, requests, RunStore.read(root, str(value.run_id))
@@ -142,7 +144,7 @@ def test_request_timeout_persists_exactly_one_terminal_event(tmp_path: Path, kin
     async def handler(request):
         """延迟响应超过配置预算，供总超时与单轮超时用例复用。"""
         await asyncio.sleep(5)
-        return httpx.Response(200, json=response(content="不应到达"))
+        return model_stream_response(200, json=response(content="不应到达"))
 
     outcome = asyncio.run(run_task(value, tmp_path / "records", SECRET, transport=httpx.MockTransport(handler)))
     assert outcome.result.execution_status == "timed_out"
@@ -167,7 +169,7 @@ def test_cancellation_during_http_is_saved_and_not_retried(tmp_path: Path):
             attempts.append(request)
             entered.set()
             await asyncio.sleep(5)
-            return httpx.Response(200, json=response(content="不应到达"))
+            return model_stream_response(200, json=response(content="不应到达"))
 
         running = asyncio.create_task(run_task(value, tmp_path / "records", SECRET, transport=httpx.MockTransport(handler)))
         await entered.wait()
@@ -242,7 +244,7 @@ def test_cancellation_inside_tool_pairs_remaining_batch_and_stops_http(tmp_path:
         def handler(request):
             """返回包含两个调用的固定批次，并记录是否误发了后续模型请求。"""
             requests.append(request)
-            return httpx.Response(200, json=response(call("one"), call("two")))
+            return model_stream_response(200, json=response(call("one"), call("two")))
 
         task = asyncio.create_task(run_task(value, tmp_path / "records", SECRET, transport=httpx.MockTransport(handler), executor=executor))
         await entered.wait()
@@ -273,7 +275,7 @@ def test_internal_tool_fault_pairs_batch_without_echoing_exception(tmp_path: Pat
 
     def handler(request):
         """返回两个工具调用，使测试同时覆盖当前失败和剩余调用被跳过的结果。"""
-        return httpx.Response(200, json=response(call("one"), call("two")))
+        return model_stream_response(200, json=response(call("one"), call("two")))
 
     outcome = asyncio.run(run_task(value, tmp_path / "records", SECRET, transport=httpx.MockTransport(handler), executor=BrokenExecutor()))
     history = RunStore.read(tmp_path / "records", str(value.run_id))

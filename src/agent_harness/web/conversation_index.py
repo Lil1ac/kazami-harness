@@ -1,6 +1,7 @@
 """从现有运行和会话记录构建只读导航索引，不保存第二份会话事实。"""
 
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -77,18 +78,20 @@ class ConversationIndex:
         except SessionError as failure:
             error = failure.message
         updated = max(item.events[-1].time_utc if item.events else view.created_at for view, item in entries)
+        management = self.manager.management.view(str(session_id), history=first_history)
         return ConversationSummary(
-            session_id=session_id, title=" ".join(first.prompt.split())[:200] or "未命名会话",
+            session_id=session_id, title=management.title, management=management,
             entry_run_id=latest_id if latest is not None else first.run_id,
             latest_run_id=latest_id, turn_count=count, created_at=first.created_at,
             updated_at=updated, source=source, latest=latest, error=error,
         )
 
-    def list(self, offset: int, limit: int, project_id: str | None = None, status: str | None = None) -> ConversationPage:
-        """返回聚合后的会话页；offset从0、limit为1..100，项目筛选匹配当前完整来源身份。
+    def list(self, offset: int, limit: int, project_id: str | None = None, status: str | None = None, *, state: str = "active", query: str = "", ungrouped: bool = False) -> ConversationPage:
+        """返回聚合后的会话页；offset从0、limit为1..100，项目筛选匹配当前整理归属。
 
         project_id=None查看全部历史（包括已移除登记），status=None不过滤最新执行状态。
-        非法记录不导致整个列表失败；列表只读，不创建会话、触碰源码或启动执行。
+        state选择正常、归档或回收站；query搜索名称及仍可读取的首条需求，ungrouped只看未分组。
+        非法运行不导致整个列表失败；列表只读，不创建会话、触碰源码或启动执行。
         """
         from agent_harness.web.service import WebServiceError
 
@@ -107,10 +110,33 @@ class ConversationIndex:
                 except (ValueError, StorageError, WebServiceError):
                     continue
                 groups.setdefault(view.session_id or identifier, []).append((view, history))
-        summaries = [self._summary(identifier, entries, registry) for identifier, entries in groups.items()]
+        summaries = [self._summary(identifier, entries, registry) for identifier, entries in groups.items()
+                     if not (self.manager.management.stored(str(identifier)) or {}).get("state") in {"purging", "purged"}]
+        if state == "trashed" and self.manager.management.store.path.exists():
+            with self.manager.management.store.transaction() as db:
+                pending = db.execute("SELECT id FROM conversations WHERE json_extract(body,'$.state')='purging'").fetchall()
+            for row in pending:
+                management = self.manager.management.view(row[0])
+                summaries.append(ConversationSummary(session_id=UUID(row[0]), title=management.title, management=management,
+                    entry_run_id=UUID(row[0]), latest_run_id=None, turn_count=management.run_count, created_at=datetime.fromisoformat(management.deleted_at),
+                    updated_at=datetime.fromisoformat(management.deleted_at), source=None, latest=None, error=management.purge_blocked_reason))
+        summaries = [item for item in summaries if item.management.state == state or (state == "trashed" and item.management.state == "purging")]
         if project_id is not None:
-            summaries = [item for item in summaries if item.source is not None and item.source.id == project_id and item.source.registered]
+            summaries = [item for item in summaries if item.management.assigned_project_id == project_id and item.management.assigned_project and item.management.assigned_project["available"]]
+        if ungrouped:
+            summaries = [item for item in summaries if item.management.assigned_project_id is None]
+        if query.strip():
+            needle = query.strip().casefold()
+            def matches(item: ConversationSummary) -> bool:
+                """匹配item名称或首条需求；部分清理后需求已不可读时，仅按保留名称匹配。"""
+                if needle in item.title.casefold():
+                    return True
+                try:
+                    return needle in self.manager._read_history(item.session_id).manifest.task.prompt.casefold()
+                except StorageError:
+                    return False
+            summaries = [item for item in summaries if matches(item)]
         if status is not None:
             summaries = [item for item in summaries if item.latest is not None and item.latest.execution_status == status]
-        summaries.sort(key=lambda item: (item.updated_at, str(item.session_id)), reverse=True)
+        summaries.sort(key=lambda item: ((item.management.deleted_at or "") if state == "trashed" else (item.management.pinned_at or ""), item.updated_at, str(item.session_id)), reverse=True)
         return ConversationPage(items=summaries[offset:offset + limit], total=len(summaries), busy_run_id=self.manager.busy_run_id)

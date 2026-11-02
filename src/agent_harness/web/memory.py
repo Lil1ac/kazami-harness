@@ -52,6 +52,7 @@ def install_memory_routes(app: FastAPI, manager) -> None:
         """将用户 body 保存到 service；可选来源 Run 须同一项目，返回幂等回执。"""
         provenance = {"kind": "manual_confirmation"}
         if body.source_run_id:
+            manager.management.check_run(str(body.source_run_id), writing=True)
             source = run_service(body.source_run_id)
             if store.read(source.source)["scope_id"] != store.read(service.source)["scope_id"]:
                 raise MemoryError("memory_source_invalid", "不能关联其他项目的运行。")

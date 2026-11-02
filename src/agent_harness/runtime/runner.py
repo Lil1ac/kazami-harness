@@ -14,7 +14,7 @@ import httpx
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, validate_python_execution
 from agent_harness.config import ConfigurationError
 from agent_harness.schemas import ArtifactRef, RunManifest, RunResult, VerificationAttempt, VerificationResult
-from agent_harness.providers.base import ModelClient, ModelError
+from agent_harness.providers.base import ModelClient, ModelDelta, ModelError
 from agent_harness.providers.deepseek import DeepSeekClient
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.tools.registry import ToolExecutor
@@ -58,6 +58,7 @@ class RunContext:
     deadline: float  # 事件循环单调时钟上的绝对时间，不是 UTC 时间戳。
     event_count: int = 1
     phase: str = "starting"
+    request_purpose: str = "execution"  # 当前请求用途；内部摘要不进入用户对话流。
     started_at: float = 0.0  # 本次运行的单调起点，用于计量实际执行时长。
     record_root: Path | None = None  # 子日志嵌套保存时仍使用真实运行根保护文件和记忆边界；None取日志父目录。
     budget_parent: "RunContext | None" = None  # 子执行的共享预算归属，根运行为None。
@@ -130,6 +131,15 @@ class RunContext:
             self.phase = "subagent_execution"
         if self.on_event is not None:
             self.on_event(kind, payload or {})
+
+    def model_delta(self, delta: ModelDelta) -> None:
+        """记录 delta 的展示事件；用请求上下文隔离父子并发，内部摘要不公开，返回 None。"""
+        owner = REQUEST_CONTEXT.get() or self
+        if owner.request_purpose == "summary":
+            return
+        owner.emit("model_delta", {"model_turn": owner.request_turn, "channel": delta.channel,
+                                   "delta": delta.text, "tool_index": delta.tool_index,
+                                   "call_id": delta.tool_id, "name": delta.tool_name})
 
     def http_attempt(self, attempt: int) -> None:
         """登记单轮 HTTP 尝试；出现重试时，用量可能含未知部分，因此取消完整标记。"""
@@ -396,7 +406,7 @@ async def _run_task(
             if model_client is not None:
                 await run_agent(context, model_client, tool_executor, on_completion=check_completion)
             else:
-                async with DeepSeekClient(api_key, manifest.config, on_attempt=context.http_attempt, transport=transport) as client:
+                async with DeepSeekClient(api_key, manifest.config, on_attempt=context.http_attempt, on_delta=context.model_delta, transport=transport) as client:
                     await run_agent(context, client, tool_executor, on_completion=check_completion)
     except TimeoutError:
         if result.execution_status == "completed" and verifier is not None:

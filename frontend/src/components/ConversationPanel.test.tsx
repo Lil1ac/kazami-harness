@@ -1,3 +1,4 @@
+import { makeConversationManagement } from '../test/fixtures';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -32,6 +33,8 @@ vi.mock(
 /** 构造会话响应；覆盖项按字段替换，默认只有一个可继续的可信终态。 */
 function conversation(overrides: Partial<ConversationView> = {}): ConversationView {
   return {
+    title: '统计日志',
+    management: makeConversationManagement(),
     session_id: 'run-a',
     latest_run_id: 'run-a',
     can_continue: true,

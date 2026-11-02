@@ -1,3 +1,4 @@
+import { makeConversationManagement } from './test/fixtures';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -60,6 +61,12 @@ const beta: LocalProjectOption = {
 const summary: ConversationSummary = {
   session_id: 'a-1',
   title: '修复导出逻辑',
+  management: makeConversationManagement({
+    session_id: 'a-1',
+    title: '修复导出逻辑',
+    assigned_project_id: alpha.id,
+    assigned_project: { ...alpha, available: true },
+  }),
   entry_run_id: 'a-3',
   latest_run_id: 'a-3',
   turn_count: 3,
@@ -83,10 +90,18 @@ const other: ConversationSummary = {
   entry_run_id: 'b-1',
   latest_run_id: 'b-1',
   title: '另一个项目的需求',
+  management: makeConversationManagement({
+    session_id: 'b-1',
+    title: '另一个项目的需求',
+    assigned_project_id: beta.id,
+    assigned_project: { ...beta, available: true },
+  }),
   turn_count: 1,
   source: { ...beta, execution_mode: 'local', registered: true },
 }; // 不得混入Alpha列表。
 const conversation: ConversationView = {
+  title: summary.title,
+  management: summary.management,
   session_id: 'a-1',
   latest_run_id: 'a-3',
   source: summary.source,

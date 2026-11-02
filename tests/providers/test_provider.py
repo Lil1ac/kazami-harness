@@ -1,5 +1,7 @@
 """离线验证供应商协议、可重试边界与单轮超时，不访问真实模型。"""
 
+from tests.helpers.streaming import model_stream_response
+
 import asyncio
 from copy import deepcopy
 import json
@@ -60,7 +62,7 @@ def test_request_and_response_metadata_are_preserved():
     def handler(request):
         """捕获真实构造的请求，返回含用量和指纹的响应以检查字段筛选。"""
         captured.append(request)
-        return httpx.Response(200, json=envelope(
+        return model_stream_response(200, json=envelope(
             system_fingerprint="fingerprint-1",
             usage={
                 "prompt_tokens": 17, "completion_tokens": 5, "total_tokens": 22,
@@ -75,7 +77,7 @@ def test_request_and_response_metadata_are_preserved():
     assert request.headers["Authorization"] == f"Bearer {SECRET}"
     assert body == {
         "model": "requested-model", "messages": MESSAGES, "tools": TOOLS,
-        "stream": False, "thinking": {"type": "disabled"}, "max_tokens": 123,
+        "stream": True, "stream_options": {"include_usage": True}, "thinking": {"type": "disabled"}, "max_tokens": 123,
     }
     assert result.response_model == "actual-response-model"
     assert result.response_id == "response-123"
@@ -98,7 +100,7 @@ def test_multiple_calls_keep_arguments_and_reasoning_for_followup():
     def handler(request):
         """保存每次请求内容，并持续返回包含多工具调用的固定响应。"""
         requests.append(json.loads(request.content))
-        return httpx.Response(200, json=envelope(message, "tool_calls"))
+        return model_stream_response(200, json=envelope(message, "tool_calls"))
     async def operation():
         """连续请求两轮，将首轮完整 assistant 消息放入第二轮历史以验证回传。"""
         async with DeepSeekClient(
@@ -138,7 +140,7 @@ def test_invalid_protocol_is_not_retried(message, finish_reason):
     attempts = []
     def handler(request):
         """返回当前参数化用例指定的非法响应，供协议校验测试使用。"""
-        return httpx.Response(200, json=envelope(message, finish_reason))
+        return model_stream_response(200, json=envelope(message, finish_reason))
     with pytest.raises(ModelError) as error:
         invoke(handler, on_attempt=attempts.append)
     assert error.value.code == "model_protocol_error"
@@ -152,7 +154,7 @@ def test_invalid_protocol_is_not_retried(message, finish_reason):
 def test_incomplete_response_never_returns_executable_tools(finish_reason, code):
     """验证截断或被过滤的响应直接报错，即使带有工具调用也不交付执行。"""
     with pytest.raises(ModelError) as error:
-        invoke(lambda request: httpx.Response(200, json=envelope(
+        invoke(lambda request: model_stream_response(200, json=envelope(
             {"role": "assistant", "tool_calls": [tool_call()]}, finish_reason,
         )))
     assert error.value.code == code
@@ -201,7 +203,7 @@ def test_transient_status_then_success_keeps_single_model_turn():
         """首次模拟 503，后续返回成功响应，供故障恢复测试使用。"""
         if len(attempts) == 1:
             return httpx.Response(503, text=SECRET)
-        return httpx.Response(200, json=envelope())
+        return model_stream_response(200, json=envelope())
     result = invoke(handler, on_attempt=attempts.append)
     assert result.message["content"] == "已完成"
     assert attempts == [1, 2]
@@ -254,13 +256,13 @@ def test_invalid_json_is_sanitized_and_not_retried():
 def test_usage_rejects_invalid_token_counts(usage):
     """验证 token 计数拒绝布尔值、负数、字符串和错误结构。"""
     with pytest.raises(ModelError) as error:
-        invoke(lambda request: httpx.Response(200, json=envelope(usage=usage)))
+        invoke(lambda request: model_stream_response(200, json=envelope(usage=usage)))
     assert error.value.code == "model_protocol_error"
 
 
 def test_missing_usage_is_unknown_instead_of_zero():
     """验证供应商未提供用量时保留 None，避免将未知计费误认为零。"""
-    result = invoke(lambda request: httpx.Response(200, json=envelope()))
+    result = invoke(lambda request: model_stream_response(200, json=envelope()))
     assert result.usage is None
 
 
@@ -270,7 +272,7 @@ def test_single_turn_timeout_includes_http_request():
     async def handler(request):
         """模拟耗时超过单轮预算的服务响应，让外层超时取消等待。"""
         await asyncio.sleep(1)
-        return httpx.Response(200, json=envelope())
+        return model_stream_response(200, json=envelope())
     with pytest.raises(ModelError) as error:
         invoke(handler, config=RunConfig(limits=RunLimits(model_turn_timeout_seconds=0.02)), on_attempt=attempts.append)
     assert error.value.code == "model_timeout"
@@ -316,7 +318,7 @@ def test_client_requires_async_context_and_can_omit_tools():
     def handler(request):
         """捕获无工具请求的实际 JSON，并返回正常响应供上下文测试使用。"""
         captured.append(json.loads(request.content))
-        return httpx.Response(200, json=envelope())
+        return model_stream_response(200, json=envelope())
     async def operation():
         """先验证上下文外请求失败，再进入上下文发送一次无工具请求。"""
         client = DeepSeekClient(SECRET, RunConfig(), transport=httpx.MockTransport(handler))

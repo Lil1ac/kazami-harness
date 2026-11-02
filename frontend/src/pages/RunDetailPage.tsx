@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Drawer, Popconfirm, Skeleton } from 'antd';
-import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Drawer, Skeleton } from 'antd';
+import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import type { ApiError } from '../api';
 import { cancelRun, errorMessage, getConversation, getOptions, getRun } from '../api';
+import { ConversationActions } from '../components/ConversationActions';
+import { ConversationRecovery } from '../components/ConversationRecovery';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { mergeConfirmedRun } from '../conversation';
 import { RunStatus } from '../components/RunStatus';
@@ -34,7 +37,9 @@ function useNarrowWorkspace(): boolean {
 
 /** 校验详情分类；空值或未知标签回到结果，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
-  return value && ['result', 'files', 'diagnostics'].includes(value) ? value : 'result';
+  return value && ['tasks', 'plan', 'agents', 'result', 'files', 'diagnostics'].includes(value)
+    ? value
+    : 'result';
 }
 
 /** 读取路由运行后，以稳定session_id挂载工作区；新轮导航不会重建对话与输入。 */
@@ -55,6 +60,10 @@ export function RunDetailPage() {
     refetchInterval: /* 准备、执行与快照占槽时更新继续条件，终态停止轮询。 */ (state) =>
       state.state.data?.busy_run_id || state.state.data?.blocked_code === 'run_busy' ? 1500 : false,
   });
+  const accessError = run.error || conversation.error;
+  const deletedError = accessError as ApiError | null;
+  if (deletedError?.details?.session_id && deletedError.code === 'conversation_deleted')
+    return <ConversationRecovery id={deletedError.details.session_id} />;
   if (run.isPending || (run.data && conversation.isPending))
     return (
       <div className="session-loading">
@@ -172,7 +181,7 @@ function SessionWorkspace({
     /* 标题使用所选轮次，旧测试和新运行分别展示。 */ (turn) => turn.run_id === selectedId,
   );
   const detailTitle = '第 ' + (selectedTurn?.turn_index || '—') + ' 轮详情';
-  const title = conversation.turns[0]?.prompt.replace(/\s+/g, ' ').trim() || '任务会话';
+  const title = conversation.title; // 所有入口共享后端有效标题，改名不改原消息。
   const inspector = latest ? (
     <RunInspector
       selectedId={selectedId}
@@ -180,6 +189,7 @@ function SessionWorkspace({
       liveEvents={events}
       tab={tab}
       onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
+      readOnly={conversation.management.state !== 'active'}
     />
   ) : null;
   return (
@@ -187,19 +197,21 @@ function SessionWorkspace({
       <header className="session-header">
         <Link
           to={
-            conversation.source?.registered
-              ? '/projects/' + encodeURIComponent(conversation.source.id)
+            conversation.management.assigned_project?.available
+              ? '/projects/' + encodeURIComponent(conversation.management.assigned_project.id)
               : '/runs?view=history'
           }
           className="session-back"
-          aria-label={conversation.source?.registered ? '返回项目会话' : '返回全部会话'}
+          aria-label={
+            conversation.management.assigned_project?.available ? '返回项目会话' : '返回全部会话'
+          }
         >
           <ArrowLeftOutlined />
         </Link>
         <div className="session-heading">
           <h1 title={title}>{title}</h1>
           <p>
-            {conversation.source?.label || latest?.project?.project_label || '文件任务'}
+            {conversation.management.assigned_project?.label || '未分组'}
             <span>·</span>
             {conversation.turns.length} 轮对话
           </p>
@@ -209,28 +221,24 @@ function SessionWorkspace({
               <code>{latest.workspace}</code>
             </p>
           )}
+          {conversation.management.assigned_project_id !== conversation.source?.id &&
+            conversation.source && (
+              <p className="session-directory">
+                执行来源：{conversation.source.label}，继续发送仍使用原工作目录和记忆。
+              </p>
+            )}
         </div>
         <div className="session-header-actions">
+          <ConversationActions
+            value={conversation.management}
+            onChanged={
+              /* 当前对话删除后离开消息页；移动及命名保留草稿。 */ (updated) => {
+                if (['trashed', 'purging', 'purged'].includes(updated.state))
+                  void navigate('/runs?view=history&state=trashed');
+              }
+            }
+          />
           {latest && <RunStatus run={latest} />}
-          {latest?.active && (
-            <Popconfirm
-              title="停止当前执行？"
-              description="已有修改与记录保留，后端会完成进程清理。"
-              okText="停止执行"
-              cancelText="继续运行"
-              onConfirm={/* 明确确认才中断最新轮。 */ () => cancellation.mutate(latest.run_id)}
-            >
-              <Button
-                danger
-                aria-label="停止当前执行"
-                icon={<StopOutlined />}
-                loading={latest.cancelling || cancellation.isPending}
-                disabled={latest.cancelling || cancellation.isPending}
-              >
-                停止
-              </Button>
-            </Popconfirm>
-          )}
           <Button
             type="text"
             aria-label={panelOpen ? '收起详情' : '查看详情'}
@@ -241,6 +249,9 @@ function SessionWorkspace({
           />
         </div>
       </header>
+      {conversation.management.state === 'archived' && (
+        <Alert type="info" title="对话已归档；取消归档后可继续发送或处理计划。" />
+      )}
       {(refreshError || query.error || cancellation.error) && (
         <Alert
           className="session-refresh-warning"
@@ -254,10 +265,15 @@ function SessionWorkspace({
         <ConversationPanel
           run={latest}
           conversation={conversation}
-          events={events.events}
+          events={events.timeline}
           skills={options.data?.skills || []}
           onInspect={inspect}
           onConfirmed={confirmed}
+          onStop={
+            /* 用户明确停止当前轮，草稿与已有输出保持可读。 */ () =>
+              latest && cancellation.mutate(latest.run_id)
+          }
+          stopping={Boolean(latest?.cancelling || cancellation.isPending)}
         />
         {!narrow && panelOpen && (
           <aside className="session-inspector" aria-label="运行详情">

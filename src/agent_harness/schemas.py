@@ -567,6 +567,8 @@ class ArtifactRef(DataModel):
 
 # 独立验收的真实执行结果；未运行验收时 RunResult.verification 为 None。
 class VerificationResult(DataModel):
+    code_before: str | None = None  # 检查开始的Git规范源码指纹；普通目录或无法完整核对时为None。
+    code_after: str | None = None  # 检查结束的同口径指纹；与开始不同则原通过结论不适用于结束代码。
     status: Literal["passed", "failed", "error"]  # 内容通过、内容不符、验收运行异常。
     reason: str  # 宿主生成的稳定原因码，不使用模型声明或异常正文。
     exit_code: int | None = None  # 验收子进程退出码；未获得实际退出码时为 None。

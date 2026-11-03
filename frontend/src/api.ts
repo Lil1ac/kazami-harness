@@ -1,4 +1,6 @@
 import type {
+  IntegrationView,
+  IntegrationTarget,
   PermissionAction,
   PermissionState,
   PermissionPolicy,
@@ -18,8 +20,93 @@ import type {
   TaskSnapshot,
 } from './types';
 
+/** 读取runId同仓库的已登记目标；只读，不创建或切换代码分支。 */
+export function getIntegrationTargets(runId: string): Promise<{ items: IntegrationTarget[] }> {
+  return request(`/api/runs/${runId}/integration-targets`);
+}
+
+/** 读取runId所属会话全部固定采纳历史；不重放副作用。 */
+export function getIntegrations(runId: string): Promise<{ items: IntegrationView[] }> {
+  return request(`/api/runs/${runId}/integrations`);
+}
+
+/** 创建requestId标识的集成准备；targetId只能引用已登记项目，重试保持编号。 */
+export function createIntegration(
+  runId: string,
+  targetId: string,
+  requestId: string,
+): Promise<IntegrationView> {
+  return request(`/api/runs/${runId}/integrations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_id: targetId, request_id: requestId }),
+  });
+}
+
+/** 读取固定path的三方正文及最终差异；二进制或超大正文为null。 */
+export function getIntegrationFile(
+  id: string,
+  path: string,
+): Promise<{
+  base: string | null;
+  target: string | null;
+  source: string | null;
+  candidate: string | null;
+  diff: string;
+}> {
+  return request(`/api/integrations/${id}/file?path=${encodeURIComponent(path)}`);
+}
+
+/** 提交针对value版本的一次明确action；批准绑定具体差异，不授予后续任意动作。 */
+export function integrationAction(
+  value: IntegrationView,
+  action: string,
+  requestId: string,
+  confirmEffect = false,
+): Promise<IntegrationView> {
+  return request(`/api/integrations/${value.id}/actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action,
+      request_id: requestId,
+      expected_revision: value.revision,
+      fingerprint: value.fingerprint,
+      confirm_effect: confirmEffect,
+    }),
+  });
+}
+
+/** 按value版本解决一个path冲突；edit允许空正文，其余选择不发送content。 */
+export function resolveIntegration(
+  value: IntegrationView,
+  path: string,
+  choice: 'target' | 'source' | 'edit' | 'delete',
+  content: string,
+  requestId: string,
+): Promise<IntegrationView> {
+  return request(`/api/integrations/${value.id}/resolutions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request_id: requestId,
+      expected_revision: value.revision,
+      resolutions: [{ path, choice, ...(choice === 'edit' ? { content } : {}) }],
+    }),
+  });
+}
+
 /** 读取runId的权限与分页历史；historical=true固定当轮，不创建审批或作业。 */
-export function getPermissions(runId: string, historical = false, offset = 0): Promise<{ state: PermissionState; policy: PermissionPolicy; items: PermissionAction[]; total: number }> {
+export function getPermissions(
+  runId: string,
+  historical = false,
+  offset = 0,
+): Promise<{
+  state: PermissionState;
+  policy: PermissionPolicy;
+  items: PermissionAction[];
+  total: number;
+}> {
   return request(`/api/runs/${runId}/permissions?historical=${historical}&offset=${offset}`);
 }
 

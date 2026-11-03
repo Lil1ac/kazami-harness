@@ -1385,6 +1385,8 @@ pre {
 }
 .inspector-panels {
   min-height: 0;
+  /* 详情含长文件路径时仍按抽屉宽度收缩，避免手机上确认按钮被裁切。 */
+  min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1392,6 +1394,7 @@ pre {
 .inspector-panels > .ant-tabs {
   flex: 1;
   min-height: 0;
+  min-width: 0;
 }
 .inspector-panels .ant-tabs-nav {
   padding: 0 20px;

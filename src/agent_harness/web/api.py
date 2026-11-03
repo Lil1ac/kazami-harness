@@ -102,7 +102,7 @@ def create_app(
     @app.exception_handler(PlanningError)
     async def task_error(request: Request, error: TaskError) -> JSONResponse:
         """将 request 对应任务业务 error 转为安全响应；不存在返回404，其余冲突409。"""
-        status = 404 if error.code in {"task_not_found", "job_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
+        status = 404 if error.code in {"task_not_found", "job_not_found", "integration_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
         return _error(status, error.code, error.message)
 
     @app.exception_handler(ConfigurationError)
@@ -412,6 +412,56 @@ def create_app(
     async def project_decision(run_id: UUID, request: ReviewDecision) -> dict:
         """按 request 保留或丢弃 run_id 工作树；只处理本工具归属目录，保留审阅与测试证据。"""
         return (await manager.decide_review(run_id, request.decision)).model_dump(mode="json")
+
+    from agent_harness.web.integrations import IntegrationCreate, IntegrationAction, IntegrationResolutions
+
+    @app.get("/api/runs/{run_id}/integration-targets")
+    async def integration_targets(run_id: UUID) -> dict:
+        """返回run_id同仓库内的已登记目标；只读目录与分支，不隐式切换或创建工作树。"""
+        return {"items": await asyncio.to_thread(manager.integrations.targets, str(run_id))}
+
+    @app.get("/api/runs/{run_id}/integrations")
+    async def integrations(run_id: UUID) -> dict:
+        """列出run_id所属会话的固定采纳历史；历史查询不执行原动作。"""
+        view = manager.get_run(run_id)
+        service = manager.integrations
+        values = service.store.list(str(view.session_id or run_id))
+        return {"items": [service.store.public(value) for value in values]}
+
+    @app.post("/api/runs/{run_id}/integrations", status_code=202)
+    async def create_integration(run_id: UUID, body: IntegrationCreate) -> dict:
+        """按body明确选择的目标持久接纳集成准备；网页断开不取消后台作业。"""
+        return await asyncio.shield(asyncio.create_task(manager.integrations.create(str(run_id), body)))
+
+    @app.get("/api/integrations/{integration_id}")
+    async def integration(integration_id: UUID) -> dict:
+        """返回integration_id的固定事实；不从当前目标推测成功，也不自动重放。"""
+        value = manager.integrations.store.get(str(integration_id))
+        manager.get_run(value["run_id"])
+        return manager.integrations.store.public(value)
+
+    @app.get("/api/integrations/{integration_id}/file")
+    async def integration_file(integration_id: UUID, path: str) -> dict:
+        """按相对path读取固定三方内容和最终差异；仅返回有界文本，不读取现场同名文件。"""
+        return await asyncio.to_thread(manager.integrations.store.preview, str(integration_id), path)
+
+    @app.get("/api/integrations/{integration_id}/checks/{check_id}/artifacts")
+    async def integration_check_artifact(integration_id: UUID, check_id: UUID, path: str) -> FileResponse:
+        """下载check_id登记的固定path原始输出；遵守来源会话生命周期，不开放任意文件路径。"""
+        value = manager.integrations.store.get(str(integration_id))
+        manager.get_run(value["run_id"])
+        target = manager.integrations.store.check_artifact(str(integration_id), str(check_id), path)
+        return FileResponse(target, filename=target.name, media_type="application/octet-stream")
+
+    @app.post("/api/integrations/{integration_id}/resolutions")
+    async def resolve_integration(integration_id: UUID, body: IntegrationResolutions) -> dict:
+        """按body版本解决候选冲突；真实目标保持不变，旧检查和旧确认不适用于新版本。"""
+        return await manager.integrations.resolve(str(integration_id), body)
+
+    @app.post("/api/integrations/{integration_id}/actions", status_code=202)
+    async def integration_action(integration_id: UUID, body: IntegrationAction) -> dict:
+        """接纳body绑定的人工检查、采纳、核对或撤销预览；不会调用模型。"""
+        return await asyncio.shield(asyncio.create_task(manager.integrations.action(str(integration_id), body)))
 
     @app.get("/api/runs/{run_id}/diff")
     async def project_diff(run_id: UUID) -> dict:

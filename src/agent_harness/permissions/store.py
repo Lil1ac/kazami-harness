@@ -71,6 +71,8 @@ class PermissionStore:
         with self.work.transaction() as db:
             values = [json.loads(row[0]) for row in db.execute("SELECT body FROM permission_actions WHERE json_extract(body,'$.status')='executing'")]
             for value in values:
+                if value.get("owner_kind") == "integration":
+                    continue  # 集成动作由其逐文件日志核对，不能套用模型Run回执推测。
                 status = "unknown"
                 try:
                     history = RunStore.read(self.work.root, value["execution_run_id"])

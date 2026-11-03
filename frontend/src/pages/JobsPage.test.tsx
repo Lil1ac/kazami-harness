@@ -69,3 +69,39 @@ it('暂停队列只在用户明确点击时恢复', async () => {
   await user.click(screen.getByRole('button', { name: '恢复队列' }));
   await waitFor(/* 不因刷新重复恢复。 */ () => expect(resumeQueue).toHaveBeenCalledOnce());
 });
+
+it('失联的集成检查提供进程核对，失联写回只能进入逐文件核对', async () => {
+  const user = userEvent.setup();
+  vi.mocked(getJobs).mockResolvedValue({
+    paused: true,
+    items: [
+      {
+        ...makeJob(),
+        id: 'check-job',
+        kind: 'integration',
+        integration_id: 'one',
+        status: 'needs_review',
+        recovery_kind: 'process',
+      },
+      {
+        ...makeJob(),
+        id: 'write-job',
+        kind: 'integration',
+        integration_id: 'two',
+        status: 'needs_review',
+        recovery_kind: 'files',
+      },
+    ],
+  });
+  show();
+  const confirm = await screen.findByRole('button', { name: '确认进程已停止且工作区已核对' });
+  expect(screen.getByRole('link', { name: '核对逐文件写回结果' })).toHaveAttribute(
+    'href',
+    expect.stringContaining('integration=two'),
+  );
+  await user.click(confirm);
+  await waitFor(
+    /* 仅解除检查进程阻塞，不跳过写回日志。 */ () =>
+      expect(jobAction).toHaveBeenCalledWith('check-job', 'resolve'),
+  );
+});

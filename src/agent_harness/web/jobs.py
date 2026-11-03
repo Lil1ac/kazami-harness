@@ -106,7 +106,7 @@ class JobQueue:
 
     def reconcile(self) -> None:
         """仅在没有其他宿主执行时核对遗留归属；活动锁存在则只暂停本队列，不改他人状态。"""
-        if not any(job["status"] in {"preparing", "running", "needs_review"} for job in self.list()) and not PermissionStore(self.manager.runs_root).has_executing():
+        if not any(job["status"] in {"preparing", "running", "needs_review"} for job in self.list()) and not PermissionStore(self.manager.runs_root).has_executing() and not self.manager.integrations.has_orphans():
             return
         lease = ExecutionLease(self.manager.runs_root)
         try:
@@ -116,6 +116,7 @@ class JobQueue:
             return
         try:
             self._reconcile_unowned()
+            self.manager.integrations.reconcile_orphans()
             PermissionStore(self.manager.runs_root).reconcile()
         finally:
             lease.release()
@@ -124,6 +125,10 @@ class JobQueue:
         """启动时将已领作业与 RunStore 核对；无可信终态标待核对，不调用模型或旧工具。"""
         for job in self.list():
             if job["status"] not in {"preparing", "running"}:
+                continue
+            if job.get("kind") == "integration":
+                self.manager.integrations.reconcile_job(job)
+                self.save(job)
                 continue
             try:
                 history = RunStore.read(self.manager.runs_root, job["run_id"])
@@ -225,7 +230,7 @@ class JobQueue:
         if session:
             # Runner 已落盘结束、队列回调尚未执行的短窗口内，先对账旧作业再接纳续轮。
             for previous in self.list():
-                if previous['session_id'] == session and previous['status'] == 'running' and str(self.manager.busy_run_id) != previous['run_id']:
+                if previous.get('kind') != 'integration' and previous['session_id'] == session and previous['status'] == 'running' and str(self.manager.busy_run_id) != previous['run_id']:
                     history = RunStore.read(self.manager.runs_root, previous['run_id'])
                     if history.result is not None:
                         self.finish(previous, history.result)
@@ -281,6 +286,9 @@ class JobQueue:
                 self.manager._execution_lease = lease
                 if job.get("session_id"):
                     self.manager.management.require_active(job["session_id"])
+                if job.get("kind") == "integration":
+                    await self.manager.integrations.run_job(job)
+                    continue
                 if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:
                     raise TaskError("workspace_changed", "排队期间目录身份发生变化，请重新打开项目。")
                 selected = next((item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == job["project_id"]), None)
@@ -337,6 +345,11 @@ class JobQueue:
     async def cancel(self, identifier: str) -> dict:
         """取消 identifier 的排队或活动作业；活动项等待 Runner 清理，不回滚已有项目修改。"""
         job = self.get(identifier)
+        if job.get("kind") == "integration" and job["status"] in {"preparing", "running"}:
+            self.manager.integrations.cancel(identifier)
+            while self.manager.integrations.active_job == identifier:
+                await asyncio.sleep(.02)
+            return self.public(self.get(identifier))
         if job["status"] == "preparing":
             raise TaskError("job_preparing", "正在准备执行目录，请稍后停止运行。")
         if job["status"] == "running":
@@ -351,6 +364,12 @@ class JobQueue:
                 if current["status"] != "queued":
                     raise TaskError("job_changed", "作业已开始准备，请刷新后停止运行。")
                 action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
+                if job.get("action_id"):
+                    permissions = PermissionStore(self.manager.runs_root)
+                    value = permissions.get(job["action_id"], db)
+                    if value["status"] == "approved":
+                        value.update(status="cancelled")
+                        permissions.save(value, db)
                 if action is not None:
                     permissions = PermissionStore(self.manager.runs_root)
                     value = permissions.get(action["action_id"], db)
@@ -358,6 +377,10 @@ class JobQueue:
                         value.update(status="cancelled")
                         permissions.save(value, db)
                 job.update(status="cancelled", finished_at=now())
+                if job.get("kind") == "integration" and job.get("operation") == "prepare":
+                    value = self.manager.integrations.store.get(job["integration_id"], db)
+                    value.update(status="cancelled", revision=value["revision"] + 1, error="准备作业已取消，目标代码未修改。")
+                    self.manager.integrations.store.save(value, db)
                 db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(job), identifier))
                 self.store.event(db, job.get("session_id") or identifier, {"type": "job_updated", "job": self.public(job, db)})
         return self.public(job)
@@ -367,6 +390,8 @@ class JobQueue:
         job = self.get(identifier)
         if job["status"] != "needs_review":
             raise TaskError("job_not_uncertain", "该作业不处于待核对状态。")
+        if job.get("kind") == "integration":
+            self.manager.integrations.resolve_interruption(job)
         job.update(status="failed", error="用户已确认进程停止并核对工作区；原请求不重放。", finished_at=now())
         self.save(job)
         return self.public(job)

@@ -617,7 +617,8 @@ class ProjectManager:
     @staticmethod
     def _atomic_write(path: Path, data: bytes) -> None:
         """在同目录写临时文件并替换目标；字节完整写入成功后才发布。"""
-        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        # 内容对象的文件名可能已有64位摘要；临时名不重复正文名，避免Windows路径超长。
+        temporary = path.with_name(f".write-{uuid4().hex}.tmp")
         try:
             with temporary.open("xb") as stream:
                 stream.write(data)

@@ -27,6 +27,10 @@ const toolLabels: Record<string, string> = {
   edit_file: '编辑文件',
   run_command: '运行本机命令',
   verification: '运行验收检查',
+  integration_apply: '采纳成果写回',
+  integration_check_candidate: '检查集成候选',
+  integration_check_target: '复验采纳目标',
+  integration_reconcile: '核对成果写回',
 }; // 未知动作保留原名便于查阅。
 const decisionLabels = { allow: '允许', ask: '需要审批', deny: '拒绝' }; // 权限判定使用后端结果，页面只翻译文案。
 
@@ -177,7 +181,9 @@ export function PermissionPanel({
         </p>
         <p>
           审批链已知用量：
-          {((state.spent_usage.total_tokens || 0) + run.result.usage.total_tokens).toLocaleString()}{' '}
+          {(
+            (state.spent_usage.total_tokens || 0) + run.result.usage.total_tokens
+          ).toLocaleString()}{' '}
           Token{state.spent_usage_complete && run.result.usage_complete ? '' : '（不完整）'}
         </p>
       </details>

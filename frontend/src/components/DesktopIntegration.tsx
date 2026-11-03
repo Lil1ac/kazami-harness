@@ -32,7 +32,11 @@ export function DesktopIntegration() {
       const target = new URL(anchor.href, window.location.href);
       const attachment =
         target.origin === window.location.origin &&
-        (/^\/api\/runs\/[0-9a-f-]{36}\/(artifacts|patch)$/i.test(target.pathname) || /^\/api\/projects\/[a-zA-Z0-9_-]{1,64}\/memories\/export$/.test(target.pathname)) &&
+        (/^\/api\/runs\/[0-9a-f-]{36}\/(artifacts|patch)$/i.test(target.pathname) ||
+          /^\/api\/integrations\/[0-9a-f-]{36}\/checks\/[0-9a-f-]{36}\/artifacts$/i.test(
+            target.pathname,
+          ) ||
+          /^\/api\/projects\/[a-zA-Z0-9_-]{1,64}\/memories\/export$/.test(target.pathname)) &&
         !target.searchParams.has('preview');
       const external =
         target.origin !== window.location.origin && /^(https?:|mailto:)$/.test(target.protocol);

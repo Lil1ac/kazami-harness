@@ -236,6 +236,8 @@ class WebRunManager:
         self.management = ConversationManager(self)  # 可变标题、归属及生命周期，与不可变运行事实分开。
         self._queued_run_id: UUID | None = None  # 出队时预分配的稳定 Run 编号，仅队列写入。
         self._execution_lease = None  # 队列从项目准备到证据收尾一直持有的操作系统锁。
+        from agent_harness.web.integrations import IntegrationService
+        self.integrations = IntegrationService(self)  # 人工成果集成复用队列，不创建模型运行或执行后端。
         from agent_harness.web.jobs import JobQueue
         self.jobs = JobQueue(self)  # 同一管理器的唯一串行队列，重启默认暂停。
 
@@ -672,6 +674,8 @@ class WebRunManager:
         """停止接纳新任务，最多取消一次活动任务并等待 Runner 清理落盘；返回 None。"""
         self._closing = True
         self.jobs.closed = True  # 先禁止下一项出队，再等待当前运行收尾。
+        if self.integrations.active_job:
+            self.integrations.cancel(self.integrations.active_job)
         preparation = self._submission
         if preparation is not None and not preparation.done():
             try:
@@ -803,6 +807,8 @@ class WebRunManager:
             view = self.get_run(run_id)
             if self._active is not None and self._active.manifest.session_id == view.session_id:
                 raise WebServiceError(409, "run_active", "会话正在执行或保存证据，不能处理共享工作树。")
+            if any(job.get("kind") == "integration" and job.get("session_id") == str(view.session_id) and job["status"] in {"queued", "preparing", "running", "needs_review"} for job in self.jobs.list()):
+                raise WebServiceError(409, "integration_busy", "成果集成仍在执行或待核对，请先处理后台作业。")
             if review.snapshot_status != "ready":
                 raise WebServiceError(409, "project_snapshot_unavailable", "代码快照尚未准备完成，不能处理工作树。")
             if decision == "discard" and (view.interrupted or view.result.cleanup_status not in {"not_needed", "complete"}):

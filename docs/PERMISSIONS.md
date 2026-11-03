@@ -128,3 +128,7 @@ CLI同样拦截动作，输出待审批原参数并返回4；首版没有CLI动�
 390×844手机页面的文档宽度与视口均为390，三个审批按钮同排可见，浏览器控制台零错误、零警告。刷新后仍为8个Run、命令计数仍为1；原等待轮的固定快照仍保留原事实。审计见 `.runtime/permissions/browser-final-audit.json`，截图见[覆盖审阅](../output/playwright/permissions-20261102/04-final-overwrite-review.png)、[手机命令审批](../output/playwright/permissions-20261102/05-final-command-mobile.png)、[手机验收完成](../output/playwright/permissions-20261102/06-final-verified-mobile.png)。这些生成证据在本地忽略目录保存，不作为产品源码提交。
 
 本轮没有新增真实供应商请求，不能据此声称模型质量、成功率或成本得到改善。操作系统命令/网络沙箱和CLI审批恢复命令仍未提供，首版保持可信本机单用户边界。
+
+## 成果采纳的人工作业
+
+2026-11-03新增的候选检查、固定写回和目标复验复用本权限库及唯一队列，动作记录以`owner_kind=integration`绑定采纳记录。页面明确批准，宿主读取范围、写入范围、禁止策略、有效期和版本指纹仍生效；模型不新增批准或采纳能力。重启时集成动作交由逐文件日志对账，不以来源Run终态判断其成功，不自动重放。它不提供操作系统沙箱；完整规则见[成果采纳](INTEGRATIONS.md)。

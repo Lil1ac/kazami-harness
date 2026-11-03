@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Alert, Button, Popconfirm, Tag } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { errorMessage, getProjectReview, reviewRun } from '../api';
 import type { ProjectReview, RunView } from '../types';
 import { reviewLabels } from '../format';
 import { FileChangesPanel } from './FileChangesPanel';
+import { IntegrationPanel } from './IntegrationPanel';
 
 /** 审阅已保存的代码证据；active=true 或快照未完成时禁止改变工作树，失败保留已知状态。 */
 export function ProjectReviewPanel({
@@ -20,6 +21,9 @@ export function ProjectReviewPanel({
   parentRunId?: string | null; // 追加轮来源，用于说明累计差异并链接前轮证据。
 }) {
   const cache = useQueryClient();
+  const [showIntegration, setShowIntegration] = useState(
+    new URLSearchParams(window.location.search).has('integration'),
+  ); // 后台作业深链接只展开固定记录，不重新投递。
   const snapshotQuery = useQuery({
     queryKey: ['project-review', project.run_id],
     queryFn: /* 仅对未活动的遗留 pending 读取宿主恢复接口，不重新执行模型或项目测试。 */ ({
@@ -196,6 +200,24 @@ export function ProjectReviewPanel({
         downloadLabel="下载完整补丁"
         emptyLabel="相对基线没有代码改动"
       />
+      <Button
+        disabled={active || project.snapshot_status !== 'ready'}
+        onClick={
+          /* 展开独立采纳流程，保留/丢弃的目录职责不变。 */ () =>
+            setShowIntegration(!showIntegration)
+        }
+      >
+        {showIntegration ? '收起成果采纳' : '成果采纳与历史'}
+      </Button>
+      {showIntegration && (
+        <IntegrationPanel
+          runId={project.run_id}
+          sourceTest={
+            cache.getQueryData<RunView>(['run', project.run_id])?.result.validation_status ||
+            'unverified'
+          }
+        />
+      )}
     </section>
   );
 }

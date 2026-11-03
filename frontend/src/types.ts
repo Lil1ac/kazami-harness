@@ -33,7 +33,12 @@ export interface PermissionAction {
   fingerprint: string; // 审阅载荷指纹，决定时原样返回。
   name: string; // 文件工具、命令或宿主验收。
   arguments: Record<string, unknown>; // 原动作参数，只展示、不从前端重新提交执行。
-  inputs: { target?: string; cwd?: string; executable?: string; file?: { exists: boolean; text?: string | null } }; // 宿主解析的目标、实际程序与覆盖前固定文本。
+  inputs: {
+    target?: string;
+    cwd?: string;
+    executable?: string;
+    file?: { exists: boolean; text?: string | null };
+  }; // 宿主解析的目标、实际程序与覆盖前固定文本。
   workspace: string; // 实际工作区。
   created_at: number; // UTC时间戳，秒。
   expires_at: number; // 到期UTC时间戳，秒。
@@ -253,6 +258,8 @@ export interface ArtifactRef {
 
 /** 独立验收详情；退出码不存在时为 null，预览可能截断。 */
 export interface VerificationResult {
+  code_before?: string | null; // 开始时Git规范源码版本；未能完整核对时为null。
+  code_after?: string | null; // 结束时版本；变化后不能把退出0解释为结束代码已通过。
   status: Exclude<ValidationStatus, 'unverified'>; // 内容通过、内容不符或验收执行异常。
   reason: string; // 宿主稳定原因码。
   exit_code: number | null; // 实际子进程退出码。
@@ -399,6 +406,10 @@ export interface TaskSnapshot {
 
 /** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
 export interface JobView {
+  kind?: 'integration'; // 成果作业复用队列；普通模型运行不设置此字段。
+  integration_id?: string; // 原集成记录，关联来源会话而不伪造新Run。
+  result_integration_id?: string; // 撤销准备产生的反向候选编号。
+  recovery_kind?: 'files' | 'process'; // 失联写回须逐文件核对；检查/准备只解除进程阻塞，不重放。
   approval_status?: string; // 等待作业所关联动作的当前状态，不改写旧Run的等待快照。
   wait_reason?: string | null; // 等待时区分动作审批、计划审批与问题回答。
   conversation_title?: string; // 已建立会话的人工有效标题；首轮排队尚无会话时省略。
@@ -421,6 +432,93 @@ export interface JobView {
   error: string | null; // 可处理的阻塞或异常原因。
   validation_status: ValidationStatus; // 独立检查结论。
   execution_status: string | null; // null 表示尚未建立 Runner，不能打开不存在的运行。
+}
+
+/** 同仓库内由宿主登记并核验的采纳目标，不接受网页任意目录。 */
+export interface IntegrationTarget {
+  id: string; // 项目登记标识。
+  label: string; // 项目显示名。
+  path: string; // 真实代码根目录。
+  repository: string; // 共享Git仓库目录。
+  branch: string | null; // null表示分离HEAD，不隐式切分支。
+  head: string; // 查询时实际提交。
+}
+
+/** 一次固定成果集成；写回事实和三类检查分别保存。 */
+export interface IntegrationView {
+  candidate_fingerprint?: string | null; // 当前候选内容版本，旧检查不适用于新候选。
+  last_job?: {
+    id: string; // 最近实际后台作业编号。
+    status: JobView['status']; // 排队、执行及需要人工核对的真实阶段。
+    operation: string; // prepare/apply/check等固定集成动作。
+    error: string | null; // 后端受控失败原因，null表示未报告错误。
+    recovery_kind?: 'files' | 'process' | null; // 中断时区分文件回执与进程停止确认。
+  } | null; // 当前记录最近作业，接纳不代表执行成功。
+  source_test?: {
+    status: string;
+    applicable: boolean;
+    run_id: string;
+    code_before?: string | null;
+    code_after?: string | null;
+  }; // 固定来源运行的测试，与候选和目标检查分开。
+  id: string; // 固定记录编号。
+  run_id: string; // 来源成果所属运行。
+  session_id: string; // 来源会话，不随目标选择迁移。
+  target_id: string; // 已登记目标。
+  target_label?: string; // 准备成功后固定的目标名称。
+  revision: number; // 人工操作的乐观版本。
+  status:
+    | 'preparing'
+    | 'conflicts'
+    | 'ready'
+    | 'applying'
+    | 'applied'
+    | 'undone'
+    | 'already_applied'
+    | 'needs_review'
+    | 'failed'
+    | 'stale'
+    | 'cancelled'
+    | 'abandoned'; // 采纳事实，不代表测试通过。
+  kind: 'apply' | 'undo'; // 正向采纳或反向候选。
+  undo_of?: string; // 反向候选对应的原记录。
+  error: string | null; // 宿主受控说明。
+  fingerprint: string | null; // 确认时绑定的最终差异指纹。
+  source_tree?: string; // 来源固定成果树，不是当前工作树HEAD。
+  target?: Pick<IntegrationTarget, 'path' | 'repository' | 'head' | 'branch'> & {
+    fingerprint: string;
+  }; // 准备时实际目标快照。
+  workspace?: string; // 独立集成检查目录，仅供定位。
+  conflicts: string[]; // 尚待明确解决的路径。
+  files: { path: string; status: 'added' | 'modified' | 'deleted'; binary: boolean }[]; // 相对目标的完整最终变化。
+  test_config: {
+    argv: string[];
+    timeout_seconds: number;
+    python_executable: string | null;
+    python_paths: string[] | null;
+  } | null; // 原参数可审阅，页面不能改命令。
+  checks: {
+    evidence_id?: string; // 真实检查的输出目录编号；未配置测试时不生成。
+    scope: 'candidate' | 'target'; // 集成候选和采纳后的实际目标分别记录。
+    code_fingerprint: string; // 检查开始的代码版本。
+    after_fingerprint?: string; // 检查结束版本；变化则不适用。
+    applicable: boolean; // 退出0且代码稳定才可证明该版本通过。
+    result: {
+      status: 'passed' | 'failed' | 'error' | 'unverified';
+      reason: string;
+      stdout: string;
+      stderr: string;
+      artifacts?: ArtifactRef[]; // 本次检查登记的标准输出/错误输出，不使用来源Run路径。
+      truncated?: boolean; // 预览截断时可下载固定原始输出。
+    }; // 原始执行事实。
+    created_at: string; // 实际检查时间。
+    argv?: string[]; // 实际命令。
+    cwd?: string; // 实际检查位置。
+  }[];
+  observations?: { path: string; state: 'before' | 'after' | 'external' }[]; // 对账只读观察，不能证明旧动作执行次数。
+  applied_at: string | null; // 完整写回回执时间，未完整采纳为null。
+  created_at: string; // 固定创建时间。
+  updated_at: string; // 最新事实更新时间。
 }
 
 /** 当轮 Python 执行快照；源码目录和解释器从持久记录读取。 */

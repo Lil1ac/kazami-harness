@@ -81,3 +81,7 @@ TOML 作为可选初始登记，与页面打开的目录合并；任务接口仍
 项目 python_executable 为显式解释器，空白按 PATH 查找；模型命令和项目验收的裸 python/python3 共用当轮选择，明确程序路径及 uv 等其他入口原样执行。相对路径按实际工作区解释，不自动创建环境或安装依赖。 python_paths 继续固定当轮源码范围，省略自动根/src，[] 仅根目录。见 [Python 源码导入](PYTHON_EXECUTION.md)。
 
 RunView.project 为该轮固定代码证据；RunView.project_workspace 为会话目录当前状态和 latest_run_id。目录归属保存在 .projects/<session_id>/workspace.json，各轮补丁及元数据在 .projects/<run_id>/，文件产物在 .project-files/<run_id>/。旧轮管理请求受控拒绝。
+
+## 7. 采纳固定成果
+
+“保留工作树”仍只保留开发目录，不表示已集成到其他工作区。2026-11-03新增“文件 → 成果采纳与历史”：独立候选合并与检查、明确确认写回、原暂存区保护、目标复验、多轮增量和受保护撤销共用现有后台队列。来源使用已完成运行的固定成果，确认前不主动修改目标。完整协议、恢复边界与验收见[成果采纳](INTEGRATIONS.md)。

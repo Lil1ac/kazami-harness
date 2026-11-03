@@ -14,6 +14,9 @@ function resultLabel(detail: VerificationResult, project: boolean): string {
 function CheckEvidence({ detail, runId }: { detail: VerificationResult; runId: string }) {
   return (
     <>
+      {detail.code_before && detail.code_after && detail.code_before !== detail.code_after && (
+        <Alert type="warning" title="检查期间源码发生变化，原退出结果不能证明结束代码已通过。" />
+      )}
       <dl className="compact-dl">
         <div>
           <dt>原因</dt>

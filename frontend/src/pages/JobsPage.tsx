@@ -45,7 +45,15 @@ export function JobsPage() {
         !['queued', 'preparing', 'needs_review'].includes(selected.status) &&
         selected.execution_status !== null
       )
-        void navigate('/runs/' + selected.run_id, { replace: true });
+        void navigate(
+          '/runs/' +
+            selected.run_id +
+            (selected.kind === 'integration'
+              ? '?tab=files&integration=' +
+                (selected.result_integration_id || selected.integration_id)
+              : ''),
+          { replace: true },
+        );
     },
     [selected, navigate],
   );
@@ -137,7 +145,18 @@ export function JobsPage() {
                 <div>
                   {!['queued', 'preparing', 'needs_review'].includes(job.status) &&
                     job.execution_status !== null && (
-                      <Link to={'/runs/' + job.run_id}>查看会话与结果</Link>
+                      <Link
+                        to={
+                          '/runs/' +
+                          job.run_id +
+                          (job.kind === 'integration'
+                            ? '?tab=files&integration=' +
+                              (job.result_integration_id || job.integration_id)
+                            : '')
+                        }
+                      >
+                        {job.kind === 'integration' ? '查看成果采纳' : '查看会话与结果'}
+                      </Link>
                     )}
                   {['queued', 'running'].includes(job.status) && (
                     <Button
@@ -151,16 +170,26 @@ export function JobsPage() {
                       停止
                     </Button>
                   )}
-                  {job.status === 'needs_review' && (
-                    <Button
-                      onClick={
-                        /* 按钮本身明确声明用户已完成核对；原请求不会重放。 */ () =>
-                          mutation.mutate({ id: job.id, action: 'resolve' })
-                      }
-                    >
-                      确认进程已停止且工作区已核对
-                    </Button>
-                  )}
+                  {job.status === 'needs_review' &&
+                    job.kind === 'integration' &&
+                    job.recovery_kind !== 'process' && (
+                      <Link
+                        to={'/runs/' + job.run_id + '?tab=files&integration=' + job.integration_id}
+                      >
+                        核对逐文件写回结果
+                      </Link>
+                    )}
+                  {job.status === 'needs_review' &&
+                    (job.kind !== 'integration' || job.recovery_kind === 'process') && (
+                      <Button
+                        onClick={
+                          /* 按钮本身明确声明用户已完成核对；原请求不会重放。 */ () =>
+                            mutation.mutate({ id: job.id, action: 'resolve' })
+                        }
+                      >
+                        确认进程已停止且工作区已核对
+                      </Button>
+                    )}
                 </div>
               </li>
             ),

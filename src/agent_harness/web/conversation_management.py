@@ -362,6 +362,7 @@ class ConversationManager:
             purge_ids = list(record["purge_ids"])  # 重试仍使用已冻结清单，不从残留目录重新推断范围。
             try:
                 await asyncio.to_thread(self._clean_files, record)
+                await asyncio.to_thread(self.manager.integrations.store.cleanup_files, session_id)
             except Exception:
                 record["purge_error"] = "部分记录尚未清理完成；已保留清理清单，可重试彻底删除。"
                 with self.store.transaction() as db:
@@ -378,6 +379,7 @@ class ConversationManager:
                 db.execute("DELETE FROM lists WHERE id=?", (session_id,))
                 # 动作中可能包含待写正文；彻底删除必须连同许可一起清理，旧请求也无法再次消费。
                 db.execute("DELETE FROM permission_actions WHERE json_extract(body,'$.session_id')=?", (session_id,))
+                self.manager.integrations.store.cleanup_records(session_id, db)
                 db.execute("DELETE FROM operations WHERE substr(id,1,?)=?", (len(session_id) + 1, session_id + ":"))
                 db.execute("DELETE FROM conversation_operations WHERE session=?", (session_id,))
                 db.execute("DELETE FROM events WHERE scope=?", (session_id,))

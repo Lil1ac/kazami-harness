@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,27 @@ import { BackendProcess } from "../backend";
 import { downloadFile } from "../files";
 
 const repository = path.resolve(__dirname, "../../.."); // 测试运行于 desktop/dist/tests，固定源码根目录。
+
+/** 等待jobId真实作业收尾并返回integrationId快照；失败显示受控记录，不重投请求。 */
+async function integrationFinished(
+  backend: BackendProcess,
+  token: string,
+  jobId: string,
+  integrationId: string,
+): Promise<any> {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const job = await api(backend, token, `/api/jobs/${jobId}`);
+    if (!["queued", "preparing", "running"].includes(job.status)) {
+      assert.equal(job.status, "completed", JSON.stringify(job));
+      return await api(backend, token, `/api/integrations/${integrationId}`);
+    }
+    await new Promise(
+      /* 只等待后台落盘，不触发重放。 */ (resolve) => setTimeout(resolve, 30),
+    );
+  }
+  throw new Error("成果作业未按时收尾");
+}
 
 /** 在真实后台提交 path/body 并读取 JSON；只用于测试，令牌不进入浏览器或磁盘。 */
 async function api(
@@ -37,15 +58,17 @@ async function finished(
   identifier: string,
 ): Promise<any> {
   const deadline = Date.now() + 20000;
+  let lastPhase = "尚无运行视图"; // 超时保留最后真实阶段，便于定位准备、执行或收尾问题。
   while (Date.now() < deadline) {
     const view = await api(backend, token, `/api/runs/${identifier}`);
+    lastPhase = `${view.phase} / ${view.event_count}条事件 / ${view.result.stop_reason}`;
     if (!view.active) return view;
     await new Promise(
       /* 轮询只等待本地任务落盘，不调用模型或原生能力。 */ (resolve) =>
         setTimeout(resolve, 25),
     );
   }
-  throw new Error("后台任务没有按时收尾");
+  throw new Error("后台任务没有按时收尾：" + lastPhase);
 }
 
 /** 创建使用真实 Python/HTTP/标准流的离线后台；root 隔离设置、项目和运行记录。 */
@@ -225,6 +248,156 @@ test(
     } finally {
       await backend.stop();
       await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "桌面认证后台贯通工作树成果预览、批准采纳、复验与重启历史",
+  { skip: process.platform !== "win32", timeout: 120000 },
+  /* 真实桌面父子进程与HTTP，只将模型和系统选目录替换为离线夹具。 */ async () => {
+    await mkdir(path.join(repository, ".runtime"), { recursive: true });
+    const root = await mkdtemp(path.join(repository, ".runtime/di-"));
+    const token = randomBytes(32).toString("hex");
+    let backend = makeBackend(root, token);
+    let passed = false; // 失败时保留专属.runtime证据，不丢失后台日志和运行轨迹。
+    try {
+      await backend.start();
+      const selection = (await api(backend, token, "/api/projects/pick", {}))
+        .selection;
+      const project = await api(backend, token, "/api/projects", {
+        selection_id: selection.selection_id,
+        label: "成果采纳桌面项目",
+      });
+      const options = await api(backend, token, "/api/options");
+      await api(
+        backend,
+        token,
+        "/api/desktop/settings",
+        {
+          config: {
+            requested_model: options.config.requested_model,
+            tools: options.config.tools,
+            limits: {
+              max_model_turns: 20,
+              max_tool_calls: 40,
+              run_timeout_seconds: 120,
+            },
+          },
+          downloads_directory: path.join(root, "downloads"),
+        },
+        "PUT",
+      );
+      await api(
+        backend,
+        token,
+        `/api/projects/${project.id}/settings`,
+        {
+          test_command:
+            "python -c \"from pathlib import Path; assert Path('result.txt').read_text().strip() == 'desktop acceptance passed'; print('adoption evidence')\"",
+          test_timeout_seconds: 10,
+          python_executable: path.join(repository, ".venv/Scripts/python.exe"),
+        },
+        "PUT",
+      );
+      const job = await api(backend, token, "/api/jobs", {
+        request_id: randomUUID(),
+        create: {
+          project_id: project.id,
+          prompt: "先规划再交付",
+          mode: "plan",
+          execution_mode: "isolated",
+        },
+      });
+      let source = await finished(backend, token, job.run_id);
+      for (
+        let index = 0;
+        index < 5 && source.result.execution_status === "waiting_input";
+        index += 1
+      ) {
+        const id = randomUUID();
+        const permission = source.result.permissions.pending;
+        const plan = source.result.planning.pending;
+        const followup = permission
+          ? {
+              request_id: id,
+              prompt: "批准本次动作",
+              action_decision: {
+                action_id: permission.id,
+                fingerprint: permission.fingerprint,
+                action: "approve",
+              },
+            }
+          : {
+              request_id: id,
+              prompt: "批准并执行",
+              decision: {
+                interaction_id: plan.id,
+                plan_version: plan.plan_version,
+                action: "approve",
+              },
+            };
+        const next = await api(backend, token, "/api/jobs", {
+          request_id: id,
+          parent_run_id: source.run_id,
+          followup,
+        });
+        source = await finished(backend, token, next.run_id);
+      }
+      assert.equal(source.result.execution_status, "completed");
+      await assert.rejects(readFile(path.join(root, "project/result.txt")));
+      const id = randomUUID();
+      await api(backend, token, `/api/runs/${source.run_id}/integrations`, {
+        request_id: id,
+        target_id: project.id,
+      });
+      let value = await integrationFinished(backend, token, id, id);
+      assert.equal(value.status, "ready");
+      for (const operation of ["check_candidate", "apply", "check_target"]) {
+        const requestId = randomUUID();
+        await api(backend, token, `/api/integrations/${id}/actions`, {
+          request_id: requestId,
+          expected_revision: value.revision,
+          action: operation,
+          fingerprint: value.fingerprint,
+        });
+        value = await integrationFinished(backend, token, requestId, id);
+      }
+      assert.equal(value.status, "applied");
+      assert.equal(value.checks.at(-1).result.status, "passed");
+      const evidence = value.checks.at(-1);
+      const output = evidence.result.artifacts.find(
+        /* 下载本次目标复验登记的标准输出，不能从来源Run替代。 */ (item: any) =>
+          item.kind === "stdout",
+      );
+      const downloaded = await api(backend, token, "/api/desktop/download", {
+        url: `/api/integrations/${id}/checks/${evidence.evidence_id}/artifacts?path=${encodeURIComponent(output.path)}`,
+      });
+      assert.match(
+        await readFile(downloaded.path, "utf8"),
+        /adoption evidence/,
+      );
+      assert.equal(
+        await readFile(path.join(root, "project/result.txt"), "utf8"),
+        "desktop acceptance passed\n",
+      );
+      await backend.stop();
+      backend = makeBackend(root, token);
+      await backend.start();
+      const history = await api(backend, token, `/api/integrations/${id}`);
+      assert.equal(history.status, "applied");
+      assert.equal(history.checks.length, 2);
+      assert.equal(
+        (await fetch(backend.origin + `/api/integrations/${id}`)).status,
+        403,
+      );
+      passed = true;
+    } finally {
+      await backend.stop();
+      // root由本测试在已知工作区.runtime内创建，不向其他目录传递递归删除。
+      assert.ok(root.startsWith(path.join(repository, ".runtime") + path.sep));
+      if (passed) await rm(root, { recursive: true, force: true });
+      else console.info("桌面采纳验收保留证据：", root);
     }
   },
 );

@@ -87,6 +87,17 @@ class DesktopHost:
     async def artifact(self, relative_url: str) -> Path:
         """将产物、补丁或记忆导出 relative_url 核对为固定路径；拒绝任意文件和网络地址。"""
         url = urlsplit(relative_url)
+        integration = re.fullmatch(r"/api/integrations/([0-9a-fA-F-]{36})/checks/([0-9a-fA-F-]{36})/artifacts", url.path)
+        if integration is not None and self.manager is not None and not (url.scheme or url.netloc or url.fragment):
+            try:
+                query = parse_qs(url.query, strict_parsing=True)
+                if set(query) != {"path"} or len(query["path"]) != 1:
+                    raise ValueError
+                value = self.manager.integrations.store.get(str(UUID(integration[1])))
+                self.manager.management.check_run(value["run_id"])
+                return self.manager.integrations.store.check_artifact(str(UUID(integration[1])), str(UUID(integration[2])), query["path"][0])
+            except ValueError:
+                raise WebServiceError(400, "invalid_artifact", "检查输出地址无效。") from None
         memory = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]{1,64})/memories/export", url.path)
         if memory is not None and self.manager is not None and not (url.scheme or url.netloc or url.query or url.fragment):
             from agent_harness.web.memory import export_project_memory

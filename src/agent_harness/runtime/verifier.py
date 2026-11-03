@@ -6,6 +6,7 @@ from uuid import UUID
 
 from agent_harness.execution.processes import ProcessRunner
 from agent_harness.execution.python import prepare_python_execution
+from agent_harness.projects.integration_files import workspace_fingerprint
 from agent_harness.schemas import PythonExecution, ArtifactRef, RunLimits, VerificationResult, VerifierSpec
 
 
@@ -69,6 +70,7 @@ class Verifier:
         会生成本次验收输出文件，不继承模型密钥；StorageError 向外传播以停止调度。
         """
         self.last_result = None
+        code_before = await asyncio.to_thread(workspace_fingerprint, workspace)
         started = asyncio.get_running_loop().time()
         environment = {"HARNESS_WORKSPACE": str(workspace), "HARNESS_RUN_ID": str(run_id)}
         try:
@@ -82,7 +84,11 @@ class Verifier:
             data = getattr(error, "harness_process_result", None)
             elapsed = max(0, int((asyncio.get_running_loop().time() - started) * 1000))
             self.last_result = _map_result(data or {"cancelled": True, "cleanup_status": "unknown"}, elapsed)
+            self.last_result.code_before = code_before
+            self.last_result.code_after = await asyncio.to_thread(workspace_fingerprint, workspace)
             raise
         elapsed = max(0, int((asyncio.get_running_loop().time() - started) * 1000))
         self.last_result = _map_result(data, elapsed)
+        self.last_result.code_before = code_before
+        self.last_result.code_after = await asyncio.to_thread(workspace_fingerprint, workspace)
         return self.last_result

@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 import httpx
 
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -19,7 +20,7 @@ def application(tmp_path: Path, model):
     workspace = tmp_path / "project"
     workspace.mkdir(exist_ok=True)
     config = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id="files", label="测试项目", path=workspace)])
-    app = create_app(config, RunConfig(tools=["read_file", "write_file", "run_command"]), tmp_path / "runs", model_client=model)
+    app = create_app(config, trusted_config(tools=["read_file", "write_file", "run_command"]), tmp_path / "runs", model_client=model)
     app.state.manager._key_provider = lambda config: "offline-key"  # 测试凭据不读用户环境。
     return app, workspace
 

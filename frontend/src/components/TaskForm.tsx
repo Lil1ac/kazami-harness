@@ -9,6 +9,7 @@ import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../t
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
 import { ModeSelect } from './ModeSelect';
+import { PermissionSelect } from './PermissionPanel';
 
 /** 新任务的可编辑内容；项目来源由用户明确选择，不从示例默认推断。 */
 interface TaskValues {
@@ -268,6 +269,7 @@ export function TaskForm({
           <div className="start-input-toolbar">
             <div className="start-send-area">
               <ModeSelect value={mode} onChange={setMode} />
+              <PermissionSelect value={config.permission_mode} onChange={/* 只覆盖新任务公开模式。 */ permission_mode => setDraft({ ...draft, permission_mode })} disabled={confirmingSubmission} />
               <span className="start-model" title={config.requested_model}>
                 {config.requested_model}
               </span>

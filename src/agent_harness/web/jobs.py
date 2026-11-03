@@ -17,6 +17,7 @@ from agent_harness.schemas import RunManifest
 from agent_harness.runtime.runner import validate_execution, validate_auto_repair
 from agent_harness.work.planning import continue_planning, planning_from_history
 from agent_harness.execution.python import prepare_python_execution, PythonExecutionError
+from agent_harness.permissions.store import PermissionStore
 
 
 def directory_identity(path: Path) -> list[int]:
@@ -77,6 +78,8 @@ class JobQueue:
     def public(self, job: dict, db=None) -> dict:
         """返回 job 可展示字段；排除固定内部提交参数，保留归属、结果和错误。"""
         value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy"}}
+        if job.get("waiting_action_id"):
+            value["approval_status"] = PermissionStore(self.manager.runs_root).get(job["waiting_action_id"], db)["status"]
         session = job.get("session_id")
         if session:
             record = self.manager.management.stored(session, db)
@@ -103,7 +106,7 @@ class JobQueue:
 
     def reconcile(self) -> None:
         """仅在没有其他宿主执行时核对遗留归属；活动锁存在则只暂停本队列，不改他人状态。"""
-        if not any(job["status"] in {"preparing", "running"} for job in self.list()):
+        if not any(job["status"] in {"preparing", "running", "needs_review"} for job in self.list()) and not PermissionStore(self.manager.runs_root).has_executing():
             return
         lease = ExecutionLease(self.manager.runs_root)
         try:
@@ -113,6 +116,7 @@ class JobQueue:
             return
         try:
             self._reconcile_unowned()
+            PermissionStore(self.manager.runs_root).reconcile()
         finally:
             lease.release()
 
@@ -171,6 +175,13 @@ class JobQueue:
             if self.manager.conversations.store.read(UUID(session)).run_ids[-1] != request.parent_run_id:
                 raise TaskError("session_stale_parent", "请从最新一轮继续。")
             self.manager.conversations._ready(parent)
+            pending = PermissionStore(self.manager.runs_root).waiting(parent)
+            if request.followup.action_decision is not None:
+                if pending is None or pending["id"] != request.followup.action_decision.action_id:
+                    raise TaskError("permission_stale", "只能处理最新一轮实际等待的动作。")
+                PermissionStore(self.manager.runs_root).validate(request.followup.action_decision, str(request.parent_run_id))
+            elif pending is not None:
+                raise TaskError("permission_pending", "请先批准、拒绝或取消当前动作；普通消息不会授予权限。")
             continue_planning(planning_from_history(parent), request.followup.decision, request.followup.prompt, parent.manifest.task.workspace, request.followup.mode)
         # 入队只冻结公开配置及目录身份，项目准备和预算计时留到真正出队。
         if request.create is not None:
@@ -179,7 +190,7 @@ class JobQueue:
                 raise TaskError("unknown_workspace", "请选择已登记的项目目录。")
             identity = directory_identity(selected.path)
             source_path = str(selected.path.resolve())
-            overrides = self.manager.run_config.model_dump(mode="json", include={"requested_model", "tools", "limits", "context", "memory", "skills", "auto_repair"})
+            overrides = self.manager.run_config.model_dump(mode="json", include={"requested_model", "tools", "limits", "context", "memory", "skills", "auto_repair", "permission_mode"})
             patch = payload["create"]["config"]
             for section in ("limits", "context", "memory"):
                 overrides[section].update(patch.get(section) or {})
@@ -237,6 +248,8 @@ class JobQueue:
                 raise TaskError("queue_full", "后台队列最多接纳一百个未结束请求，请先完成或取消已有工作。")
             if session and any(item["session_id"] == session and item["status"] in {"queued", "preparing", "running", "needs_review"} for item in (json.loads(row[0]) for row in db.execute("SELECT body FROM jobs"))):
                 raise TaskError("session_job_pending", "会话已有待处理作业，请先处理或取消。")
+            if request.followup is not None and request.followup.action_decision is not None:
+                PermissionStore(self.manager.runs_root).decide(request.followup.action_decision, str(request.parent_run_id), identifier, db)
             db.execute("INSERT INTO jobs VALUES (?,?)", (identifier, encode(job)))
             self.store.event(db, session or identifier, {"type": "job_updated", "job": self.public(job, db)})
         self._ready[identifier] = asyncio.Event()
@@ -284,7 +297,12 @@ class JobQueue:
                 self._ready.get(job["id"], asyncio.Event()).set()
                 await self.manager.wait_idle()
                 view = self.manager.get_run(view.run_id)
-                self.finish(job, view.result)
+                if view.interrupted:
+                    job.update(status="needs_review", error="运行未留下可信终态，请确认进程已停止并核对工作区。")
+                    self.save(job)
+                    self.paused = True
+                else:
+                    self.finish(job, view.result)
                 if view.result.cleanup_status in {"unknown", "incomplete"}:
                     self.paused = True
             except asyncio.CancelledError:
@@ -293,9 +311,14 @@ class JobQueue:
                 if isinstance(error, TaskError) and error.code == "execution_busy":
                     self.paused = True  # 另一宿主仍持锁，本队列无权改写其作业归属。
                     return
-                job.update(status="needs_review", error=getattr(error, "message", "准备或记录未能确认，请核对后重新提交。"), error_code=getattr(error, "code", "job_prepare_failed"), error_status=getattr(error, "status", 409))
+                action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
+                known_unstarted = action is not None and not (self.manager.runs_root / job["run_id"] / "run.json").exists() and getattr(error, "code", "") in {"permission_expired", "permission_stale", "permission_denied", "job_source_changed", "workspace_changed", "planning_workspace_changed"}
+                if known_unstarted:
+                    PermissionStore(self.manager.runs_root).invalidate(action["action_id"], error.code)
+                job.update(status="failed" if known_unstarted else "needs_review", error=getattr(error, "message", "准备或记录未能确认，请核对后重新提交。"), error_code=getattr(error, "code", "job_prepare_failed"), error_status=getattr(error, "status", 409))
                 self.save(job)
-                self.paused = True
+                if not known_unstarted:
+                    self.paused = True
             finally:
                 self.manager._execution_lease = None
                 lease.release()
@@ -306,7 +329,9 @@ class JobQueue:
     def finish(self, job: dict, result) -> None:
         """用可信 result 固定 job 展示状态；等待用户和检查结果分别记录，返回 None。"""
         status = "waiting_input" if result.execution_status == "waiting_input" else "cancelled" if result.execution_status == "cancelled" else "completed" if result.execution_status == "completed" else "failed"
-        job.update(status=status, execution_status=result.execution_status, validation_status=result.validation_status, finished_at=now())
+        job.update(status=status, execution_status=result.execution_status, validation_status=result.validation_status,
+                   wait_reason=result.stop_reason if status == "waiting_input" else None,
+                   waiting_action_id=result.permissions.pending["id"] if result.permissions.pending else None, finished_at=now())
         self.save(job)
 
     async def cancel(self, identifier: str) -> dict:
@@ -321,8 +346,20 @@ class JobQueue:
         if job["status"] == "waiting_input":
             raise TaskError("job_waiting_decision", "请进入会话取消当前问题或拒绝计划，宿主需要保存明确决定。")
         if job["status"] == "queued":
-            job.update(status="cancelled", finished_at=now())
-            self.save(job)
+            with self.store.transaction() as db:
+                current = json.loads(db.execute("SELECT body FROM jobs WHERE id=?", (identifier,)).fetchone()[0])
+                if current["status"] != "queued":
+                    raise TaskError("job_changed", "作业已开始准备，请刷新后停止运行。")
+                action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
+                if action is not None:
+                    permissions = PermissionStore(self.manager.runs_root)
+                    value = permissions.get(action["action_id"], db)
+                    if value["status"] == "approved":
+                        value.update(status="cancelled")
+                        permissions.save(value, db)
+                job.update(status="cancelled", finished_at=now())
+                db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(job), identifier))
+                self.store.event(db, job.get("session_id") or identifier, {"type": "job_updated", "job": self.public(job, db)})
         return self.public(job)
 
     def resolve(self, identifier: str) -> dict:

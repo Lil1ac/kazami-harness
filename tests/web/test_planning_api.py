@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -72,7 +73,7 @@ def planning_config(tmp_path: Path, monkeypatch) -> WebConfig:
 
 def application(config: WebConfig, model: ScriptModel):
     """为config/model创建真实应用，记录保存在测试根records；返回值尚未进入生命周期。"""
-    return create_app(config, RunConfig(tools=["read_file", "search_files", "write_file", "edit_file", "run_command"]),
+    return create_app(config, trusted_config(tools=["read_file", "search_files", "write_file", "edit_file", "run_command"]),
                       config.project_dir / "records", model_client=model)
 
 
@@ -275,7 +276,7 @@ def test_host_required_policy_guards_auto_entry_and_cannot_be_overridden(plannin
 
     async def scenario():
         """使用auto入口但强制先批准，核对列表真实返回、越界动作拒绝和配置覆盖422。"""
-        app = create_app(config, RunConfig(planning_policy="required", tools=["read_file", "write_file", "run_command"]),
+        app = create_app(config, trusted_config(planning_policy="required", tools=["read_file", "write_file", "run_command"]),
                          config.project_dir / "records", model_client=model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:

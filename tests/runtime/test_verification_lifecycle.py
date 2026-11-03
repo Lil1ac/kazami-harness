@@ -11,6 +11,7 @@ import pytest
 
 from agent_harness.providers.base import ModelError, ModelResponse
 from agent_harness.runtime.runner import CancellationState, exit_code, run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, RunResult, TaskSpec, VerifierSpec
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.runtime.verifier import Verifier
@@ -41,7 +42,7 @@ def manifest(tmp_path: Path, source: str, *, verifier_timeout: float = 5.0, **li
     workspace.mkdir()
     host.mkdir()
     return RunManifest(
-        run_id=uuid4(), config=RunConfig(limits=RunLimits(**limits)),
+        run_id=uuid4(), config=trusted_config(limits=RunLimits(**limits)),
         task=TaskSpec(prompt="生成报告", workspace=workspace, verifier=VerifierSpec(
             argv=[sys.executable, "-c", source], cwd=host, timeout_seconds=verifier_timeout,
         )),

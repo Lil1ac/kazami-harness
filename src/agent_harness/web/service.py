@@ -88,7 +88,7 @@ def _phase(events: list[RunEvent]) -> str:
             current = "subagent_execution"
         if event.type == "run_finished":
             reason = event.payload.get("result", {}).get("stop_reason")
-            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled"}:
+            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled", "action_approval", "permission_rejected", "permission_cancelled", "verification_permission_denied"}:
                 current = reason
     return current
 
@@ -125,7 +125,7 @@ def _unfinished_result(history: RunHistory) -> RunResult:
         run_id=history.manifest.run_id, execution_status="running" if history.interrupted else "created",
         model_turns=sum(event.type == "model_request_started" for event in history.events),
         http_attempts=sum(event.type == "model_http_attempt" for event in history.events),
-        tool_calls=sum(event.type == "tool_started" for event in history.events),
+        tool_calls=sum(event.type == "tool_requested" for event in history.events),
         usage_complete=False, active_duration_seconds=history.events[-1].elapsed_ms / 1000 if history.events else 0,
         planning=planning_from_history(history),
     )
@@ -134,6 +134,11 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     verifier_pending = False  # 宿主验收已启动而未得到清理结论。
     cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
     for event in history.events:
+        if event.type == "permissions_prepared":
+            from agent_harness.permissions.models import PermissionState
+            result.permissions = PermissionState.model_validate(event.payload["state"])
+        elif event.type == "permission_requested":
+            result.permissions.pending = event.payload["action"]
         if event.type == "subagent_snapshot":
             record = SubagentRecord.model_validate_json(json.dumps(event.payload["subagent"]))
             result.subagents = [item for item in result.subagents if item.run_id != record.run_id] + [record]

@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from agent_harness.runtime.runner import run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, TaskSpec
 from agent_harness.storage.runs import StorageError
 from agent_harness.subagents.service import SubagentError, read_child, report_page
@@ -22,7 +23,7 @@ def setup_run(tmp_path: Path, **limits) -> RunManifest:
     """创建tmp_path独立代码夹具并返回清单；limits覆盖父总预算，不访问用户项目。"""
     (tmp_path / "api.py").write_text("def value():\n    return 42\n", encoding="utf-8")
     return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="研究接口后生成result.txt。", workspace=tmp_path),
-                       config=RunConfig(tools=["read_file", "search_files", "write_file", "edit_file", "run_command"],
+                       config=trusted_config(tools=["read_file", "search_files", "write_file", "edit_file", "run_command"],
                                         limits=RunLimits(max_model_turns=limits.pop("max_model_turns", 12), **limits)))
 
 

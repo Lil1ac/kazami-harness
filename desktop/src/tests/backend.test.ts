@@ -89,7 +89,7 @@ function makeBackend(
 }
 
 test(
-  "桌面父子进程贯通规划批准、真实工具与项目测试、下载和重启历史",
+  "桌面父子进程贯通规划与动作批准、真实工具及检查、下载和重启历史",
   { skip: process.platform !== "win32", timeout: 45000 },
   /* 验证生产宿主协议，只有模型和系统目录选择返回使用离线替身。 */ async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-backend-"));
@@ -166,9 +166,31 @@ test(
           },
         },
       });
-      const result = await finished(backend, token, approved.run_id);
+      let result = await finished(backend, token, approved.run_id);
+      // 计划批准不预授权本机命令和宿主验收；两条原动作分别通过正式作业接口批准。
+      for (const name of ["run_command", "verification"]) {
+        assert.equal(result.result.execution_status, "waiting_input");
+        const action = result.result.permissions.pending;
+        assert.equal(action.name, name);
+        const requestId = randomUUID();
+        const next = await api(backend, token, "/api/jobs", {
+          request_id: requestId,
+          parent_run_id: result.run_id,
+          followup: {
+            request_id: requestId,
+            prompt: "批准本次动作",
+            action_decision: {
+              action_id: action.id,
+              fingerprint: action.fingerprint,
+              action: "approve",
+            },
+          },
+        });
+        result = await finished(backend, token, next.run_id);
+      }
       assert.equal(result.result.execution_status, "completed");
       assert.equal(result.result.validation_status, "passed");
+      assert.equal(result.result.model_turns, 0); // 最终检查直接执行保存入口，不重新请求模型。
       assert.equal(
         await readFile(path.join(root, "project/result.txt"), "utf8"),
         "desktop acceptance passed\n",
@@ -198,8 +220,8 @@ test(
         token,
         `/api/runs/${approved.run_id}/conversation`,
       );
-      assert.equal(history.turns.length, 2);
-      assert.equal(history.turns[1].validation_status, "passed");
+      assert.equal(history.turns.length, 4);
+      assert.equal(history.turns[3].validation_status, "passed");
     } finally {
       await backend.stop();
       await rm(root, { recursive: true, force: true });

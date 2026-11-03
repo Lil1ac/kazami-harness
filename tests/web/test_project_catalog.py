@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
@@ -56,7 +57,7 @@ class EditingModel:
 @asynccontextmanager
 async def client_for(root: Path):
     """启动无项目预设的真实应用并产出客户端和manager，退出等待所有任务收尾。"""
-    app = create_app(configuration(root), RunConfig(tools=["write_file"]), root / "runs", model_client=EditingModel())
+    app = create_app(configuration(root), trusted_config(tools=["write_file"]), root / "runs", model_client=EditingModel())
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://localhost", trust_env=False) as client:
@@ -379,7 +380,7 @@ def test_plain_project_evidence_excludes_other_run_records(tmp_path: Path, monke
 
     async def scenario():
         """经真实API与Runner修改原文件，核对逐轮文件清单不包含记录树。"""
-        app = create_app(configuration(tmp_path), RunConfig(tools=["write_file"]), records, model_client=EditingModel())
+        app = create_app(configuration(tmp_path), trusted_config(tools=["write_file"]), records, model_client=EditingModel())
         manager = app.state.manager
         identifier = manager.catalog.register(selected)
         async with app.router.lifespan_context(app):

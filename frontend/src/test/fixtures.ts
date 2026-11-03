@@ -30,6 +30,8 @@ export function makeJob(run: RunView = makeRun()): JobView {
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {
+  permission_mode: 'workspace_edit', // 工作区文件自动编辑，本机命令仍需宿主审批。
+  permission_policy: { read: 'allow', write: 'allow', command: 'ask', verification: 'ask', read_roots: ['.'], write_roots: ['.'], approval_ttl_seconds: 1800 },
   memory: { use: true, capture: true, max_input_bytes: 16384, max_entries: 6 }, // 与宿主默认一致。
   planning_policy: 'auto', // 默认由Agent判断；强制规划由宿主TOML配置。
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
@@ -102,6 +104,7 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     config,
     context: null, // 默认模拟尚未记录上下文的历史任务。
     result: {
+      permissions: { mode: 'workspace_edit', policy_fingerprint: '', pending: null, effective: { read_file: 'allow', write_file: 'allow', edit_file: 'allow', run_command: 'ask', verification: 'ask' }, spent_model_turns: 0, spent_tool_calls: 0, spent_seconds: 0, spent_usage: {}, spent_usage_complete: true },
       planning: { phase: 'execution', reason: null, plans: [], pending: null, decisions: [] },
       schema_version: 1,
       run_id: 'run-a',

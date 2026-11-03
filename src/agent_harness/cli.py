@@ -108,6 +108,12 @@ def _print_result(data: dict, *, as_json: bool) -> None:
         if planning.get("plans"):
             plan = planning["plans"][-1]
             print(f"计划 v{plan['version']}：{plan['title']}\n{plan['summary']}")
+        pending = data.get("permissions", {}).get("pending")
+        if pending:
+            print("待审批动作：" + pending["name"])
+            print(json.dumps(pending["arguments"], ensure_ascii=False, indent=2))
+            print("实际目标：" + json.dumps(pending["inputs"], ensure_ascii=False))
+            print("提示：CLI仅保存等待记录；当前没有CLI动作审批恢复命令。请在桌面或Web创建会话使用完整审批。")
     if data["execution_status"] == "completed" and data["validation_status"] == "unverified":
         print("提示：执行已结束，尚未通过独立验收；本次执行命令返回码为 3。")
     if data.get("interrupted"):

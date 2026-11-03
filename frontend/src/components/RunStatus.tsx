@@ -76,6 +76,9 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
   if (run.phase === 'plan_rejected') return { label: '已拒绝计划' };
   if (run.phase === 'user_question') return { label: '等待回答', color: 'warning' };
   if (run.phase === 'plan_approval') return { label: '等待批准', color: 'warning' };
+  if (run.phase === 'action_approval') return { label: '等待动作审批', color: 'warning' };
+  if (run.phase === 'permission_rejected') return { label: '已拒绝动作' };
+  if (run.phase === 'permission_cancelled') return { label: '已取消动作' };
   if (run.result.execution_status === 'completed') {
     const status = run.result.validation_status;
     return {

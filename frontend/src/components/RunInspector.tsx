@@ -16,6 +16,7 @@ import { UsageDisplay } from './UsageDisplay';
 import { PlanningPanel } from './PlanningPanel';
 import { TasksPanel } from './TasksPanel';
 import { SubagentsPanel } from './SubagentsPanel';
+import { PermissionPanel } from './PermissionPanel';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -97,6 +98,7 @@ function InspectorPanels({
             children: (
               <div className="inspector-overview">
                 <StateBreakdown run={run} />
+                <PermissionPanel run={run} historical={historical} />
                 <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>
                 {run.interrupted && (
                   <Alert type="warning" title="该运行缺少可信结束记录，请核对已有输出。" />

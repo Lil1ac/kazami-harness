@@ -110,7 +110,18 @@ export function JobsPage() {
                 <strong>{job.conversation_title || job.title}</strong>
                 <div>
                   <span>{groupFor(job).label}</span>
-                  <span>{labels[job.status]}</span>
+                  <span>
+                    {job.status === 'waiting_input' && job.wait_reason === 'action_approval'
+                      ? (
+                          {
+                            pending: '等待动作审批',
+                            approved: '已批准，等待执行',
+                            executing: '动作执行中',
+                            unknown: '动作结果待核对',
+                          } as Record<string, string>
+                        )[job.approval_status || 'pending'] || '审批已处理'
+                      : labels[job.status]}
+                  </span>
                   <span>
                     {
                       {

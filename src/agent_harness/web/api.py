@@ -31,6 +31,7 @@ from agent_harness.work.planning import PlanningError
 from agent_harness.memory.service import MemoryError
 from agent_harness.web.memory import install_memory_routes
 from agent_harness.config import ConfigurationError
+from agent_harness.permissions.store import PermissionStore
 
 if TYPE_CHECKING:
     from agent_harness.desktop.host import DesktopHost
@@ -145,6 +146,14 @@ def create_app(
         """核对 run_id 并绑定其可信会话；返回人工管理入口，不启动执行。"""
         view = manager.get_run(run_id)
         return TaskService(manager.jobs.store, str(view.session_id or run_id))
+
+    @app.get("/api/runs/{run_id}/permissions")
+    async def permissions(run_id: UUID, historical: bool = False, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)) -> dict:
+        """返回 run_id 当轮权限与历史；historical固定当轮快照，其余分页会话动作，不启动或批准。"""
+        view = manager.get_run(run_id)
+        state = view.result.permissions.model_dump(mode="json")
+        history = {"items": [state["pending"]] if state["pending"] else [], "total": int(state["pending"] is not None)} if historical else PermissionStore(manager.runs_root).list(str(view.session_id or run_id), limit=limit, offset=offset)
+        return {"state": state, "policy": view.config.permission_policy.model_dump(), **history}
 
     @app.get("/api/runs/{run_id}/tasks")
     async def tasks(run_id: UUID, historical: bool = False) -> dict:

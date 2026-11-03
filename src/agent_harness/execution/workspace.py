@@ -73,6 +73,10 @@ class Workspace:
                     raise WorkspaceError("run_records_forbidden", "工具不能访问运行记录目录。")
                 if not resolved.is_relative_to(self.workspace):
                     raise WorkspaceError("path_outside_workspace", "只能访问当前工作区内的路径。")
+            from agent_harness.permissions.policy import FILE_SCOPE, path_allowed
+            scope = FILE_SCOPE.get()
+            if scope is not None and scope[0] == self.workspace and not path_allowed(resolved, scope[1], directory=resolved.is_dir()):
+                raise WorkspaceError("permission_path_denied", "路径不属于当前授权目录范围。")
             return resolved
         except WorkspaceError:
             raise

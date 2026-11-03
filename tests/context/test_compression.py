@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from agent_harness.context.compression import message_groups
 from agent_harness.context.archive import ContextArchive, ReadContextArguments
 from agent_harness.runtime.runner import CancellationState, run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, RunManifest, RunResult, TaskSpec
 from agent_harness.storage.sessions import history_messages
 from agent_harness.storage.runs import RunStore
@@ -31,7 +32,7 @@ def _manifest(tmp_path: Path, **context: object) -> RunManifest:
     (workspace / "AGENTS.md").write_text("必须保留 RULE_COMPRESSION。\n", encoding="utf-8")
     manifest = RunManifest(
         run_id=uuid4(), task=TaskSpec(prompt="保留兼容接口 USER_CONSTRAINT，完成小修改。", workspace=workspace),
-        config=RunConfig(
+        config=trusted_config(
             tools=["read_file"], limits=RunLimits(max_model_turns=15),
             context=ContextPolicy(compression="hybrid", **context),
         ),
@@ -249,7 +250,7 @@ def test_token_budget_and_config_validation(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         ContextPolicy(trigger_ratio=0.5, target_ratio=0.6)
     with pytest.raises(ValidationError):
-        RunConfig(context=ContextPolicy(model_context_tokens=1000))
+        trusted_config(context=ContextPolicy(model_context_tokens=1000))
 
 
 def test_masking_preserves_failed_result_and_recent_batch(tmp_path: Path) -> None:

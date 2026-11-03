@@ -60,8 +60,9 @@ class BlockingToolModel:
 
 
 def offline_factory(*args, **kwargs):
-    """原样转交CLI的factory参数，只将model_client设置为离线模型，返回真实FastAPI应用。"""
+    """转交CLI参数并注入离线模型和显式宿主命令授权，返回用于停服清理测试的真实应用。"""
     kwargs["model_client"] = BlockingToolModel()
+    args[1].permission_policy.command = "allow"  # 停服用例明确预授权命令，以核对真实在途进程清理。
     return original_factory(*args, **kwargs)
 
 

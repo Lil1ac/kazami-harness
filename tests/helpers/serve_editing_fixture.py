@@ -12,7 +12,7 @@ import uvicorn
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.permissions import trusted_config
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -87,7 +87,7 @@ def fixture_app(root: Path, frontend_dist: Path):
                        projects=[ProjectPreset(id="editing-project", label="局部编辑项目", path=source,
                                                test_argv=[sys.executable, "-m", "pytest", "-q"], test_timeout_seconds=30.0)])
     # 宿主默认未启用局部编辑，浏览器验收必须从配置页明确启用。
-    app = create_app(config, RunConfig(tools=["read_file", "search_files", "write_file", "run_command"]),
+    app = create_app(config, trusted_config(tools=["read_file", "search_files", "write_file", "run_command"]),
                      root / "runs", model_client=EditingModel())
     app.state.fixture_project_id = app.state.manager.catalog.register(source)
     return app

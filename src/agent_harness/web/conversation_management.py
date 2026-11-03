@@ -376,6 +376,8 @@ class ConversationManager:
                     db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(minimal), row[0]))
                     db.execute("DELETE FROM events WHERE scope=?", (row[0],))
                 db.execute("DELETE FROM lists WHERE id=?", (session_id,))
+                # 动作中可能包含待写正文；彻底删除必须连同许可一起清理，旧请求也无法再次消费。
+                db.execute("DELETE FROM permission_actions WHERE json_extract(body,'$.session_id')=?", (session_id,))
                 db.execute("DELETE FROM operations WHERE substr(id,1,?)=?", (len(session_id) + 1, session_id + ":"))
                 db.execute("DELETE FROM conversation_operations WHERE session=?", (session_id,))
                 db.execute("DELETE FROM events WHERE scope=?", (session_id,))

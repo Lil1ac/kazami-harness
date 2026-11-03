@@ -9,6 +9,7 @@ from typing import Literal
 from uuid import uuid4
 
 from pydantic import Field
+from agent_harness.permissions.policy import planning_allows
 
 from agent_harness.schemas import (DataModel, DecisionRecord, HumanDecision, PlanRevision,
                       PlanningState, PlanStep, UserInteraction, new_step_id)
@@ -235,7 +236,7 @@ class PlanningController:
         """核对name的规划权限；读工具不改变状态，写/编辑/命令越界时抛PlanningError。"""
         if self.state.pending is not None:
             raise PlanningError("awaiting_user_input", "正在等待用户处理，不能继续调用工具。")
-        if self.state.phase == "planning" and name not in {"delegate_readonly", "read_subagent", "wait_subagents", "cancel_subagent", "memory_search", "memory_get", "task_get", "task_list", "list_files", "read_file", "search_files", "read_context", *PLANNING_TOOLS}:
+        if self.state.phase == "planning" and not planning_allows(name):
             raise PlanningError("planning_read_only", "规划期间禁止修改项目或执行命令，请先提交计划并等待批准。")
         if self.state.phase == "execution" and self.state.plans:
             plan = self.state.plans[-1]

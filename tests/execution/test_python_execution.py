@@ -14,6 +14,7 @@ import pytest
 
 
 
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 
 from agent_harness.tools import ToolExecutor
@@ -50,7 +51,7 @@ def selected_executor(tmp_path: Path) -> ToolExecutor:
 
     run_dir.mkdir(parents=True)
 
-    executor = ToolExecutor(workspace, runs, RunConfig(tools=["run_command"]))
+    executor = ToolExecutor(workspace, runs, trusted_config(tools=["run_command"]))
 
     executor.bind_run(run_dir)
 
@@ -144,7 +145,7 @@ def test_deleted_source_refuses_spawn_without_falling_back(tmp_path: Path) -> No
     (workspace / "src").mkdir(parents=True)
     runs = tmp_path / "runs"
     (runs / "probe").mkdir(parents=True)
-    executor = ToolExecutor(workspace, runs, RunConfig(tools=["run_command"]))
+    executor = ToolExecutor(workspace, runs, trusted_config(tools=["run_command"]))
     executor.bind_run(runs / "probe")
     (workspace / "src").rmdir()  # 本测试拥有且确认空的目录；不删除其他文件。
     result = asyncio.run(executor.execute("run_command", json.dumps({
@@ -174,7 +175,7 @@ def test_runner_and_private_verifier_import_the_same_project(tmp_path: Path, wit
         cwd=checks, python_paths=[checks],
     ) if with_verifier else None
     model = CommandModel(program)
-    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="核对实际导入源码", workspace=selected, verifier=verifier), config=RunConfig(tools=["run_command"]))
+    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="核对实际导入源码", workspace=selected, verifier=verifier), config=trusted_config(tools=["run_command"]))
     outcome = asyncio.run(run_task(manifest, tmp_path / "task-runs", "offline-probe-key", model_client=model))
     assert outcome.result.execution_status == "completed"
     assert outcome.result.validation_status == ("passed" if with_verifier else "unverified")
@@ -189,7 +190,7 @@ def test_history_never_rediscovers_current_source_directories(tmp_path: Path) ->
     """运行结束后新增 src，不改变已有记录的根目录快照，读取本身不重新准备执行配置。"""
     workspace = tmp_path / "selected"
     workspace.mkdir()
-    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="只记录环境", workspace=workspace), config=RunConfig())
+    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="只记录环境", workspace=workspace), config=trusted_config())
     asyncio.run(run_task(manifest, tmp_path / "runs", "offline-probe-key", model_client=CommandModel()))
     (workspace / "src").mkdir()
     history = RunStore.read(tmp_path / "runs", str(manifest.run_id))
@@ -228,7 +229,7 @@ def test_explicit_project_python_is_used_by_tool_and_verifier(tmp_path: Path) ->
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True, capture_output=True)
     executable = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     snapshot = prepare_python_execution(project, python_executable=str(executable))
-    executor = ToolExecutor(project, tmp_path / "runs", RunConfig(tools=["run_command"]), python_execution=snapshot)
+    executor = ToolExecutor(project, tmp_path / "runs", trusted_config(tools=["run_command"]), python_execution=snapshot)
     run_dir = tmp_path / "runs/tool"
     run_dir.mkdir(parents=True)
     executor.bind_run(run_dir)

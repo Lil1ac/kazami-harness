@@ -11,6 +11,7 @@ import pytest
 from agent_harness.execution.local import LocalChangeStore
 from agent_harness.providers.base import ModelError, ModelResponse, ToolCall
 from agent_harness.runtime.runner import run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
 from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.storage.runs import RunStore
@@ -44,7 +45,7 @@ class FileCommandModel:
 
 def file_manifest(workspace: Path) -> RunManifest:
     """为已存在workspace返回只启用真实命令工具的当前格式任务，不声明任何输出文件。"""
-    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt='生成报告', workspace=workspace), config=RunConfig(tools=['run_command']))
+    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt='生成报告', workspace=workspace), config=trusted_config(tools=['run_command']))
 
 
 def test_commands_collect_changed_files_and_publish_fixed_evidence_before_terminal(tmp_path: Path, monkeypatch) -> None:
@@ -126,7 +127,7 @@ def test_cli_discovers_command_output_without_declared_paths(tmp_path: Path, mon
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     profile = tmp_path / 'harness.toml'
-    profile.write_text('tools = ["run_command"]\n', encoding='utf-8')
+    profile.write_text('tools = ["run_command"]\n[permission_policy]\ncommand="allow"\n', encoding='utf-8')
     records = tmp_path / 'records'
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-cli-files')
 

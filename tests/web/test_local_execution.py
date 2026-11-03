@@ -16,6 +16,7 @@ import pytest
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -50,7 +51,7 @@ class LocalModel:
 @asynccontextmanager
 async def client_for(config: WebConfig, model: LocalModel):
     """启动真实服务生命周期，产出同源HTTP客户端与调度器；退出等待任务清理。"""
-    app = create_app(config, RunConfig(tools=['read_file', 'write_file', 'run_command']), config.project_dir / 'runs', model_client=model)
+    app = create_app(config, trusted_config(tools=['read_file', 'write_file', 'run_command']), config.project_dir / 'runs', model_client=model)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost', trust_env=False) as client:
             yield client, app.state.manager

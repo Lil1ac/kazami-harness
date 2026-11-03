@@ -12,6 +12,7 @@ import pytest
 from agent_harness.config import ConfigurationError
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.runtime.runner import run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, TaskSpec, VerifierSpec
 from agent_harness.storage.sessions import history_messages
 from agent_harness.storage.runs import RunStore, StorageError
@@ -54,7 +55,7 @@ def repair_manifest(workspace: Path, *, enabled: bool = True, kind: str = 'proje
     """返回workspace的公开测试任务；enabled开关和limits覆盖总预算，kind可验证私有检查边界。"""
     return RunManifest(run_id=uuid4(), task=TaskSpec(prompt='生成符合公开测试的文件', workspace=workspace,
         verifier=VerifierSpec(kind=kind, argv=[sys.executable, '-c', CHECK_CODE], cwd=workspace)),
-        config=RunConfig(auto_repair=enabled, tools=['run_command'], limits=RunLimits(**limits)))
+        config=trusted_config(auto_repair=enabled, tools=['run_command'], limits=RunLimits(**limits)))
 
 
 @pytest.mark.parametrize('values,enabled,checks,repairs,status,reason', [
@@ -215,7 +216,7 @@ def test_cli_enables_public_test_repair_and_shows_each_check(tmp_path: Path, mon
     workspace = tmp_path / 'work'
     workspace.mkdir()
     profile = tmp_path / 'harness.toml'
-    profile.write_text('tools=["run_command"]\n', encoding='utf-8')
+    profile.write_text('tools=["run_command"]\n[permission_policy]\ncommand="allow"\nverification="allow"\n', encoding='utf-8')
     verifier = tmp_path / 'checks.toml'
     verifier.write_text('kind="project_tests"\nargv='+json.dumps([sys.executable,'-c',CHECK_CODE])+'\n', encoding='utf-8')
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-cli-repair')

@@ -17,6 +17,9 @@ from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.storage.runs import StorageError
 from agent_harness.work.planning import PlanningError, continue_planning, planning_from_history
 from agent_harness.web.schemas import ConversationTurn, ConversationView, FollowupRequest
+from agent_harness.permissions.models import PermissionResume
+from agent_harness.permissions.store import PermissionStore
+from agent_harness.work.tasks import TaskError
 
 if TYPE_CHECKING:
     from agent_harness.web.service import WebRunManager
@@ -178,6 +181,26 @@ class ConversationService:
             if self.store.read(session_id).run_ids[-1] != parent_id:
                 raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
             origin = self._ready(parent)
+            resume = None
+            pending = parent.result.permissions.pending if request.action_decision is not None and parent.result is not None else PermissionStore(self.manager.runs_root).waiting(parent)
+            if request.action_decision is not None:
+                if pending is None or pending["id"] != request.action_decision.action_id:
+                    raise SessionError("permission_stale", "当前轮没有匹配的动作审批。")
+                try:
+                    PermissionStore(self.manager.runs_root).validate(request.action_decision, str(parent_id), request_id=str(request.request_id))
+                except TaskError as error:
+                    raise SessionError(error.code, error.message) from None
+                previous = parent.result.permissions
+                resume = PermissionResume(action_id=pending["id"], decision=request.action_decision.action,
+                    spent_model_turns=previous.spent_model_turns + parent.result.model_turns,
+                    spent_tool_calls=previous.spent_tool_calls + parent.result.tool_calls,
+                    spent_seconds=previous.spent_seconds + parent.result.active_duration_seconds,
+                    spent_usage={key: previous.spent_usage.get(key, 0) + getattr(parent.result.usage, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},
+                    spent_usage_complete=previous.spent_usage_complete and parent.result.usage_complete,
+                    repair_attempts=parent.result.repair_attempts,
+                    delegation_used=bool(parent.result.subagents) or bool(parent.manifest.permission_resume and parent.manifest.permission_resume.delegation_used))
+            elif pending is not None:
+                raise SessionError("permission_pending", "请先处理当前动作审批，普通消息不会批准动作。")
             try:
                 planning = continue_planning(planning_from_history(parent), request.decision, request.prompt.strip(),
                                              parent.manifest.task.workspace, request.mode)
@@ -189,6 +212,7 @@ class ConversationService:
             # 宿主系统规则重新生成；网页可编辑部分默认沿用前轮，覆盖仍严格校验。
             merged['system_prompt'] = self.manager.run_config.system_prompt
             merged['planning_policy'] = self.manager.run_config.planning_policy  # 权限策略始终取当前宿主，旧轮配置不能绕过强制规划。
+            merged['permission_policy'] = self.manager.run_config.permission_policy.model_dump()  # 宿主收紧立即应用于接续，不能从旧轮继承放宽。
             merged['skill_roots'] = list(self.manager.run_config.skill_roots)  # 技能来源使用当前宿主登记，选择默认沿用前轮。
             patch = request.config.model_dump(exclude_none=True, exclude_unset=True)
             for section in ('limits', 'context', 'memory'):
@@ -206,7 +230,7 @@ class ConversationService:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 identifier = self.manager._queued_run_id or uuid4()
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
-                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
+                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, permission_resume=resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)

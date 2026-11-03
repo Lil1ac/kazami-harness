@@ -141,6 +141,8 @@ class ContextBuilder:
             "content": self._config.system_prompt
             + f"\n操作系统：{platform.system()}；工作区：{self._task.workspace}。"
             + python_description
+            + f"权限模式：{self._config.permission_mode}；可读目录：{self._config.permission_policy.read_roots}；可写目录：{self._config.permission_policy.write_roots}。"
+            + "动作权限由宿主确定；approval_required表示尚未执行，等待用户正式决定。计划批准不自动批准命令，不得更换工具绕过拒绝。"
             # 对外进度是可读消息，不请求模型暴露内部推理；供同一轮实时对话按顺序展示。
             + "工具调用前用一两句简短文字说明接下来要做什么；有重要结果或调整方向时说明进度，避免重复状态。"
             + "面向用户说明实际动作，不输出内部推理。全部工作和检查结束后再给出最终答复，清楚区分完成、失败和未验证事项。"

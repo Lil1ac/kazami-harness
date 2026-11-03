@@ -13,6 +13,7 @@ import pytest
 
 from agent_harness.context.builder import ContextBuilder
 from agent_harness.providers.base import ModelResponse
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig, RunManifest, RunOrigin, TaskSpec, VerifierSpec
 from agent_harness.storage.sessions import SessionError, history_messages
 from agent_harness.storage.runs import RunStore
@@ -77,7 +78,7 @@ def test_send_continue_inherits_interrupted_record_and_current_code(project, pro
     async def scenario():
         """复用真实API和Runner，固定模型仅用于核对接续机制，不代表模型修复能力。"""
         model = ContinueModel()
-        app = create_app(project, RunConfig(tools=["write_file", "read_file", "run_command"]), project.project_dir / "records", model_client=model)
+        app = create_app(project, trusted_config(tools=["write_file", "read_file", "run_command"]), project.project_dir / "records", model_client=model)
         async with app.router.lifespan_context(app):
             manager = app.state.manager
             identifier, store = await interrupted_run(manager, project_mode=project_mode, unresolved=unresolved)
@@ -129,7 +130,7 @@ def test_damaged_interrupted_record_still_blocks_continue(project):
     async def scenario():
         """在专属测试前缀附加坏行，核对GET和POST均不启动模型。"""
         model = ContinueModel()
-        app = create_app(project, RunConfig(tools=["write_file"]), project.project_dir / "records", model_client=model)
+        app = create_app(project, trusted_config(tools=["write_file"]), project.project_dir / "records", model_client=model)
         async with app.router.lifespan_context(app):
             identifier, store = await interrupted_run(app.state.manager)
             with (store.run_dir / "events.jsonl").open("ab") as output:

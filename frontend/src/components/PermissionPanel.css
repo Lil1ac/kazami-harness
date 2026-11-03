@@ -1,0 +1,51 @@
+.permission-panel {
+  min-width: 0;
+  margin: 12px 0;
+}
+.permission-panel summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.permission-panel pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: var(--surface-subtle, #f6f7f8);
+  border-radius: 8px;
+}
+.permission-panel code,
+.permission-panel dd {
+  overflow-wrap: anywhere;
+}
+.permission-panel dl {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+}
+.permission-panel dd {
+  margin: 0;
+}
+.permission-path {
+  display: block;
+  margin-top: 8px;
+}
+.permission-request {
+  border-left: 3px solid #ba8d36;
+  padding: 12px 16px;
+  margin: 8px 0;
+}
+.permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 480px) {
+  .permission-request {
+    padding: 10px;
+  }
+  .permission-actions .ant-btn {
+    padding-inline: 10px;
+  }
+}

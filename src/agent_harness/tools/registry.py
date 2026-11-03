@@ -70,6 +70,9 @@ class ToolExecutor:
         self.readonly = None if readonly is None else READONLY_TOOLS.intersection(readonly)  # 子权限与父可用工具取交集，不能由模型参数提升。
         self.subagents: SubagentController | None = None  # 仅根Agent绑定；子执行没有委派或管理权限。
         self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
+        self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
+        self.before_execute = None  # 参数和权限检查通过后记录真实开始，None表示无需事件。
+        self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -165,6 +168,19 @@ class ToolExecutor:
         })
 
     async def execute(self, name: str, arguments_json: str) -> dict:
+        """在任务局部目录权限内执行 name/arguments_json，返回统一回执；不改变其他并发任务范围。"""
+        from agent_harness.permissions.policy import FILE_SCOPE
+        token = None
+        if self.permissions is not None:
+            allowed = self.permissions.write_roots if name in {"write_file", "edit_file"} else self.permissions.read_roots
+            token = FILE_SCOPE.set((self.workspace, allowed))
+        try:
+            return await self._execute(name, arguments_json)
+        finally:
+            if token is not None:
+                FILE_SCOPE.reset(token)
+
+    async def _execute(self, name: str, arguments_json: str) -> dict:
         """严格校验并执行一个工具；业务错误回传模型，存储错误立即上抛。"""
         self.cancelled_result = None
         if self.handoff:
@@ -182,6 +198,13 @@ class ToolExecutor:
         try:
             if self.planning is not None:
                 self.planning.check_permission(name)
+            if self.permissions is not None:
+                pending = self.permissions.check(name, arguments.model_dump(mode="json"), self.call_id)
+                if pending is not None:
+                    return {"ok": False, "data": {"action_id": pending["id"]}, "error": {"code": "approval_required", "message": "尚未执行，等待用户批准本次动作。"}, "truncated": False}
+            if self.before_execute is not None:
+                self.before_execute()
+            if self.planning is not None:
                 if name in PLANNING_TOOLS:
                     data = self.planning.execute(name, arguments)
                     return {"ok": True, "data": data, "error": None, "truncated": name == "read_plan" and not data["eof"]}

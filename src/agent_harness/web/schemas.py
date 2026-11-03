@@ -11,10 +11,12 @@ from agent_harness.projects import ProjectReview, ProjectWorkspace
 from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
 from agent_harness.schemas import MemorySelection
+from agent_harness.permissions.models import ActionDecision, PermissionMode
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
 class RunConfigPatch(DataModel):
+    permission_mode: PermissionMode | None = None  # None继承；只能选择会话模式，不能修改宿主规则。
     memory: MemorySelection | None = None  # None 继承，只开放使用和候选选择，不允许页面修改宿主限额。
     auto_repair: bool | None = None  # None继承；显式开启要求宿主公开项目测试，首版最多两次修复。
     requested_model: str | None = Field(default=None, min_length=1, max_length=200)  # None 沿用宿主模型。
@@ -52,11 +54,19 @@ class CreateRunRequest(DataModel):
 
 # 追加要求只接受会话请求内容，工作区和验收来源继承父运行并由宿主核对。
 class FollowupRequest(DataModel):
+    action_decision: ActionDecision | None = None  # 具体动作决定，与计划决定互斥，不接受动作参数。
     mode: Literal["auto", "plan"] | None = None  # None继承；auto不能解除未批准计划的只读状态。
     decision: HumanDecision | None = None  # 当前问题回答或计划决定；不接受模型生成的批准。
     request_id: UUID = Field(strict=False)  # 浏览器生成的UUID字符串；相同编号和载荷只执行一次。
     prompt: str = Field(min_length=1, max_length=65536)  # 本次新要求，不要求用户重述历史。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 按字段覆盖前轮可编辑配置。
+
+    @model_validator(mode="after")
+    def decision_kind(self) -> "FollowupRequest":
+        """保证一次请求只处理一种决定；动作审批不允许夹带设置或重新规划，返回自身。"""
+        if self.action_decision is not None and (self.decision is not None or self.mode is not None or self.config.model_dump(exclude_unset=True)):
+            raise ValueError("动作决定不能同时修改配置、模式或计划")
+        return self
 
 
 # 连续对话使用精简逐轮视图；完整事件、测试和差异仍通过每轮详情查看。

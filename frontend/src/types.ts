@@ -12,6 +12,56 @@ export type ExecutionStatus =
 export type ValidationStatus = 'unverified' | 'passed' | 'failed' | 'error';
 export type CleanupStatus = 'not_needed' | 'complete' | 'incomplete' | 'unknown';
 
+/** 会话权限模式；宿主规则仍可进一步限制，模式不声明操作系统隔离。 */
+export type PermissionMode = 'research' | 'workspace_edit' | 'strict';
+
+/** 宿主固定权限上限；页面不能提交或修改。 */
+export interface PermissionPolicy {
+  read: 'allow' | 'deny' | 'ask'; // 项目读取上限。
+  write: 'allow' | 'deny' | 'ask'; // 项目文件写入上限。
+  command: 'allow' | 'deny' | 'ask'; // 本机命令上限。
+  verification: 'allow' | 'deny' | 'ask'; // 自动检查同样需要授权。
+  read_roots: string[]; // 相对于实际工作区的可读目录。
+  write_roots: string[]; // 相对于实际工作区的可写目录。
+  approval_ttl_seconds: number; // 审批包含排队在内的有效秒数。
+}
+
+/** 一条不可变动作及当前处理状态；历史快照保留当时状态。 */
+export interface PermissionAction {
+  id: string; // 动作UUID。
+  source_run_id: string; // 产生请求的原运行。
+  fingerprint: string; // 审阅载荷指纹，决定时原样返回。
+  name: string; // 文件工具、命令或宿主验收。
+  arguments: Record<string, unknown>; // 原动作参数，只展示、不从前端重新提交执行。
+  inputs: { target?: string; cwd?: string; executable?: string; file?: { exists: boolean; text?: string | null } }; // 宿主解析的目标、实际程序与覆盖前固定文本。
+  workspace: string; // 实际工作区。
+  created_at: number; // UTC时间戳，秒。
+  expires_at: number; // 到期UTC时间戳，秒。
+  status: string; // 待批准、执行中或真实终态。
+  decision?: 'approve' | 'reject' | 'cancel' | null; // 当前明确决定；到期但未决定的请求仍可取消。
+  execution_run_id: string | null; // 尚未认领时为空。
+}
+
+/** 本段Run的固定权限与审批链此前累计预算。 */
+export interface PermissionState {
+  effective: Record<string, 'allow' | 'deny' | 'ask'>; // 后端计算的当前有效判定，包含规划只读约束。
+  mode: PermissionMode; // 当轮实际选择。
+  policy_fingerprint: string; // 宿主与会话约束指纹。
+  pending: PermissionAction | null; // 尚未执行的当前审批。
+  spent_model_turns: number; // 进入本段前已用模型轮次。
+  spent_tool_calls: number; // 进入本段前已接纳工具次数。
+  spent_seconds: number; // 进入本段前已用活动秒数。
+  spent_usage: Record<string, number>; // 此前各段的已知Token，不推算缺失部分。
+  spent_usage_complete: boolean; // 此前各段用量是否完整。
+}
+
+/** 明确的人类单次决定，不允许修改动作参数或扩大目录。 */
+export interface ActionDecision {
+  action_id: string; // 当前待处理动作。
+  fingerprint: string; // 用户看到的固定版本。
+  action: 'approve' | 'reject' | 'cancel'; // 三种明确操作。
+}
+
 /** 模型维护的步骤进度；正文属于对应计划版本，不能借更新进度扩大授权。 */
 export interface PlanStep {
   id: string; // 宿主生成的稳定步骤编号，用于关联工作项。
@@ -178,6 +228,8 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  permission_policy: PermissionPolicy; // 当前宿主权限上限，只读。
+  permission_mode: PermissionMode; // 当前会话权限模式。
   memory: MemoryPolicy; // 独立控制本轮读取与候选，宿主预算只读。
   planning_policy: 'auto' | 'required'; // 宿主只读策略，required时自动入口也必须先批准，浏览器不能覆盖。
   auto_repair: boolean; // 公开项目测试失败时最多自动修复两次，默认关闭，不重置预算。
@@ -223,6 +275,7 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  permissions: PermissionState; // 本轮权限和动作等待的固定事实。
   subagents?: SubagentRecord[]; // 本轮只读委派；次数及用量已经包含在本轮总数。
   subagent_report?: SubagentReport | null; // 仅子运行有固定交接报告，根运行为空。
   tasks?: TaskSnapshot; // 当轮固定任务快照；活动列表通过任务接口刷新。
@@ -346,6 +399,8 @@ export interface TaskSnapshot {
 
 /** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
 export interface JobView {
+  approval_status?: string; // 等待作业所关联动作的当前状态，不改写旧Run的等待快照。
+  wait_reason?: string | null; // 等待时区分动作审批、计划审批与问题回答。
   conversation_title?: string; // 已建立会话的人工有效标题；首轮排队尚无会话时省略。
   assigned_project?: { id: string; label: string; path: string; available: boolean } | null; // 会话当前整理归属，执行来源仍看project_id。
   id: string; // 同时是客户端幂等请求编号。
@@ -509,6 +564,7 @@ export interface DesktopRunSettings {
 
 /** 本浏览器下一次提交的配置；不修改服务器全局设置。 */
 export interface ConfigOverrides {
+  permission_mode?: PermissionMode; // 仅覆盖下一轮会话模式，不接受宿主策略。
   memory?: Pick<MemoryPolicy, 'use' | 'capture'>; // 下一 Run 的两个选择，不允许修改内部记忆预算。
   auto_repair?: boolean; // 本轮明确开启/关闭自动修复；缺省继承宿主或前轮。
   requested_model?: string; // 缺省沿用宿主模型。
@@ -548,6 +604,7 @@ export interface EventsResponse {
 
 /** 用户追加要求；请求编号在网络重试时保持，避免重复修改。 */
 export interface FollowupRequest {
+  action_decision?: ActionDecision; // 与计划决定及配置覆盖互斥的动作审批。
   mode?: 'auto' | 'plan'; // auto不解除待批准状态；plan明确重新规划。
   decision?: HumanDecision; // 只有用户明确操作才携带计划批准。
   request_id: string; // 浏览器生成的 UUID。

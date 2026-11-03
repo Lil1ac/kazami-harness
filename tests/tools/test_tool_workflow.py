@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from agent_harness.config import ConfigurationError
 from agent_harness.runtime.runner import exit_code, run_task
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import ArtifactRef, RunConfig, RunLimits, RunManifest, TaskSpec
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.tools import ToolExecutor
@@ -24,7 +25,7 @@ TOOLS = ["read_file", "search_files", "write_file", "run_command"]
 
 def _manifest(workspace: Path, **limits) -> RunManifest:
     """创建启用四工具并允许覆盖预算的任务，方便外部行为集成测试。"""
-    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="分析 app.log 并生成 report.json", workspace=workspace), config=RunConfig(tools=TOOLS, limits=RunLimits(**limits)))
+    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="分析 app.log 并生成 report.json", workspace=workspace), config=trusted_config(tools=TOOLS, limits=RunLimits(**limits)))
 
 
 def _call(identifier: str, name: str, arguments: dict) -> dict:
@@ -195,9 +196,9 @@ def test_artifact_reference_requires_scoped_relative_path(path: str):
 
 def test_command_cwd_and_disabled_tool_are_rejected(tmp_path: Path):
     """工具只按配置启用，命令目录不能越界，参数错误不创建子进程。"""
-    read_only = ToolExecutor(tmp_path, tmp_path / ".runs", RunConfig())
+    read_only = ToolExecutor(tmp_path, tmp_path / ".runs", trusted_config())
     assert asyncio.run(read_only.execute("write_file", '{"path":"x","content":"x"}'))["error"]["code"] == "unknown_tool"
-    tool = ToolExecutor(tmp_path, tmp_path / ".runs", RunConfig(tools=TOOLS))
+    tool = ToolExecutor(tmp_path, tmp_path / ".runs", trusted_config(tools=TOOLS))
     data = asyncio.run(tool.execute("run_command", json.dumps({"argv": ["python", "-c", "pass"], "cwd": str(tmp_path)})))
     assert data["error"]["code"] == "invalid_arguments"
 

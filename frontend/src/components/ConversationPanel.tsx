@@ -17,6 +17,7 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
 import { PlanningPanel } from './PlanningPanel';
+import { PermissionPanel, PermissionSelect } from './PermissionPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
@@ -300,6 +301,7 @@ export function ConversationPanel({
               onDecision={send.decide}
             />
           )}
+          {run?.result.permissions.pending && <PermissionPanel run={run} disabled={!send.canDecide || conversation.management.state !== 'active'} onDecision={send.decideAction} />}
         </div>
       </div>
       <div className="conversation-composer">
@@ -425,6 +427,7 @@ export function ConversationPanel({
             />
             <div className="composer-toolbar">
               <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
+              <PermissionSelect value={send.permissionMode} onChange={send.setPermissionMode} disabled={send.permissionBlocked} />
               <span className="composer-keyboard-hint">
                 {!run ? '正在核对最新运行状态…' : run.active ? '' : 'Enter 发送 · Shift+Enter 换行'}
               </span>

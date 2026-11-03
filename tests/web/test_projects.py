@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from agent_harness.config import ConfigurationError
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace, load_web_config
@@ -94,7 +95,7 @@ def project_config(tmp_path: Path) -> WebConfig:
 @asynccontextmanager
 async def client_for(config: WebConfig, model: ProjectModel | None = None) -> AsyncIterator[tuple]:
     """按 config 启动真实 ASGI 生命周期，产出 HTTP 客户端和应用；退出时等待任务清理。"""
-    app = create_app(config, RunConfig(tools=["read_file", "write_file"]), config.project_dir / "records", model_client=model or ProjectModel())
+    app = create_app(config, trusted_config(tools=["read_file", "write_file"]), config.project_dir / "records", model_client=model or ProjectModel())
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             yield client, app

@@ -7,6 +7,10 @@ import { toolFailureMessage } from '../activity';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
+  permissions_prepared: '固定执行权限',
+  permission_requested: '等待动作审批',
+  permission_resuming: '按批准接续原动作',
+  tool_requested: '接纳工具请求',
   subagent_snapshot: '子 Agent 进度',
   subagent_handoff: '收到子报告，重新决定后续动作',
   budget_handoff_started: '预算收尾交接',
@@ -165,7 +169,7 @@ export function EventTrail({
               <details>
                 <summary>
                   <span className="event-main">
-                    <strong>{eventLabels[event.type] || event.type}</strong>
+                    <strong>{event.type === 'assistant_message' && event.payload.source === 'host_action_resume' ? '宿主接续原动作' : eventLabels[event.type] || event.type}</strong>
                     <span className="event-summary">{eventSummary(event)}</span>
                   </span>
                   <span className="event-meta">

@@ -163,6 +163,8 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     checker = Path(__file__).resolve().parents[1] / "examples/verifiers/verify_logs.py"
     verifier = tmp_path / "verifier.toml"
     verifier.write_text("argv = " + json.dumps([sys.executable, str(checker)]) + "\ntimeout_seconds = 5.0\n", encoding="utf-8")
+    profile = tmp_path / "trusted.toml"
+    profile.write_text('[permission_policy]\nverification="allow"\n', encoding="utf-8")  # 本用例显式预授权独立检查，默认审批由专门测试覆盖。
     requests = []
 
     def handler(request):
@@ -180,7 +182,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     records = tmp_path / "records"
     code = cli.main([
         "run", "--task", "检查已有报告", "--workspace", str(workspace), "--runs-dir", str(records),
-        "--verifier", str(verifier), "--json",
+        "--verifier", str(verifier), "--config", str(profile), "--json",
     ])
     output = capsys.readouterr()
     result = json.loads(output.out)

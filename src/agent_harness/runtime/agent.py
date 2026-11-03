@@ -211,7 +211,56 @@ async def _run_agent(
         raise AgentStopped("failed", skill_error.code)
     if parent is not None and not memory_history_changed:
         compressor.inherit(parent, messages, executor.definitions)
-    while context.result.model_turns < config.limits.max_model_turns:
+    permissions = getattr(executor, "permissions", None)
+    resume = context.manifest.permission_resume
+    if resume is not None:
+        from agent_harness.work.tasks import TaskError
+        try:
+            if resume.decision == "approve" and context.deadline <= asyncio.get_running_loop().time():
+                permissions.store.invalidate(resume.action_id, "run_timeout")
+                raise AgentStopped("timed_out", "run_timeout")
+            action = permissions.prepare_resume()
+            if resume.decision != "approve":
+                context.result.final_answer = "已拒绝本次动作。" if resume.decision == "reject" else "已取消动作等待。"
+                raise AgentStopped("cancelled", "permission_rejected" if resume.decision == "reject" else "permission_cancelled")
+            context.emit("permission_resuming", {"action_id": action["id"], "source_run_id": action["source_run_id"]})
+            if action["name"] == "verification":
+                context.result.final_answer = action["final_answer"]
+                feedback = await on_completion() if on_completion is not None else None
+                permissions.finish(action, context.result.validation_status == "passed")
+                if feedback is None:
+                    return
+                messages.append({"role": "user", "content": feedback})
+            else:
+                # 宿主接续原动作不消耗新的模型请求或工具额度，也不伪装成供应商新响应。
+                call = ToolCall("resume_" + action["id"], action["name"], json.dumps(action["arguments"], ensure_ascii=False))
+                message = {"role": "assistant", "content": None, "tool_calls": [{"id": call.call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments_json}}]}
+                context.emit("assistant_message", {"source": "host_action_resume", "action_id": action["id"], "message": message})
+                messages.append(message)
+                executor.call_id = call.call_id
+                def resume_started() -> None:
+                    """原动作完成全部核验后记录真实开始；返回None，不重复消费工具额度。"""
+                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json, "action_id": action["id"]})
+                executor.before_execute = resume_started
+                try:
+                    result = await executor.execute(call.name, call.arguments_json)
+                except asyncio.CancelledError:
+                    actual = getattr(executor, "cancelled_result", None)
+                    if actual is not None:
+                        _record_tool(context, call, actual, messages)
+                        permissions.finish(action, False)
+                    raise
+                _record_tool(context, call, result, messages)
+                permissions.finish(action, bool(result.get("ok")))
+                if not result.get("ok"):
+                    raise AgentStopped("failed", (result.get("error") or {}).get("code", "permission_action_failed"))
+        except TaskError as error:
+            permissions.store.invalidate(resume.action_id, error.code)
+            context.result.final_answer = error.message
+            raise AgentStopped("failed", error.code) from None
+        finally:
+            executor.before_execute = None
+    while context.available("model_turns") > 0:
         # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
         await asyncio.sleep(0)
         controller = getattr(executor, "subagents", None)
@@ -222,7 +271,7 @@ async def _run_agent(
                 messages.append({"role": "user", "content": "宿主收回并行研究报告：" + json.dumps(reports, ensure_ascii=False)})
         delegated = context.manifest.delegation is not None or context.delegation_used
         handoff = delegated and (context.available("model_turns") == 1
-                                 or context.result.tool_calls >= config.limits.max_tool_calls)
+                                 or context.available("tool_calls") <= 0)
         if isinstance(executor, ToolExecutor):
             executor.handoff = handoff
         if context.manifest.delegation is not None:
@@ -253,7 +302,7 @@ async def _run_agent(
         if not prepared.check.allowed:
             reason = "max_model_input_bytes" if prepared.check.input_bytes > prepared.check.max_input_bytes else "max_model_input_tokens"
             raise AgentStopped("limit_exceeded", reason)
-        if context.result.model_turns >= config.limits.max_model_turns:
+        if context.available("model_turns") <= 0:
             # 摘要可能刚用完最后一次额度，不能为不会发送的执行请求记录“实际采用”。
             raise AgentStopped("limit_exceeded", "max_model_turns")
         builder.memory.record_use(context.result.model_turns + 1, prepared.messages)
@@ -281,7 +330,7 @@ async def _run_agent(
             for call in batch:
                 _record_tool(context, call, _skipped("handoff_tools_disabled"), messages)
             raise AgentStopped("limit_exceeded", "handoff_tools_disabled")
-        if len(batch) > config.limits.max_tool_calls - context.result.tool_calls:
+        if len(batch) > context.available("tool_calls"):
             # 整批拒绝，避免只执行一半后把残缺配对历史再发给供应商。
             for call in batch:
                 _record_tool(context, call, _skipped("skipped_limit"), messages)
@@ -296,20 +345,32 @@ async def _run_agent(
                 await asyncio.sleep(0)
                 # 被接纳处理的未知工具和非法参数也占额度，避免错误调用无限循环。
                 # 委派可能消耗了同批工具剩余额度，每个实际调用前再次核对父子总数。
-                if context.result.tool_calls >= config.limits.max_tool_calls:
+                if context.available("tool_calls") <= 0:
                     for remaining in batch[index:]:
                         _record_tool(context, remaining, _skipped("skipped_limit"), messages)
                     raise AgentStopped("limit_exceeded", "max_tool_calls")
                 context.consume("tool")
-                context.emit("tool_started", {
-                    "call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json,
-                })
-                started = True
+                context.emit("tool_requested", {"call_id": call.call_id, "name": call.name})
+                def tool_started() -> None:
+                    """当前call在参数和权限检查通过后记录实际开始；更新取消时的执行状态。"""
+                    nonlocal started
+                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json})
+                    started = True
+                if isinstance(executor, ToolExecutor):
+                    executor.call_id = call.call_id
+                    executor.before_execute = tool_started
+                else:
+                    tool_started()  # 注入的测试执行器仍遵循开始后执行的事件契约。
                 if call.name == "delegate_readonly" and context.manifest.delegation is None:
                     context.delegation_used = True
                 result = await executor.execute(call.name, call.arguments_json)
                 _record_tool(context, call, result, messages)
                 started = False
+                if (result.get("error") or {}).get("code") == "approval_required":
+                    for remaining in batch[index + 1:]:
+                        _record_tool(context, remaining, _skipped("skipped_action_approval"), messages)
+                    context.result.final_answer = "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
+                    raise AgentStopped("waiting_input", "action_approval")
                 if call.name == "delegate_readonly" and context.manifest.delegation is None:
                     if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name == "delegate_readonly":
                         continue  # 同批独立研究可并发接纳；后续修改仍由交接屏障跳过。
@@ -370,9 +431,18 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
 
     正常或异常退出均取消并等待未结束子项，确保客户端关闭、独立检查和父终态前没有后台读者。
     """
+    from agent_harness.permissions.policy import FILE_SCOPE, roots
+    policy = context.manifest.config.permission_policy
+    token = FILE_SCOPE.set((context.manifest.task.workspace.resolve(), roots(context.manifest.task.workspace.resolve(), policy.read_roots) if policy.read == "allow" else ()))
+    if getattr(executor, "permissions", None) is None and isinstance(executor, ToolExecutor):
+        from agent_harness.permissions.controller import PermissionController
+        executor.permissions = PermissionController(context, getattr(executor, "planning", None))
+        context.result.permissions = executor.permissions.state.model_copy(deep=True)
+        context.emit("permissions_prepared", {"state": context.result.permissions.model_dump(mode="json")})
     try:
         await _run_agent(context, client, executor, on_completion=on_completion, inherited_context=inherited_context)
     finally:
+        FILE_SCOPE.reset(token)
         controller = getattr(executor, "subagents", None)
         if controller is not None:
             await controller.close()

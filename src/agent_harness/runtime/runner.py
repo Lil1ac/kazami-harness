@@ -85,7 +85,8 @@ class RunContext:
             raise AgentStopped("limit_exceeded", limit)
         contexts = [self] if self.budget_parent is None else [self, self.budget_parent]
         for item in contexts:
-            if getattr(item.result, field) >= getattr(item.manifest.config.limits, limit):
+            spent = getattr(item.result.permissions, "spent_" + field)
+            if getattr(item.result, field) + spent >= getattr(item.manifest.config.limits, limit):
                 raise AgentStopped("limit_exceeded", limit)
         for item in contexts:
             setattr(item.result, field, getattr(item.result, field) + 1)
@@ -97,7 +98,8 @@ class RunContext:
         """返回field模型/工具未使用且未预留次数；不改变预算，子运行以自身上限计算。"""
         limit = "max_model_turns" if field == "model_turns" else "max_tool_calls"
         held = self.reserved.get(field, 0) if self.budget_parent is None else 0
-        return max(0, getattr(self.manifest.config.limits, limit) - getattr(self.result, field) - held)
+        spent = getattr(self.result.permissions, "spent_" + field)
+        return max(0, getattr(self.manifest.config.limits, limit) - getattr(self.result, field) - held - spent)
 
     def active_duration(self) -> float:
         """返回本次运行耗时秒数；使用单调时间，不受系统时间校准影响。"""
@@ -336,9 +338,17 @@ async def _run_task(
         tool_executor.bind_run(store.run_dir)
     result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True, planning=manifest.planning.model_copy(deep=True))
     started_at = asyncio.get_running_loop().time()
-    deadline = started_at + manifest.config.limits.run_timeout_seconds
+    resume = manifest.permission_resume
+    deadline = started_at + max(0, manifest.config.limits.run_timeout_seconds - (resume.spent_seconds if resume and resume.decision == "approve" else 0))
     context = RunContext(manifest, store, result, deadline, started_at=started_at)
     planning = PlanningController(manifest.planning, root, context.emit)
+    from agent_harness.permissions.controller import PermissionController
+    permissions = PermissionController(context, planning)
+    result.permissions = permissions.state.model_copy(deep=True)
+    context.emit("permissions_prepared", {"state": result.permissions.model_dump(mode="json")})
+    result.repair_attempts = resume.repair_attempts if resume is not None else 0
+    context.delegation_used = bool(resume and resume.delegation_used)
+    tool_executor.permissions = permissions
     tasks = TaskController(WorkStore(runs_root), manifest, planning)
     result.tasks = tasks.snapshot()
     context.emit("tasks_snapshot", {"state": result.tasks})
@@ -365,6 +375,15 @@ async def _run_task(
             return None
         if verifier is None:
             return None
+        if permissions.decision("verification") == "deny":
+            result.stop_reason = "verification_permission_denied"
+            context.emit("verification_skipped", {"reason": "permission_denied"})
+            return None
+        spec = manifest.task.verifier
+        pending = permissions.check("verification", {"argv": spec.argv, "cwd": str(spec.cwd if spec.cwd is not None else Path.cwd()), "timeout_seconds": spec.timeout_seconds}, "host_verification")
+        if pending is not None:
+            result.execution_status, result.stop_reason = "waiting_input", "action_approval"
+            raise AgentStopped("waiting_input", "action_approval")
         context.emit("verification_started", {"timeout_seconds": manifest.task.verifier.timeout_seconds, "repair_attempt": result.repair_attempts, "kind": manifest.task.verifier.kind})
         detail = await verifier.run(manifest.task.verifier, manifest.task.workspace, manifest.run_id, python_execution=execution)
         if asyncio.get_running_loop().time() >= deadline:
@@ -377,7 +396,7 @@ async def _run_task(
             context.emit("repair_stopped", {"reason": result.stop_reason, "repair_attempts": result.repair_attempts})
             return None
         limits = manifest.config.limits
-        exhausted = "max_model_turns" if result.model_turns >= limits.max_model_turns else "max_tool_calls" if result.tool_calls >= limits.max_tool_calls else None
+        exhausted = "max_model_turns" if context.available("model_turns") <= 0 else "max_tool_calls" if context.available("tool_calls") <= 0 else None
         if exhausted is not None:
             result.stop_reason = exhausted
             context.emit("repair_stopped", {"reason": exhausted, "repair_attempts": result.repair_attempts})
@@ -458,9 +477,13 @@ async def _run_task(
         context.emit("runtime_error", {"code": result.stop_reason, "error_type": type(error).__name__})
 
     _collect_tool_state(result, tool_executor)
+    if resume is not None and resume.decision == "approve":
+        # 若必需上下文或预算校验在认领前停止，旧许可也不能继续显示为等待执行。
+        permissions.store.invalidate(resume.action_id, result.stop_reason or "resume_stopped")
     tasks.service.release("前轮已结束，请核对现场后接续。" if result.execution_status != "completed" else "前轮尚未完成此项，请接续。")
     result.tasks = tasks.snapshot()
     result.planning = planning.state.model_copy(deep=True)
+    result.permissions = permissions.snapshot()
     context.emit("artifact_collection_started")
     references, warnings = await _file_operation(_capture_artifacts, manifest, changes, projects, finalizing=True)
     result.artifact_status = "incomplete" if warnings else "complete"

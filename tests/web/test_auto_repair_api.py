@@ -12,6 +12,7 @@ import sys
 import httpx
 import pytest
 
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from tests.runtime.test_auto_repair import CHECK_CODE, RepairModel
@@ -43,7 +44,7 @@ def test_public_repair_and_followup_choice_survive_restart(project_config, monke
         """两次独立服务生命周期共运行三轮，公开开关与预算分别冻结，下载仍指向所属旧轮。"""
         for restart in range(2):
             model = RepairModel(['bad', 'good'])
-            app = create_app(config, RunConfig(tools=['run_command']), records, model_client=model)
+            app = create_app(config, trusted_config(tools=['run_command']), records, model_client=model)
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                     if not restart:
@@ -91,7 +92,7 @@ def test_auto_repair_without_public_tests_rejected_before_model(project_config, 
     async def scenario():
         """从受限任务API请求无测试修复，核对配置错误及目录无半启动运行。"""
         records = config.project_dir / 'records'
-        app = create_app(config, RunConfig(tools=['run_command']), records, model_client=model)
+        app = create_app(config, trusted_config(tools=['run_command']), records, model_client=model)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                 response = await submit_run(client, json={'project_id':'backend','prompt':'错误请求','config':{'auto_repair':True}})
@@ -110,7 +111,7 @@ def test_interrupted_repair_keeps_check_history_and_can_continue_without_replay(
     async def scenario():
         """固定真实挂起时事件前缀，正常关闭后模拟崩溃尾部缺失，随后读取并明确追加。"""
         gated = RepairModel(['bad','good'], wait_repair=True)
-        app = create_app(config, RunConfig(tools=['run_command']), records, model_client=gated)
+        app = create_app(config, trusted_config(tools=['run_command']), records, model_client=gated)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                 response = await submit_run(client, json={'project_id':'backend','prompt':'首轮修复','config':{'auto_repair':True}})
@@ -124,7 +125,7 @@ def test_interrupted_repair_keeps_check_history_and_can_continue_without_replay(
         (directory/'summary.json').unlink()
         original = hashlib.sha256(prefix).hexdigest()
         model = RepairModel(['bad','good'])
-        restarted = create_app(config, RunConfig(tools=['run_command']), records, model_client=model)
+        restarted = create_app(config, trusted_config(tools=['run_command']), records, model_client=model)
         async with restarted.router.lifespan_context(restarted):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url='http://localhost') as client:
                 view = (await client.get('/api/runs/'+identifier)).json()

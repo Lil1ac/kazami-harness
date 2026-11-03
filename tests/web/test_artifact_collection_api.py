@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.storage.runs import RunStore
@@ -69,7 +70,7 @@ def test_generated_reports_survive_restart_and_only_current_turn_files_are_liste
         """先跑首轮，重建服务后追加两轮；读取历史产物和磁盘结果，不用API投影补造终态。"""
         first = None
         for restart in range(2):
-            app = create_app(config, RunConfig(tools=['run_command']), records, model_client=ReportModel())
+            app = create_app(config, trusted_config(tools=['run_command']), records, model_client=ReportModel())
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                     if restart == 0:

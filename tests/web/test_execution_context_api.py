@@ -16,6 +16,7 @@ import pytest
 
 from agent_harness.projects.models import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -89,7 +90,7 @@ def configuration(tmp_path: Path, *, verified: bool = True, kind: str = "project
 @asynccontextmanager
 async def client_for(config: WebConfig, model: ImportModel):
     """以 config/model 打开真实 API 及生命周期，产出客户端和管理器，结束时清理后台任务。"""
-    app = create_app(config, RunConfig(tools=["write_file", "run_command"]), config.project_dir / "runs", model_client=model)
+    app = create_app(config, trusted_config(tools=["write_file", "run_command"]), config.project_dir / "runs", model_client=model)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
             yield client, app.state.manager

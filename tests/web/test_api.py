@@ -15,6 +15,7 @@ import pytest
 
 from agent_harness.config import ConfigurationError
 from agent_harness.providers.base import ModelResponse, ToolCall
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import RunConfig
 from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
@@ -108,7 +109,7 @@ def web_config(tmp_path: Path) -> WebConfig:
 @asynccontextmanager
 async def api_client(config: WebConfig, model: FinalModel | None = None) -> AsyncIterator[tuple]:
     """以 config 和离线 model 启动真实应用生命周期，产出 (HTTP客户端,应用) 并在退出时收尾。"""
-    app = create_app(config, RunConfig(), runs_root=config.project_dir / "records", model_client=model or FinalModel())
+    app = create_app(config, trusted_config(), runs_root=config.project_dir / "records", model_client=model or FinalModel())
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             yield client, app
@@ -324,7 +325,7 @@ def test_history_pagination_filter_and_options_never_serialize_key(web_config: W
             assert (await client.get("/api/conversations", params={"status": "completed"})).json()["total"] == 2
             assert (await client.get("/api/conversations", params={"status": "cancelled"})).json()["items"] == []
             assert second_view["config"]["limits"]["max_model_turns"] == 2
-            assert second_view["config"]["limits"]["max_tool_calls"] == RunConfig().limits.max_tool_calls
+            assert second_view["config"]["limits"]["max_tool_calls"] == trusted_config().limits.max_tool_calls
             options = await client.get("/api/options")
             assert options.json()["key_configured"] is True
             assert SECRET not in "".join([page1.text, page2.text, options.text, json.dumps(second_view)])
@@ -566,7 +567,7 @@ def test_historical_unfinished_run_is_interrupted_without_fabricated_terminal(we
     identifier = uuid4()
     store = RunStore.create(
         web_config.project_dir / "records",
-        RunManifest(run_id=identifier, task=TaskSpec(prompt="旧进程未完成任务", workspace=web_config.workspaces[0].path), config=RunConfig()),
+        RunManifest(run_id=identifier, task=TaskSpec(prompt="旧进程未完成任务", workspace=web_config.workspaces[0].path), config=trusted_config()),
     )
     store.append("run_started", {})
 

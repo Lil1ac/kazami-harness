@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createFollowup, errorMessage, getJob, getRun } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createFollowup, errorMessage, getJob, getRun, getPermissions } from '../api';
 import { useConfigDraft } from '../config';
-import type { ConversationView, FollowupRequest, HumanDecision, RunView, JobView } from '../types';
+import type {
+  ActionDecision,
+  PermissionMode,
+  ConversationView,
+  FollowupRequest,
+  HumanDecision,
+  RunView,
+  JobView,
+} from '../types';
 
 /** 未确认的发送；父轮和完整载荷一起固定，重试只能确认同一请求。 */
 export interface PendingSend {
@@ -71,16 +79,53 @@ export function useConversationSend(
 ) {
   const { draft } = useConfigDraft();
   const cache = useQueryClient();
+  const permissionRequest = run?.result.permissions.pending;
+  const permissionStatus = useQuery({
+    queryKey: ['permissions', run?.run_id, false, 0],
+    queryFn: /* 只核对当前决定，防止取消排队后页面仍被旧快照阻塞。 */ () =>
+      getPermissions(run!.run_id),
+    enabled: Boolean(permissionRequest),
+    refetchInterval: permissionRequest ? 2000 : false,
+  });
+  const currentPermission = permissionStatus.data?.items.find(
+    /* 必须匹配同一动作，不用其他历史决定解锁。 */ (item) => item.id === permissionRequest?.id,
+  );
+  const permissionBlocked = Boolean(
+    permissionRequest &&
+    (!currentPermission ||
+      ['pending', 'approved', 'executing', 'unknown'].includes(currentPermission.status) ||
+      (currentPermission.status === 'expired' && !currentPermission.decision)),
+  );
   const [initial] = useState(
     /* 首次挂载才读取存储，切换检查轮次不重置会话草稿。 */ () => readDraft(sessionId),
   );
   const [text, setText] = useState(initial.text); // 同一会话内连续编辑，允许执行中预写下一条。
   const [pending, setPending] = useState<PendingSend | null>(initial.pending); // 只在明确确认后清除。
   const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 只决定下一轮入口，不解除已存在的规划限制。
+  const [permissionChoice, setPermissionChoice] = useState<{
+    parentId: string;
+    mode: PermissionMode;
+  } | null>(null); // 选择只影响下一条普通消息。
+  const permissionMode =
+    permissionChoice?.parentId === conversation.latest_run_id
+      ? permissionChoice.mode
+      : run?.config.permission_mode || 'workspace_edit';
+  const setPermissionMode = useCallback(
+    /* 模式回调只随最新轮变化，输入文字不重建选择器。 */ (value: PermissionMode) =>
+      setPermissionChoice({ parentId: conversation.latest_run_id, mode: value }),
+    [conversation.latest_run_id],
+  );
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
   const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
-  const [memoryChoice, setMemoryChoice] = useState<{ parentId: string; use: boolean; capture: boolean } | null>(null); // 选择绑定最新父轮，重试保留已发送载荷。
-  const memory = memoryChoice?.parentId === conversation.latest_run_id ? { use: memoryChoice.use, capture: memoryChoice.capture } : { use: run?.config.memory.use ?? true, capture: run?.config.memory.capture ?? true };
+  const [memoryChoice, setMemoryChoice] = useState<{
+    parentId: string;
+    use: boolean;
+    capture: boolean;
+  } | null>(null); // 选择绑定最新父轮，重试保留已发送载荷。
+  const memory =
+    memoryChoice?.parentId === conversation.latest_run_id
+      ? { use: memoryChoice.use, capture: memoryChoice.capture }
+      : { use: run?.config.memory.use ?? true, capture: run?.config.memory.capture ?? true };
   const autoRepair =
     repairChoice?.parentId === conversation.latest_run_id
       ? repairChoice.enabled
@@ -112,6 +157,11 @@ export function useConversationSend(
       }
       if (job.status === 'needs_review' || job.status === 'cancelled')
         throw new Error(job.error || '作业已取消。');
+      if (job.status === 'failed' && job.execution_status === null)
+        throw Object.assign(new Error(job.error || '动作尚未启动，请核对审批与配置。'), {
+          status: 409,
+          code: 'job_not_started',
+        });
       return getRun(job.run_id);
     },
     onSuccess: /* 只有收到真实运行后才交付新轮；发送期间预写的新要求继续保留。 */ (
@@ -120,6 +170,12 @@ export function useConversationSend(
     ) => {
       setPending(null);
       setQueuedJob(null);
+      setPermissionChoice(
+        /* 发送期间的新选择留给下一条，不能改变原请求或被新轮覆盖。 */ (choice) =>
+          choice && choice.mode !== submission.body.config?.permission_mode
+            ? { parentId: view.run_id, mode: choice.mode }
+            : null,
+      );
       setRepairChoice(
         /* 发送期间编辑的新选择留给下一条，重试确认不改变原授权。 */ (choice) =>
           choice && choice.enabled !== submission.body.config?.auto_repair
@@ -149,6 +205,7 @@ export function useConversationSend(
         setPending(null);
       }
       void cache.invalidateQueries({ queryKey: ['conversation', sessionId] });
+      void cache.invalidateQueries({ queryKey: ['permissions'] });
     },
     onSettled: /* 无论响应成功或失败，都允许用户下一次明确操作。 */ () => {
       inFlight.current = false;
@@ -163,6 +220,7 @@ export function useConversationSend(
         run &&
         run.run_id === conversation.latest_run_id &&
         !run.active &&
+        !permissionBlocked &&
         text.trim(),
       ));
   const canDecide = Boolean(
@@ -178,7 +236,12 @@ export function useConversationSend(
   /** 发送新要求或确认原请求；返回 void，忙碌和空输入直接忽略，不制造新编号。 */
   function send(): void {
     if (inFlight.current || !canSend) return;
-    const { skills: _previousTaskSkills, auto_repair: _previousRepairChoice, memory: _previousMemoryChoice, ...overrides } = draft;
+    const {
+      skills: _previousTaskSkills,
+      auto_repair: _previousRepairChoice,
+      memory: _previousMemoryChoice,
+      ...overrides
+    } = draft;
     const submission = pending || {
       parentId: conversation.latest_run_id,
       body: {
@@ -188,6 +251,7 @@ export function useConversationSend(
         // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
         config: structuredClone({
           ...overrides,
+          permission_mode: permissionMode,
           memory,
           ...(autoRepair !== undefined ? { auto_repair: autoRepair } : {}),
           ...(skills !== undefined ? { skills } : {}),
@@ -219,9 +283,39 @@ export function useConversationSend(
     setPending(submission);
     mutation.mutate(submission);
   }
+
+  /** 对最新等待动作提交action；只传固定编号和指纹，返回void，不允许同时修改配置或参数。 */
+  function decideAction(action: ActionDecision['action']): void {
+    const current = run?.result.permissions.pending;
+    if (inFlight.current || !canDecide || !current || conversation.management.state !== 'active')
+      return;
+    const submission: PendingSend = {
+      parentId: conversation.latest_run_id,
+      body: {
+        request_id: crypto.randomUUID(),
+        prompt:
+          action === 'approve'
+            ? '批准本次动作'
+            : action === 'reject'
+              ? '拒绝本次动作'
+              : '取消动作等待',
+        action_decision: { action_id: current.id, fingerprint: current.fingerprint, action },
+      },
+    };
+    inFlight.current = true;
+    setPending(submission);
+    mutation.mutate(submission);
+  }
   return {
+    permissionBlocked,
+    permissionMode,
+    setPermissionMode,
+    decideAction,
     memory,
-    setMemory: /* 仅影响下一条普通消息，当前 Run 与原请求重试保持原值。 */ (choice: { use: boolean; capture: boolean }) => setMemoryChoice({ parentId: conversation.latest_run_id, ...choice }),
+    setMemory: /* 仅影响下一条普通消息，当前 Run 与原请求重试保持原值。 */ (choice: {
+      use: boolean;
+      capture: boolean;
+    }) => setMemoryChoice({ parentId: conversation.latest_run_id, ...choice }),
     mode,
     setMode,
     canDecide,

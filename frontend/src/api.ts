@@ -1,4 +1,7 @@
 import type {
+  PermissionAction,
+  PermissionState,
+  PermissionPolicy,
   ArtifactRef,
   ConversationPage,
   LocalProjectOption,
@@ -14,6 +17,11 @@ import type {
   JobView,
   TaskSnapshot,
 } from './types';
+
+/** 读取runId的权限与分页历史；historical=true固定当轮，不创建审批或作业。 */
+export function getPermissions(runId: string, historical = false, offset = 0): Promise<{ state: PermissionState; policy: PermissionPolicy; items: PermissionAction[]; total: number }> {
+  return request(`/api/runs/${runId}/permissions?historical=${historical}&offset=${offset}`);
+}
 
 /** 保存桌面默认设置并返回最新能力；只影响之后提交的任务，不改变活动任务快照。 */
 export function saveDesktopSettings(

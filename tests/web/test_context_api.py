@@ -18,6 +18,7 @@ import pytest
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse
+from tests.helpers.permissions import trusted_config
 from agent_harness.schemas import ContextPolicy, RunConfig, RunManifest, TaskSpec
 from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
@@ -63,7 +64,7 @@ async def context_client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     """以 config、离线 model 和可选宿主设置启动真实应用；产出 HTTP 客户端，退出时清理后台任务。"""
     app = create_app(
-        config, host_config or RunConfig(), runs_root=config.project_dir / "records", model_client=model,
+        config, host_config or trusted_config(), runs_root=config.project_dir / "records", model_client=model,
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
@@ -120,7 +121,7 @@ def test_context_patch_keeps_host_defaults_and_snapshot_survives_restart(context
     instruction = "# 项目约定\n函数需有中文注释，禁止修改 tests 目录。\n"
     path = context_web_config.workspaces[0].path / "AGENTS.md"
     path.write_bytes(instruction.encode("utf-8"))
-    host = RunConfig(context=ContextPolicy(
+    host = trusted_config(context=ContextPolicy(
         load_project_instructions=False, max_input_bytes=65536, max_project_instruction_bytes=4096,
     ))
 
@@ -197,7 +198,7 @@ def test_unprepared_history_does_not_invent_context_snapshot(context_web_config:
     root = context_web_config.project_dir / "records"
     store = RunStore.create(root, RunManifest(
         run_id=identifier, task=TaskSpec(prompt="准备阶段中断任务", workspace=context_web_config.workspaces[0].path),
-        config=RunConfig(),
+        config=trusted_config(),
     ))
     store.append("run_started", {})
     (context_web_config.workspaces[0].path / "AGENTS.md").write_text("不属于旧任务的约定。", encoding="utf-8")
@@ -336,7 +337,7 @@ def test_semantically_damaged_context_is_warned_without_hiding_raw_events(
     store = RunStore.create(root, RunManifest(
         run_id=identifier,
         task=TaskSpec(prompt="包含受损上下文的历史任务", workspace=context_web_config.workspaces[0].path),
-        config=RunConfig(),
+        config=trusted_config(),
     ))
     content = "完整项目约定。"
     snapshot = {

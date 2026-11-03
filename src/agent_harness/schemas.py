@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
+from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -243,6 +244,8 @@ class MemoryPolicy(MemorySelection):
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
 class RunConfig(DataModel):
+    permission_policy: PermissionPolicy = Field(default_factory=PermissionPolicy)  # 宿主权限上限，网页不能覆盖。
+    permission_mode: PermissionMode = "workspace_edit"  # 会话研究、工作区编辑或严格审批模式。
     memory: MemoryPolicy = Field(default_factory=MemoryPolicy)  # 每轮冻结使用/学习选择及宿主注入限额。
     planning_policy: Literal["auto", "required"] = "auto"  # 宿主策略：auto由Agent判断；required在新任务开始即只读，网页不能覆盖。
     provider: Literal["deepseek"] = "deepseek"
@@ -537,6 +540,7 @@ class RunManifest(DataModel):
     planning: PlanningState = Field(default_factory=PlanningState)  # 宿主固定的模式、计划和用户决定；网页不能直接传入该状态。
     human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
     delegation: DelegationOrigin | None = None  # 非空表示父运行内的只读子执行，不是会话续轮。
+    permission_resume: PermissionResume | None = None  # 宿主绑定的原动作与累计预算；页面不得直接构造。
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。
@@ -586,6 +590,7 @@ class VerificationAttempt(DataModel):
 
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
+    permissions: PermissionState = Field(default_factory=PermissionState)  # 当轮固定授权、待审批动作及此前预算。
     subagent_report: SubagentReport | None = None  # 子运行结束时核验并固定的报告；根运行为空。
     subagents: list[SubagentRecord] = Field(default_factory=list)  # 该轮委派快照，旧轮不查询新轮状态。
     tasks: dict = Field(default_factory=dict)  # 当轮固定的工作项快照；历史读取不回查最新清单。

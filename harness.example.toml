@@ -8,6 +8,19 @@ skill_roots = ["examples/skills"]
 # CLI 可在自定义配置中填写技能名；空列表表示不加载。
 skills = []
 
+# 会话模式：默认允许工作区文件编辑；命令及验收逐项审批。仅研究使用 research，严格审批使用 strict。
+permission_mode = "workspace_edit"
+
+# 宿主权限上限，页面不能覆盖；目录为实际工作区内的相对前缀，空列表表示无对应范围。
+[permission_policy]
+read = "allow"
+write = "allow"
+command = "ask"
+verification = "ask"
+read_roots = ["."]
+write_roots = ["."]
+approval_ttl_seconds = 1800 # 包含等待和排队的有效秒数，默认30分钟。
+
 [limits]
 max_model_turns = 20
 max_tool_calls = 40

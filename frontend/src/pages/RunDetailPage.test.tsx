@@ -419,7 +419,9 @@ it('中断后直接发送继续，沿用输入节点并保留旧记录，不出�
   await user.click(screen.getByRole('button', { name: '发送消息' }));
   expect(await screen.findByText('已处理：继续')).toBeInTheDocument();
   expect(screen.getByLabelText('输入消息')).toBe(input);
-  await user.type(input, '保留下一条草稿');
+  // 草稿保留通过一次真实粘贴验证；逐键与输入法行为由ConversationPanel独立回归覆盖。
+  await user.click(input);
+  await user.paste('保留下一条草稿');
   expect(document.querySelectorAll('.user-message-body')).toHaveLength(2);
   expect(document.querySelector('.session-heading p')).toHaveTextContent('2 轮对话');
   await user.click(screen.getByRole('button', { name: '查看第 1 轮详情' }));

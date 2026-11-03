@@ -46,6 +46,10 @@ export function phaseLabel(phase: string): string {
         plan_rejected: '已拒绝计划',
         user_question: '等待回答',
         plan_approval: '等待批准',
+        action_approval: '等待动作审批',
+        permission_rejected: '已拒绝动作',
+        permission_cancelled: '已取消动作',
+        verification_permission_denied: '验收未获授权',
         interaction_cancelled: '已取消等待',
         running: '正在执行',
       } as Record<string, string>

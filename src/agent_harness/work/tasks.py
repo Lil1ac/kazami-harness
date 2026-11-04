@@ -150,6 +150,19 @@ class WorkStore:
         """为 state 副本计算父任务进度和依赖阻塞；返回可展示快照，不写事实。"""
         state = json.loads(encode(state))
         items = {item["id"]: item for item in state["items"]}
+        if any(item.get("delegation_run_id") for item in items.values()):
+            connection = sqlite3.connect(self.path)
+            try:
+                integrations = [json.loads(row[0]) for row in connection.execute("SELECT body FROM integrations WHERE json_extract(body,'$.session_id')=? ORDER BY rowid DESC", (state["session_id"],))]
+            finally:
+                connection.close()
+            for item in items.values():
+                if item.get("delegation_run_id"):
+                    integration = next((value for value in integrations if value["run_id"] == item["delegation_run_id"] or item["delegation_run_id"] in value.get("source_run_ids", [])), None)
+                    item["integration_status"] = integration["status"] if integration else "not_integrated"
+                    item["integration_id"] = integration["id"] if integration else None
+                    if integration and integration["status"] == "applied" and item.get("hold_reason") == "子成果待审阅采纳。":
+                        item["hold_reason"] = None  # 采纳事实实时解除交接等待，不伪造工作项完成。
 
         def status(identifier: str) -> str:
             """递归计算 identifier 的汇总状态；任务图已在写入事务内校验无环。"""
@@ -223,7 +236,7 @@ class WorkStore:
     def mutate(self, session: str, operation: str, payload: dict, change) -> dict:
         """在同一事务对 session 执行 change(state)；operation 幂等，返回固定回执。
 
-        payload 用于核对重复请求内容；change 只能更新内存状态并返回 JSON 结果。
+        payload 用于核对重复请求内容；change 更新内存状态并返回 JSON 结果；必要时只读核对已提交集成事实，不启动嵌套写事务。
         回调异常时整笔回滚；图校验、清单版本和变更事件与回执一起提交。
         """
         key, digest = session + ":" + operation, hashlib.sha256(encode(payload).encode()).hexdigest()
@@ -357,6 +370,15 @@ class TaskService:
                 if target == "in_progress" and self.run_id is None:
                     raise TaskError("task_run_required", "请发送继续请求，由 Agent 开始执行。")
                 if target == "completed":
+                    if item.get("delegation_run_id"):
+                        # 外层已持写锁，此只读连接不再申请BEGIN IMMEDIATE，集成事实不会并发改变。
+                        connection = sqlite3.connect(self.store.path)
+                        try:
+                            integrated = connection.execute("SELECT 1 FROM integrations WHERE (json_extract(body,'$.run_id')=? OR EXISTS (SELECT 1 FROM json_each(integrations.body,'$.source_run_ids') WHERE value=?)) AND json_extract(body,'$.session_id')=? AND json_extract(body,'$.status')='applied' LIMIT 1", (item["delegation_run_id"], item["delegation_run_id"], self.session)).fetchone()
+                        finally:
+                            connection.close()
+                        if not integrated:
+                            raise TaskError("task_delegation_unintegrated", "开发成果尚未采纳，不能以子报告标记工作项完成。")
                     if self.run_id is not None and item["active_run_id"] != self.run_id:
                         raise TaskError("task_not_claimed", "请先将任务标为进行中。")
                     if not arguments.completion_summary or not arguments.completion_summary.strip():
@@ -387,6 +409,33 @@ class TaskService:
             item["updated_at"] = now()
             return {"id": item["id"], "revision": item["revision"], "status": item["status"]}
         return self.store.mutate(self.session, "update:" + arguments.request_id, arguments.model_dump(), change)
+
+    def claim_delegation(self, identifier: str, child_id: str) -> None:
+        """原子认领当前清单identifier给child_id；完成条件、依赖或已有开发占用不满足时拒绝。"""
+        def change(state):
+            """核对state内工作项并冻结开发归属，返回子项编号，不标记完成。"""
+            item = next((value for value in state["items"] if value["id"] == identifier), None)
+            if item is None:
+                raise TaskError("task_not_found", "委派工作项不属于当前会话。")
+            view = next(value for value in self.store._view(state)["items"] if value["id"] == identifier)
+            if item["status"] in {"completed", "cancelled"} or view["is_group"] or view["blocked_reason"] or not item["acceptance"]:
+                raise TaskError("task_blocked", "工作项已结束、被依赖阻塞或缺少完成条件。")
+            if (item["owner"] or "").startswith("subagent:") or item["active_run_id"] not in {None, self.run_id}:
+                raise TaskError("task_owned", "工作项已有其他执行者，不能重复委派。")
+            item.update(status="in_progress", active_run_id=self.run_id, owner="subagent:" + child_id,
+                        delegation_run_id=child_id, revision=item["revision"] + 1, updated_at=now())
+            return {"child_id": child_id}
+        self.store.mutate(self.session, "delegate:" + child_id, {"task_id": identifier}, change)
+
+    def release_delegation(self, child_id: str, reason: str) -> None:
+        """释放child_id持有的工作项，保留成果归属与reason；返回None，不代替成果采纳或人工验收。"""
+        def change(state):
+            """仅释放state中匹配的开发归属，返回None；兄弟任务保持原状态。"""
+            for item in state["items"]:
+                if item["owner"] == "subagent:" + child_id:
+                    item.update(status="pending", owner=None, active_run_id=None, hold_reason=reason,
+                                revision=item["revision"] + 1, updated_at=now())
+        self.store.mutate(self.session, "delegate_release:" + child_id, {"reason": reason}, change)
 
     def import_plan(self, plan) -> None:
         """幂等导入已批准 plan 的步骤；顺序依赖，来源固定；返回 None，不调用模型。"""
@@ -468,11 +517,12 @@ class TaskController:
             """将 item 的进行中状态排在前面，返回排序键；不改变任务调度顺序。"""
             return item["status"] != "in_progress"
         visible = sorted((item for item in items if item["status"] not in {"completed", "cancelled"}), key=active_first)
-        summary = [{key: item[key] for key in ("id", "display_id", "subject", "status", "revision", "blocked_reason")} for item in visible[:20]]
+        summary = [{key: item.get(key) for key in ("id", "display_id", "subject", "status", "revision", "blocked_reason", "owner", "delegation_run_id", "integration_status", "integration_id")} for item in visible[:20]]
         return ("\n[宿主任务清单]\n已批准步骤已自动导入，不重复创建等价任务；需要细化时指定parent_task_id创建子项。"
                 "用task_update先认领in_progress，完成时填写说明并复制本轮成功工具回执的evidence_ref。"
                 "操作编号由宿主生成，不填写request_id；expected_revision使用下方最新revision，冲突先task_get重读。"
-                "依赖阻塞不能跳过；未完成项沿用本轮剩余预算，检查通过由宿主记录。\n"
+                "依赖阻塞不能跳过；开发子报告不等于已采纳，integration_status=applied后重新核对整体代码与检查。"
+                "工作项完成仍须本轮实际工具证据；未完成项沿用剩余预算，检查通过由宿主记录。\n"
                 + encode({"current_run_id": self.service.run_id, "revision": state["revision"], "total": len(items), "completed": sum(item["status"] == "completed" and not item['blocked_reason'] for item in items), "items": summary}))
 
 

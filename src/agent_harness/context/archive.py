@@ -26,7 +26,7 @@ class ReadContextArguments(DataModel):
 
 
 class ContextArchive:
-    """管理内容寻址证据；只读工具限于本运行和经过线性父链核验的祖先。"""
+    """管理内容寻址证据；只读工具限于本运行、线性父链及开发审批接续链核验的祖先。"""
 
     MAX_OBJECT_BYTES = 8 * 1024 * 1024  # 单对象上限8MiB，超过时保留原输入而不外置。
     MAX_TOTAL_BYTES = 64 * 1024 * 1024  # 本运行新增对象总上限64MiB。
@@ -39,11 +39,12 @@ class ContextArchive:
         self.manifest = manifest.model_copy(deep=True)  # 固定会话身份及直接父关系。
         self.total_bytes = 0  # 本运行新写对象的累计字节数。
         self._authorized = {str(manifest.run_id)}  # 已核验归属的运行编号缓存。
+        self._directories = {str(manifest.run_id): self.run_dir}  # 宿主核验的实际日志目录，开发接续可能跨父目录。
 
 
     def _path(self, owner: str, digest: str) -> Path:
         """生成固定对象路径；owner/digest 必须来自合法引用，链接和越界抛 WorkspaceError。"""
-        run = self.runs_root / owner
+        run = self._directories.get(owner, self.runs_root / owner)
         folder = run / "context"
         path = folder / (digest + ".txt")
         for candidate in (run, folder, path):
@@ -88,8 +89,9 @@ class ContextArchive:
             owner = str(UUID(owner))
             self._authorize(owner)
             ArtifactRef(location="run", path=relative)
-            root = self.runs_root / owner / "artifacts"
-            path = self.runs_root / owner / relative
+            directory = self._directories.get(owner, self.runs_root / owner)
+            root = directory / "artifacts"
+            path = directory / relative
             if root.resolve() != root or path.resolve() != path or not path.is_relative_to(root):
                 return None
             before = path.stat()
@@ -109,6 +111,9 @@ class ContextArchive:
     def _authorize(self, owner: str) -> None:
         """核对 owner 是本运行的可信祖先；仅沿manifest父链读取，其他会话或缺失记录抛受控错误。"""
         if owner in self._authorized:
+            return
+        if self.manifest.delegation is not None:
+            self._authorize_delegation(owner)
             return
         parent = self.manifest.parent_run_id
         child_manifest = self.manifest  # 中断祖先须由直接子轮固定的历史来源核验。
@@ -142,6 +147,39 @@ class ContextArchive:
         except StorageError:
             pass
         raise WorkspaceError("context_reference_forbidden", "只能读取本运行及可信前轮提供的历史证据。")
+
+    def _authorize_delegation(self, owner: str) -> None:
+        """仅沿开发审批接续链授权owner，返回None；同任务、会话及工作树不一致或兄弟引用拒绝。"""
+        from agent_harness.subagents.service import read_child
+        current = self.manifest
+        root = self.run_dir.parents[2]
+        visited = {str(current.run_id)}
+        if self.run_dir.parent.name != "subagents" or self.run_dir.parent.parent.name != str(current.delegation.parent_run_id):
+            raise WorkspaceError("context_reference_forbidden", "子运行日志归属无法核对。")
+        try:
+            for _ in range(self.MAX_ANCESTORS):
+                origin = current.delegation
+                if origin is None or origin.role != "develop" or origin.previous_run_id is None or origin.previous_parent_id is None:
+                    break
+                identifier = str(origin.previous_run_id)
+                if identifier in visited:
+                    break
+                visited.add(identifier)
+                history = read_child(root, origin.previous_parent_id, origin.previous_run_id)
+                previous = history.manifest
+                if (history.warnings or history.result is None or previous.delegation is None
+                        or previous.delegation.role != "develop" or previous.delegation.task_id != self.manifest.delegation.task_id
+                        or previous.session_id != self.manifest.session_id or previous.task.workspace != self.manifest.task.workspace):
+                    break
+                directory = root / str(origin.previous_parent_id) / "subagents" / identifier
+                self._directories[identifier] = directory
+                self._authorized.add(identifier)
+                if identifier == owner:
+                    return
+                current = previous
+        except (StorageError, OSError, ValueError):
+            pass
+        raise WorkspaceError("context_reference_forbidden", "只能回读本开发子任务已核验的接续历史，不能读取兄弟或父模型证据。")
 
     def _read_raw(self, owner: str, digest: str) -> bytes:
         """读取有界原始对象并核验摘要和身份；缺失、替换、特殊文件或损坏抛受控错误。"""

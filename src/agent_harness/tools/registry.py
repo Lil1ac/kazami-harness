@@ -68,7 +68,10 @@ class ToolExecutor:
         self.memory: MemoryController | None = None  # 当前项目固定读取集，模型只能提出候选。
         self.memory_phase = "execution"  # 宿主在模型请求前更新，验收修复阶段为 verification。
         self.readonly = None if readonly is None else READONLY_TOOLS.intersection(readonly)  # 子权限与父可用工具取交集，不能由模型参数提升。
+        self.delegation_tools: frozenset[str] | None = None  # 开发子项的宿主工具上限，None为根执行。
+        self.project_manager = None  # Runner绑定统一工作树与成果管理器，子执行不自行选择路径。
         self.subagents: SubagentController | None = None  # 仅根Agent绑定；子执行没有委派或管理权限。
+        self.report_only = False  # 开发报告纠正后永久关闭本子执行工具，不能借格式重试重复修改。
         self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
         self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
         self.before_execute = None  # 参数和权限检查通过后记录真实开始，None表示无需事件。
@@ -108,6 +111,8 @@ class ToolExecutor:
             return []
         if self.readonly is not None:
             return sorted(self.readonly)
+        if self.delegation_tools is not None:
+            return sorted(self.delegation_tools)
         if self.config.context.compression != "off":
             names.append("read_context")
         if self.planning is not None:
@@ -187,8 +192,11 @@ class ToolExecutor:
             return _error("handoff_tools_disabled", "收尾交接阶段只允许总结已有证据，不执行任何新工具。")
         if self.readonly is not None and name not in self.readonly:
             return _error("subagent_read_only", "子Agent仅允许父级授予的读取和检索，不能修改文件、执行命令或委派。")
-        if self.subagents is not None and self.subagents.active and name in {"write_file", "edit_file", "run_command", "memory_propose", "enter_plan_mode", "submit_plan"}:
+        if self.subagents is not None and self.subagents.readers_active and name in {"write_file", "edit_file", "run_command", "memory_propose", "enter_plan_mode", "submit_plan"}:
             return _error("subagent_readers_active", "子研究仍在读取共享目录，请先等待或停止，再执行变更或切换计划。")
+        # 计划切换会撤销当前执行依据，必须先收拢使用该依据的开发子项。
+        if self.subagents is not None and self.subagents.active and name in {"enter_plan_mode", "submit_plan"}:
+            return _error("subagent_developers_active", "开发子项仍在执行，请先等待或停止，再切换计划。")
         if name not in _TOOL_SPECS or name not in self._enabled_names():
             return _error("unknown_tool", "该工具未启用，请使用当前工具声明中的名称。")
         try:

@@ -463,8 +463,11 @@ class DelegationOrigin(DataModel):
     """子执行的宿主归属；与多轮会话的前轮关系分别保存。"""
 
     parent_run_id: UUID  # 唯一委派者；子执行不独立进入全局运行队列。
-    role: Literal["explore", "review"]  # 探索代码或审阅风险，均仅允许读取。
-    task_id: UUID | None = None  # 可选关联父会话工作项，不改变该项状态或负责人。
+    role: Literal["explore", "review", "develop"]  # 探索、审阅只读；开发必须使用独立工作树。
+    task_id: UUID | None = None  # 开发必须关联当前父会话工作项；只读时仅关联。
+    write_scope: list[str] = Field(default_factory=list)  # 开发可写相对路径前缀；空列表禁止写入。
+    previous_parent_id: UUID | None = None  # 审批接续时原子日志的父编号；首次为空。
+    previous_run_id: UUID | None = None  # 接续前段子执行；只读继承历史，不重放工具。
 
 
 class SubagentFinding(DataModel):
@@ -473,14 +476,14 @@ class SubagentFinding(DataModel):
     category: Literal["required", "optional", "observation"]  # 范围内必要修复、可选建议或事实观察。
     title: str = Field(min_length=1, max_length=160)  # 简短结论，不能只写空白。
     detail: str = Field(min_length=1, max_length=600)  # 影响与依据，不复制完整文件或扩大父任务要求。
-    evidence_call_ids: list[str] = Field(max_length=2)  # 本子运行成功读取回执编号；required必须至少一个。
+    evidence_call_ids: list[str] = Field(max_length=2)  # 本子运行成功回执编号；只读角色只接受读取，开发还接受写入/命令；required至少一个。
 
 
 class SubagentEvidence(DataModel):
-    """宿主从实际成功读取提取的证据入口；正文始终保存在原子轨迹。"""
+    """宿主从角色允许的实际成功工具回执提取的证据入口；正文始终保存在原子轨迹。"""
 
     tool_call_id: str = Field(min_length=1, max_length=200)  # 直属子运行内的调用编号，不能引用父或其他子运行。
-    tool: str  # 实际读取工具名，不由模型报告提供。
+    tool: str  # 角色允许的实际成功工具名，不由模型报告提供。
     path: str | None = None  # 文件或目录的实际相对路径；搜索/记忆等入口可能为空。
     sha256: str | None = None  # 工具已核验的完整文件指纹；无法获得时为空，不冒充完整读取。
     truncated: bool = False  # 原工具是否截断，报告不能把有限结果当作完整扫描。
@@ -503,10 +506,18 @@ class SubagentRecord(DataModel):
 
     run_id: UUID  # 子日志编号，同时是父运行内的委派编号。
     title: str = Field(min_length=1, max_length=120)  # 委派标题，用于页面定位。
-    objective: str = Field(min_length=1, max_length=8000)  # 主 Agent 明确提供的研究范围，不继承全部聊天历史。
-    role: Literal["explore", "review"]  # 只读探索或审阅职责。
+    objective: str = Field(min_length=1, max_length=8000)  # 主 Agent 明确提供的执行目标，不继承全部聊天历史。
+    role: Literal["explore", "review", "develop"]  # 探索、审阅或隔离开发职责。
     task_id: UUID | None = None  # 可选同会话任务编号，不表示任务已完成。
-    status: Literal["running", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "interrupted"] = "running"  # 可信执行状态；缺终态且父任务已停止时为 interrupted。
+    status: Literal["running", "waiting_input", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "interrupted"] = "running"  # 可信执行状态；缺终态且父任务已停止时为 interrupted。
+    cleanup_status: Literal["not_needed", "complete", "unknown", "incomplete"] = "not_needed"  # 子命令最坏清理状态，父结果聚合不重复计量。
+    log_parent_id: UUID | None = None  # 子日志实际所属父运行；跨审批保留原记录时不改变。
+    workspace: str | None = None  # 开发子项独立工作树；只读子项为空。
+    write_scope: list[str] = Field(default_factory=list)  # 冻结的文件写入范围，不等于命令沙箱。
+    changed_paths: list[str] = Field(default_factory=list)  # 成果相对委派起点的实际变更路径。
+    scope_violations: list[str] = Field(default_factory=list)  # 超范围成果路径；非空禁止采纳。
+    pending_action: dict | None = None  # 子项待批准原动作，由父会话统一处理。
+    snapshot_status: Literal["pending", "ready", "error"] = "pending"  # 开发成果完整性，不代替测试结论。
     stop_reason: str | None = None  # 宿主生成的结束原因，未结束时为空。
     report: SubagentReport | None = None  # 统一结构化交接报告；活动期间为空，失败也保留部分证据。
     skill_names: list[str] = Field(default_factory=list, max_length=8)  # 仅明确委派的父级固定技能快照，默认不继承技能。
@@ -539,7 +550,7 @@ class RunManifest(DataModel):
     history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
     planning: PlanningState = Field(default_factory=PlanningState)  # 宿主固定的模式、计划和用户决定；网页不能直接传入该状态。
     human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
-    delegation: DelegationOrigin | None = None  # 非空表示父运行内的只读子执行，不是会话续轮。
+    delegation: DelegationOrigin | None = None  # 非空表示父运行内的委派子执行，不是会话续轮。
     permission_resume: PermissionResume | None = None  # 宿主绑定的原动作与累计预算；页面不得直接构造。
 
 

@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Alert, Button, Input, Modal, Select, Tag } from 'antd';
+import { useId, useRef, useState } from 'react';
+import { Alert, Button, Checkbox, Input, Modal, Select, Tag } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import {
@@ -29,10 +29,14 @@ const labels: Record<IntegrationView['status'], string> = {
   abandoned: '已放弃原操作',
 }; // 只展示实际采纳阶段，测试结果单独展示。
 
-/** 展示runId所属会话的成果采纳；sourceTest为来源运行独立结论，不作为集成候选测试。 */
-export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceTest: string }) {
+/** 展示runId成果采纳；parentRunId核验子归属，siblings可组成联合候选；sourceTest不代替候选检查。 */
+export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = [] }: { runId: string; sourceTest: string; parentRunId?: string; siblings?: { run_id: string; title: string }[] }) {
+  const headingId = useId(); // 父成果和子成果可同时展示，标题关联保持唯一。
+  const [includeSiblings, setIncludeSiblings] = useState(true); // 完整功能默认合并其余已完成子成果，再统一检查。
+  const sourceIds = includeSiblings ? siblings.map((item) => item.run_id) : []; // 用户选择的同父成果，不包含当前主来源。
   const cache = useQueryClient();
   const [target, setTarget] = useState<string>(); // 用户明确选定的登记目标。
+  const createKey = 'create:' + target + ':' + sourceIds.join(','); // 来源集合也是幂等请求内容。
   const [selected, setSelected] = useState<string | undefined>(
     new URLSearchParams(window.location.search).get('integration') || undefined,
   ); // 当前审阅的固定记录，刷新列表不覆盖选中项。
@@ -41,13 +45,13 @@ export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceT
   const [draft, setDraft] = useState(''); // 冲突文本草稿，保存前不修改候选。
   const [confirm, setConfirm] = useState(false); // 写回确认弹窗，不在打开时发送请求。
   const targets = useQuery({
-    queryKey: ['integration-targets', runId],
-    queryFn: /* 只读取同仓库登记目标。 */ () => getIntegrationTargets(runId),
+    queryKey: ['integration-targets', runId, parentRunId],
+    queryFn: /* 只读取同仓库登记目标。 */ () => getIntegrationTargets(runId, parentRunId),
     retry: false,
   });
   const history = useQuery({
-    queryKey: ['integrations', runId],
-    queryFn: /* 轮询真实作业与固定历史，不重新投递。 */ () => getIntegrations(runId),
+    queryKey: ['integrations', runId, parentRunId],
+    queryFn: /* 轮询真实作业与固定历史，不重新投递。 */ () => getIntegrations(runId, parentRunId),
     refetchInterval: 1000,
   });
   const records = history.data?.items || [];
@@ -61,7 +65,7 @@ export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceT
   /** 刷新服务事实；不把HTTP接纳当作写回成功，保留当前选中的记录。 */
   function refresh(value?: IntegrationView) {
     if (value) setSelected(value.id);
-    void cache.invalidateQueries({ queryKey: ['integrations', runId] });
+    void cache.invalidateQueries({ queryKey: ['integrations', runId, parentRunId] });
     void cache.invalidateQueries({ queryKey: ['jobs'] });
   }
   /** 为同一业务key保留请求号；仅当前操作成功后清除，失败重试不重复接纳。 */
@@ -71,9 +75,9 @@ export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceT
   }
   const create = useMutation({
     mutationFn: /* 明确选择目标后才建立准备作业。 */ () =>
-      createIntegration(runId, target!, requestId('create:' + target)),
+      createIntegration(runId, target!, requestId(createKey), parentRunId, sourceIds),
     onSuccess: /* 接纳成功后刷新服务事实。 */ (value) => {
-      requestIds.current.delete('create:' + target);
+      requestIds.current.delete(createKey);
       refresh(value);
     },
   });
@@ -137,9 +141,9 @@ export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceT
   const sourceStatus =
     current?.source_test?.status || (current?.run_id === runId ? sourceTest : 'unknown'); // 历史记录使用其自己的来源证据。
   return (
-    <section className="integration-panel" aria-labelledby="integration-heading">
+    <section className="integration-panel" aria-labelledby={headingId}>
       <div className="section-heading">
-        <h3 id="integration-heading">成果采纳</h3>
+        <h3 id={headingId}>成果采纳</h3>
         <Link to="/jobs">后台工作</Link>
       </div>
       {(targets.error || history.error || create.error || action.error || resolution.error) && (
@@ -151,6 +155,7 @@ export function IntegrationPanel({ runId, sourceTest }: { runId: string; sourceT
         />
       )}
       {current?.last_job?.error && <Alert type="warning" title={current.last_job.error} />}
+      {siblings.length > 0 && <Checkbox disabled={busy} checked={includeSiblings} onChange={/* 仅改变准备草稿，不执行集成。 */ (event) => setIncludeSiblings(event.target.checked)}>同时集成：{siblings.map((item) => item.title).join('、')}</Checkbox>}
       <div className="integration-toolbar">
         <Select
           aria-label="采纳目标"

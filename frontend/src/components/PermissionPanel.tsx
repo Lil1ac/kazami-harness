@@ -189,6 +189,7 @@ export function PermissionPanel({
       </details>
       {pending && (
         <article className="permission-request" aria-label="动作审批">
+          {pending.child_run_id && <p className="muted">子任务：{run.result.subagents?.find((item) => item.run_id === pending.child_run_id)?.title || pending.child_run_id}</p>}
           <ActionContent action={pending} />
           <p>
             {historical

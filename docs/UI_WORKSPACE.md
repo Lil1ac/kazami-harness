@@ -42,3 +42,7 @@
 夹具使用真实任务、计划、子运行与文件工具，模型响应由脚本提供，不访问供应商或修改用户项目。服务仅监听本机；新建、自动执行、待批准计划、任务及 Agent 详情均可操作。
 
 参考：[Codex 内容块](https://learn.chatgpt.com/docs/app-server)、[Claude Code 增量消息](https://code.claude.com/docs/en/agent-sdk/streaming-output)、[Cursor Plan Mode](https://cursor.com/docs/agent/plan-mode)、[Linear 任务结构](https://linear.app/docs/parent-and-sub-issues)。
+
+## 2026-11-04 隔离开发联动
+
+Agent 详情展示开发工作区、授权范围、固定差异、产物与审批来源；可将互不重叠的同父成果合为一个候选检查并人工确认写回。已停止子工作树可明确丢弃，固定证据继续保留。详细语义见[写入型子 Agent 与成果集成](DEVELOPMENT_SUBAGENTS.md)。

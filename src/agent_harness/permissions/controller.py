@@ -84,7 +84,7 @@ class PermissionController:
             return "deny"
         if name == "verification" and self.manifest.task.verifier is None:
             return "deny"
-        if self.manifest.delegation is not None:
+        if self.manifest.delegation is not None and self.manifest.delegation.role != "develop":
             from agent_harness.subagents.profiles import READONLY_TOOLS
             if name not in READONLY_TOOLS:
                 return "deny"
@@ -160,6 +160,9 @@ class PermissionController:
             "created_at": created, "expires_at": created + self.policy.approval_ttl_seconds,
             "status": "pending", "decision": None, "execution_run_id": None,
             "final_answer": self.context.result.final_answer if name == "verification" else None}
+        if self.manifest.delegation is not None and self.manifest.delegation.role == "develop":
+            value.update(source_run_id=str(self.manifest.delegation.parent_run_id),
+                         child_parent_id=str(self.manifest.delegation.parent_run_id), child_run_id=str(self.manifest.run_id))
         value["fingerprint"] = payload_digest(value)
         self.context.emit("permission_requested", {"action": value})
         self.store.save(value)
@@ -178,6 +181,9 @@ class PermissionController:
         if self.decision(value["name"]) == "deny" or value["policy_fingerprint"] != self.fingerprint() or value["inputs"] != self.inputs(value["name"], value["arguments"]):
             raise TaskError("permission_stale", "审批期间输入或权限发生变化，原动作未执行。")
         value = self.store.claim(value["id"], str(self.manifest.run_id))
+        if self.manifest.delegation is not None:
+            value["execution_child_parent_id"] = str(self.manifest.delegation.parent_run_id)
+            self.store.save(value)
         self.approved = value
         return value
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import threading
 from uuid import UUID, uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_validator, field_validator
 
 from agent_harness.permissions.store import PermissionStore
 from agent_harness.projects.integration_files import IntegrationFiles, fingerprint, git, identity
@@ -26,7 +26,16 @@ class IntegrationCreate(DataModel):
     """用户明确选择的来源目标；路径由宿主登记项解析，不接受网页绝对路径。"""
 
     request_id: UUID = Field(strict=False)  # 同一创建请求的稳定幂等编号。
-    target_id: str = Field(min_length=1, max_length=64)  # 已登记的同仓库Git工作区。
+    target_id: str = Field(min_length=1, max_length=64)  # 已登记Git目标或宿主验证的父工作区编号。
+    source_run_ids: list[str] = Field(default_factory=list, max_length=8)  # 可选同父开发成果编号，与主来源共同组成候选。
+    parent_run_id: UUID | None = Field(default=None, strict=False)  # 子成果的当前父视图，None表示顶层运行；不接受任意文件路径。
+
+
+    @field_validator("source_run_ids")
+    @classmethod
+    def validate_sources(cls, values: list[str]) -> list[str]:
+        """将values规范为UUID编号并返回；非法编号由请求校验返回422，不进入准备作业。"""
+        return [str(UUID(value)) for value in values]
 
 
 class IntegrationAction(DataModel):
@@ -73,9 +82,23 @@ class IntegrationService:
         self.check_task: asyncio.Task | None = None  # 当前真实验收协程，取消后等待进程树清理。
         self.active_job: str | None = None  # 当前持有唯一队列槽的集成作业。
 
-    def source(self, run_id: str):
-        """核对run_id是已完整收尾的工作树运行；返回视图，等待/取消/未知清理不得采纳。"""
-        view = self.manager.get_run(UUID(run_id))
+    def source(self, run_id: str, parent_run_id: str | None = None):
+        """核对run_id固定成果并返回视图；parent_run_id指定父视图时仅接受其登记的开发子项。"""
+        if parent_run_id is not None:
+            from types import SimpleNamespace
+            from agent_harness.subagents.service import read_child
+            parent = self.manager.get_run(UUID(parent_run_id))
+            record = next((item for item in parent.result.subagents if str(item.run_id) == run_id), None)
+            if record is None or record.role != "develop" or record.scope_violations or record.status != "completed":
+                raise TaskError("integration_source_unavailable", "子成果未完成、超出委派范围或不属于当前父运行。")
+            history = read_child(self.manager.runs_root, record.log_parent_id or parent.run_id, record.run_id)
+            view = SimpleNamespace(run_id=record.run_id, session_id=parent.session_id, workspace=record.workspace,
+                active=parent.active, interrupted=history.interrupted, execution_mode="isolated", result=history.result,
+                project=self.manager.projects.get(record.run_id), log_parent_id=record.log_parent_id or parent.run_id)
+            if view.result is None:
+                raise TaskError("integration_source_unavailable", "子成果没有可信结束记录。")
+        else:
+            view = self.manager.get_run(UUID(run_id))
         if (view.execution_mode != "isolated" or view.active or view.interrupted
                 or view.result.execution_status != "completed" or view.result.cleanup_status not in {"complete", "not_needed"}
                 or view.project is None or view.project.snapshot_status != "ready"):
@@ -83,9 +106,15 @@ class IntegrationService:
         self.manager.management.require_active(str(view.session_id or view.run_id))
         return view
 
-    def targets(self, run_id: str) -> list[dict]:
+    def targets(self, run_id: str, parent_run_id: str | None = None) -> list[dict]:
         """返回run_id同仓库、区别于来源的已登记项目；无效目录省略，不扫描磁盘或切分支。"""
-        view = self.source(run_id)
+        view = self.source(run_id, parent_run_id)
+        if parent_run_id is not None:
+            preset = self.preset("parent-" + parent_run_id)
+            return [{"id": preset.id, "label": preset.label, "path": str(preset.path),
+                     "head": git(preset.path, "rev-parse", "HEAD").decode().strip(),
+                     "branch": git(preset.path, "symbolic-ref", "-q", "HEAD", allowed=(0, 1)).decode().strip() or None,
+                     "repository": str(preset.path)}]
         owned = self.manager.projects._ownership(UUID(run_id))
         result = []
         for preset in self.manager.catalog.project_presets():
@@ -103,6 +132,20 @@ class IntegrationService:
 
     def preset(self, target_id: str):
         """解析target_id的当前登记配置；目录或设置不再可用时拒绝，不接受客户端补全。"""
+        if target_id.startswith("parent-"):
+            from agent_harness.projects.models import ProjectPreset
+            identifier = UUID(target_id.removeprefix("parent-"))
+            parent = self.manager.get_run(identifier)
+            history = self.manager._read_history(identifier)
+            latest = self.manager.conversations.store.read(parent.session_id).run_ids[-1]
+            if parent.active or latest != identifier:
+                raise TaskError("integration_target_invalid", "请先停止父运行，并在最新一轮审阅子成果。")
+            self.manager.conversations._ready(history)
+            settings = self.manager.conversations._origin(history)
+            original = next((item for item in self.manager.catalog.project_presets() if item.id == settings.preset_id), None)
+            return ProjectPreset(id=target_id, label="父工作区", path=Path(parent.workspace),
+                test_argv=original.test_argv if original else [], test_timeout_seconds=original.test_timeout_seconds if original else 120,
+                python_executable=original.python_executable if original else None, python_paths=original.python_paths if original else None)
         preset = next((item for item in self.manager.catalog.project_presets() if item.id == target_id), None)
         if preset is None:
             raise TaskError("integration_target_invalid", "目标工作区未登记或已不可用，请重新打开。")
@@ -110,11 +153,16 @@ class IntegrationService:
 
     async def create(self, run_id: str, body: IntegrationCreate) -> dict:
         """为明确来源和目标登记准备作业并返回记录；重试复用原记录，不重新物化来源。"""
-        view = self.source(run_id)
+        parent_id = str(body.parent_run_id) if body.parent_run_id else None
+        view = self.source(run_id, parent_id)
+        source_ids = list(dict.fromkeys([run_id, *body.source_run_ids]))
+        if body.source_run_ids and parent_id is None:
+            raise TaskError("integration_source_invalid", "组合成果必须来自明确父运行。")
+        sources = [self.source(str(UUID(identifier)), parent_id) for identifier in source_ids] if parent_id else []
         policy = self.manager.run_config.permission_policy
         if policy.read != "allow" or not any(Path(item) == Path(".") for item in policy.read_roots):
             raise TaskError("permission_denied", "集成准备需要读取完整项目，当前宿主读取范围不允许。")
-        if body.target_id not in {item["id"] for item in await asyncio.to_thread(self.targets, run_id)}:
+        if body.target_id not in {item["id"] for item in await asyncio.to_thread(self.targets, run_id, parent_id)}:
             raise TaskError("integration_target_invalid", "目标必须是同一仓库内已登记的其他工作区。")
         async with self.manager._lock:
             with self.store.work.transaction() as db:
@@ -122,11 +170,17 @@ class IntegrationService:
                 active = db.execute("SELECT 1 FROM jobs WHERE json_extract(body,'$.session_id')=? AND json_extract(body,'$.status') IN ('queued','preparing','running','needs_review') LIMIT 1", (str(view.session_id or view.run_id),)).fetchone()
             if active and not existing:
                 raise TaskError("integration_job_pending", "会话已有未完成作业，请先完成或核对。")
-            value = self.store.create(run_id, str(view.session_id or view.run_id), body.target_id, str(body.request_id))
+            value = self.store.create(run_id, str(view.session_id or view.run_id), body.target_id, str(body.request_id), source_ids if parent_id else None)
+            if parent_id is not None:
+                if value.get("parent_run_id", parent_id) != parent_id:
+                    raise TaskError("request_conflict", "相同请求不能更换子成果的父视图。")
+                value.update(parent_run_id=parent_id, delegation_parent_id=str(view.log_parent_id),
+                             sources=[{"run_id": str(item.run_id), "log_parent_id": str(item.log_parent_id)} for item in sources])
+                self.store.save(value)
             if "source_test" not in value:
                 value["source_test"] = {**(view.result.verification.model_dump(mode="json") if view.result.verification else {"status": "unverified"}), "run_id": run_id, "applicable": False}
                 self.store.save(value)
-            await self.enqueue(value, "prepare", str(body.request_id), {"run_id": run_id, "target_id": body.target_id})
+            await self.enqueue(value, "prepare", str(body.request_id), {"run_id": run_id, "target_id": body.target_id, **({"parent_run_id": parent_id, "source_run_ids": source_ids} if parent_id else {})})
         return self.store.public(self.store.get(value["id"]))
 
     async def action(self, identifier: str, body: IntegrationAction) -> dict:
@@ -225,7 +279,7 @@ class IntegrationService:
             return
         policy = self.manager.run_config.permission_policy.model_dump()
         job = {"id": request_id, "kind": "integration", "integration_id": value["id"], "operation": operation,
-               "status": "queued", "run_id": value["run_id"], "session_id": value["session_id"],
+               "status": "queued", "run_id": value.get("parent_run_id") or value["run_id"], "session_id": value["session_id"],
                "title": {"prepare": "准备成果集成", "apply": "采纳成果", "check_candidate": "检查集成候选", "check_target": "复验目标代码", "undo": "准备撤销采纳", "reconcile": "核对写回结果"}[operation],
                "project_id": value["target_id"], "project_label": self.preset(value["target_id"]).label,
                "source_path": str(self.preset(value["target_id"]).path), "created_at": now(), "payload": payload,

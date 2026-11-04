@@ -198,7 +198,8 @@ class ConversationService:
                     spent_usage={key: previous.spent_usage.get(key, 0) + getattr(parent.result.usage, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},
                     spent_usage_complete=previous.spent_usage_complete and parent.result.usage_complete,
                     repair_attempts=parent.result.repair_attempts,
-                    delegation_used=bool(parent.result.subagents) or bool(parent.manifest.permission_resume and parent.manifest.permission_resume.delegation_used))
+                    delegation_used=bool(parent.result.subagents) or bool(parent.manifest.permission_resume and parent.manifest.permission_resume.delegation_used),
+                    child_parent_id=pending.get("child_parent_id"), child_run_id=pending.get("child_run_id"))
             elif pending is not None:
                 raise SessionError("permission_pending", "请先处理当前动作审批，普通消息不会批准动作。")
             try:
@@ -223,6 +224,8 @@ class ConversationService:
                 merged["memory"] = self.manager._queued_memory_policy
             try:
                 config = load_config(overrides=merged)
+                if resume is not None and config.limits != parent.manifest.config.limits:
+                    raise SessionError("permission_stale", "动作审批接续不能修改原预算，请先处理等待再提交新要求。")
                 if config.planning_policy == "required" and not (planning.plans and planning.plans[-1].status == "approved"):
                     planning.phase, planning.reason = "planning", "宿主要求先批准计划"
                 prompt = request.prompt.strip()

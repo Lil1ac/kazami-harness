@@ -62,8 +62,8 @@ class ProjectReview(DataModel):
     project_label: str  # 当时的项目显示名，重启后无需依赖配置重建。
     repository: str  # 原始仓库绝对根目录，仅用于归属校验和展示。
     base_ref: str  # 用户选取的原始引用，默认 HEAD。
-    base_commit: str  # 已解析并固定的完整提交哈希。
-    source_dirty: bool  # 启动时源仓库是否有未提交改动；这些改动不会复制。
+    base_commit: str  # 固定Git提交或开发委派的起始树哈希，均可作为不可变差异基线。
+    source_dirty: bool  # 来源是否有未提交改动；普通隔离不复制，开发委派通过独立基线固定实际内容。
     worktree: str  # 本会话共享 detached 工作树路径；历史文件从固定快照读取。
     status: Literal["pending", "kept", "discarded"] = "pending"  # 用户审阅决定；缺失目录不自动视为丢弃。
     snapshot_status: Literal["pending", "ready", "error"] = "pending"  # 终态代码快照是否完整可用。

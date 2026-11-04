@@ -65,8 +65,9 @@ PLANNING_TOOLS = {
     "read_plan": (ReadPlanArguments, "只读完整计划、历史版本目录或用户决定。默认上下文仅含当前有效计划；旧版本通过section=history查找，再用version读取。按UTF-8字节分页，用next_offset和expected_sha256续读；不写文件、不批准或执行。"),
 }  # 固定宿主控制工具，不允许网页配置隐藏批准边界或增加批准工具。
 
-# 这三种成功状态操作可由宿主快照替代；问题及其后续回答、显式回读和失败操作必须保留。
-_PLAN_STATE_TOOLS = frozenset({"enter_plan_mode", "submit_plan", "task_create", "task_update"})
+# 只用宿主状态替代规划切换；任务操作回执携带新编号/版本，必须交给下一轮模型。
+# 任务历史按普通工具批次压缩，不能在收到执行反馈前无条件删除。
+_PLAN_STATE_TOOLS = frozenset({"enter_plan_mode", "submit_plan"})
 
 
 def project_plan_history(messages: list[dict], state_tools: frozenset[str] = _PLAN_STATE_TOOLS) -> list[dict]:

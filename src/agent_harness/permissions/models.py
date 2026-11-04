@@ -58,6 +58,8 @@ class PermissionResume(PermissionModel):
     spent_usage_complete: bool = True  # 任一此前模型请求缺失用量时为False。
     repair_attempts: int = Field(default=0, ge=0, le=2)  # 已经开始的自动修复次数，审批不得清零。
     delegation_used: bool = False  # 原执行已经使用委派时，继续保留末轮收尾约束。
+    child_parent_id: str | None = None  # 子动作原日志的父编号，根动作为空，宿主填写。
+    child_run_id: str | None = None  # 需逻辑接续的开发子执行，与child_parent_id配对。
 
 
 class PermissionState(PermissionModel):

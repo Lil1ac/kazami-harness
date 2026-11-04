@@ -2,14 +2,22 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { cancelSubagent, getSubagent } from '../api';
+import { cancelSubagent, getSubagent, getSubagentDiff, getIntegrationTargets, getIntegrations, createIntegration } from '../api';
 import type { SubagentDetail, SubagentRecord } from '../types';
 import { SubagentsPanel } from './SubagentsPanel';
+import { MemoryRouter } from 'react-router';
 
 vi.mock(
   '../api',
   /* 保留真实查询及展示，只替换HTTP读边界。 */ () => ({
     getSubagent: vi.fn(),
+    getSubagentDiff: vi.fn(),
+    getIntegrationTargets: vi.fn(),
+    getIntegrations: vi.fn(),
+    createIntegration: vi.fn(),
+    discardSubagentWorkspace: vi.fn(),
+    // 子补丁链接仅引用父子编号，测试中不执行下载。
+    patchUrl: (id: string, parent: string) => `/api/runs/${id}/patch?parent_run_id=${parent}`,
     cancelSubagent: vi.fn(),
     errorMessage: (error: Error) => error.message,
   }),
@@ -20,6 +28,7 @@ const record: SubagentRecord = {
   title: '检查调用方',
   objective: '只读检查api.py',
   role: 'review',
+  cleanup_status: 'not_needed', log_parent_id: null, workspace: null, write_scope: [], changed_paths: [], scope_violations: [], pending_action: null, snapshot_status: 'pending',
   task_id: null,
   status: 'completed',
   stop_reason: null,
@@ -59,6 +68,7 @@ const record: SubagentRecord = {
 function detail(source = record): SubagentDetail {
   return {
     subagent: source,
+    artifacts: [], artifact_status: 'complete', artifact_warnings: [],
     report_page: {
       content: JSON.stringify(source.report),
       offset: 0,
@@ -78,7 +88,7 @@ function show(source = record, active = false) {
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <SubagentsPanel parentId="parent-a" records={[source]} active={active} />
+      <MemoryRouter><SubagentsPanel parentId="parent-a" records={[source]} active={active} /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -198,4 +208,34 @@ it('活动子任务可单独停止，失败保留提示并可重试，历史不�
   await user.click(screen.getByRole('button', { name: '停止此子任务' }));
   await waitFor(() => expect(cancelSubagent).toHaveBeenCalledTimes(2));
   expect(cancelSubagent).toHaveBeenLastCalledWith('parent-a', 'child-a');
+});
+
+
+it('开发子成果展示实际范围和固定差异，并限定采纳目标为父工作区', async () => {
+  const user = userEvent.setup();
+  const source: SubagentRecord = { ...record, role: 'develop', workspace: 'D:/worktrees/child', write_scope: ['src'], changed_paths: ['src/api.py'], snapshot_status: 'ready' };
+  vi.mocked(getSubagent).mockResolvedValue(detail(source));
+  vi.mocked(getSubagentDiff).mockResolvedValue({ content: '+fixed_api', truncated: false });
+  vi.mocked(getIntegrationTargets).mockResolvedValue({ items: [{ id: 'parent-parent-a', label: '父工作区', path: 'D:/project', repository: 'D:/project', head: 'head', branch: null }] });
+  vi.mocked(getIntegrations).mockResolvedValue({ items: [] });
+  show(source);
+  await user.click(screen.getByText(source.title));
+  expect(await screen.findByText('修改范围：src')).toBeInTheDocument();
+  await user.click(await screen.findByText('子成果差异 · 1 个文件'));
+  expect(screen.getByText('+fixed_api')).toBeInTheDocument();
+  expect(getSubagentDiff).toHaveBeenCalledWith('parent-a', 'child-a');
+  await waitFor(() => expect(getIntegrationTargets).toHaveBeenCalledWith('child-a', 'parent-a'));
+  expect(createIntegration).not.toHaveBeenCalled();
+});
+
+it('超范围成果明确阻止采纳，读取差异仍保持只读', async () => {
+  const user = userEvent.setup();
+  const source: SubagentRecord = { ...record, role: 'develop', status: 'failed', workspace: 'D:/worktrees/child', write_scope: ['src'], scope_violations: ['outside.py'], snapshot_status: 'ready' };
+  vi.mocked(getSubagent).mockResolvedValue(detail(source));
+  vi.mocked(getSubagentDiff).mockResolvedValue({ content: '+outside', truncated: false });
+  show(source);
+  await user.click(screen.getByText(source.title));
+  expect(await screen.findByText('超出委派范围，不能采纳：outside.py')).toBeInTheDocument();
+  expect(getIntegrationTargets).not.toHaveBeenCalled();
+  expect(createIntegration).not.toHaveBeenCalled();
 });

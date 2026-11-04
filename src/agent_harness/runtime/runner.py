@@ -349,6 +349,7 @@ async def _run_task(
     result.repair_attempts = resume.repair_attempts if resume is not None else 0
     context.delegation_used = bool(resume and resume.delegation_used)
     tool_executor.permissions = permissions
+    tool_executor.project_manager = project_manager or ProjectManager(runs_root, runs_root / ".worktrees")
     tasks = TaskController(WorkStore(runs_root), manifest, planning)
     result.tasks = tasks.snapshot()
     context.emit("tasks_snapshot", {"state": result.tasks})

@@ -5,6 +5,7 @@ from tests.helpers.streaming import model_stream_response
 import asyncio
 from copy import deepcopy
 import json
+import ssl
 
 import httpx
 import pytest
@@ -329,3 +330,50 @@ def test_client_requires_async_context_and_can_omit_tools():
             await client.complete(MESSAGES, [])
     asyncio.run(operation())
     assert "tools" not in captured[0]
+
+
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_certificate_failure_is_sanitized_and_never_retried(wrapped):
+    """wrapped决定底层异常是否可见；证书链错误均只请求一次，返回可解释错误且不泄漏原文。"""
+    attempts = []
+
+    def handler(request):
+        """模拟真实HTTPX包装的TLS失败；request为真实请求，不发送网络或返回工具。"""
+        if wrapped:
+            try:
+                raise ssl.SSLCertVerificationError(1, "CERTIFICATE_VERIFY_FAILED " + SECRET)
+            except ssl.SSLCertVerificationError as error:
+                raise httpx.ConnectError(SECRET, request=request) from error
+        raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] " + SECRET, request=request)
+
+    with pytest.raises(ModelError) as error:
+        invoke(handler, on_attempt=attempts.append)
+    assert error.value.code == "model_tls_verification"
+    assert SECRET not in str(error.value)
+    assert attempts == [1]
+
+
+def test_client_keeps_system_tls_verification_and_ignores_proxy_environment(monkeypatch):
+    """构造真实客户端检查安全边界：使用系统SSLContext、强制验签和主机名校验，不启用环境代理。"""
+    original = httpx.AsyncClient
+    captured = []
+
+    def client_factory(**options):
+        """保存options并返回原客户端，供核对有效TLS策略；不请求网络或记录认证内容。"""
+        captured.append(options)
+        return original(**options)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    async def scenario():
+        """按生产生命周期创建并关闭客户端，返回None；无需真实密钥或网络。"""
+        async with DeepSeekClient(SECRET, RunConfig()):
+            pass
+
+    asyncio.run(scenario())
+    options = captured[0]
+    assert isinstance(options.get("verify"), ssl.SSLContext)
+    assert options["verify"].verify_mode == ssl.CERT_REQUIRED
+    assert options["verify"].check_hostname
+    assert options["trust_env"] is False
+    assert options["follow_redirects"] is False

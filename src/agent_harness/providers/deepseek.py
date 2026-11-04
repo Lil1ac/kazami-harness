@@ -1,6 +1,7 @@
 """DeepSeek Chat Completions 的异步流式适配器。"""
 
 import asyncio
+import ssl
 from copy import deepcopy
 from types import TracebackType
 from typing import Callable
@@ -28,6 +29,20 @@ _TOKEN_FIELDS = (
     "prompt_cache_hit_tokens",
     "prompt_cache_miss_tokens",
 )
+
+
+def _certificate_error(error: BaseException) -> bool:
+    """沿error的异常链识别证书校验失败并返回布尔值；不回传底层正文，循环或过深链有界停止。"""
+    visited = set()
+    current = error
+    for _ in range(16):
+        if current is None or id(current) in visited:
+            break
+        visited.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _protocol_error() -> ModelError:
@@ -179,6 +194,8 @@ class DeepSeekClient:
             timeout=httpx.Timeout(config.limits.model_turn_timeout_seconds),
             follow_redirects=False,
             trust_env=False,
+            # Windows等平台的系统信任库可能包含受管理网络所需的根证书；仍强制验签和主机名校验。
+            verify=ssl.create_default_context(),
             transport=transport,
         )
 
@@ -234,12 +251,16 @@ class DeepSeekClient:
                         raise _http_error(response.status_code)
                     else:
                         return _parse_response(await assembler.read(response))
-            except _RETRYABLE_TRANSPORT_ERRORS:
+            except _RETRYABLE_TRANSPORT_ERRORS as error:
+                if _certificate_error(error):
+                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。") from None
                 if assembler.received_content:
                     raise ModelError("model_stream_interrupted", "模型输出连接中断，已保留收到的内容，未重新执行请求。") from None
                 if attempt == attempts:
                     raise ModelError("model_transport", "模型服务连接失败，已用完本轮重试次数。") from None
-            except httpx.RequestError:
+            except httpx.RequestError as error:
+                if _certificate_error(error):
+                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。") from None
                 raise ModelError("model_transport", "模型请求传输失败，已停止本轮请求。") from None
             # 固定上限防止服务端 Retry-After 或连续故障消耗无界等待时间。
             await asyncio.sleep(min(0.1 * (2 ** min(attempt - 1, 4)), 1.0))

@@ -176,3 +176,37 @@ def test_hybrid_compaction_reinjects_current_approved_plan_on_every_request(tmp_
         assert current["current_plan"]["steps"][0]["status"] == ("pending" if index == 0 else "in_progress")
         message_groups(messages)
     assert len([event for event in history.events if event.type == "tool_started" and event.payload["name"] == "task_update"]) == 1
+
+
+def test_created_task_receipt_reaches_next_model_request(tmp_path: Path) -> None:
+    """真实Runner创建任务后，下一模型轮必须收到配对回执和编号，才能继续委派而非重复创建。"""
+    manifest = _manifest(tmp_path, max_input_bytes=60000)
+    manifest.planning = plan_state(manifest.task.workspace)
+    manifest.planning.plans[0].summary = "创建工作项并按返回编号读取，验证执行反馈。"
+
+    class ReceiptModel:
+        """只在收到真实task_create回执后读取新任务；缺回执立即失败，不以宿主摘要代替反馈。"""
+
+        def __init__(self) -> None:
+            """初始化轮次计数；不访问文件或外部供应商，返回None。"""
+            self.turn = 0  # 已收到的真实执行请求次数。
+
+        async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
+            """根据messages实际回执生成tools中的下一操作，返回响应；不猜测任务编号。"""
+            self.turn += 1
+            if self.turn == 1:
+                return reply(call("task_create", subject="实现后端", description="只修改后端文件", acceptance=["检查通过"]))
+            if self.turn == 2:
+                receipt = next((json.loads(item["content"]) for item in reversed(messages)
+                                if item.get("role") == "tool"), None)
+                assert receipt is not None and receipt["ok"], "创建任务的实际回执在下一轮丢失"
+                identifier = receipt["data"]["id"]
+                return reply(call("task_get", task_id=identifier))
+            return reply(text="已收到创建反馈并核对新工作项。")
+
+    model = ReceiptModel()
+    outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline", model_client=model))
+    assert outcome.result.execution_status == "completed", outcome.result.stop_reason
+    assert model.turn == 3
+    history = RunStore.read(tmp_path / "runs", str(manifest.run_id))
+    assert len([event for event in history.events if event.type == "tool_started" and event.payload["name"] == "task_create"]) == 1

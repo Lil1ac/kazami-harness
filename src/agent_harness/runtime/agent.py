@@ -138,7 +138,7 @@ async def _run_agent(
     except MemoryError as error:
         context.emit("memory_failed", {"code": error.code, "message": error.message})
         raise AgentStopped("failed", error.code) from None
-    if isinstance(executor, ToolExecutor) and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
+    if isinstance(executor, ToolExecutor) and context.manifest.delegation is None and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
         from agent_harness.subagents.service import SubagentController
         executor.subagents = SubagentController(context, client, executor)
         context.subagent_controller = executor.subagents
@@ -153,6 +153,13 @@ async def _run_agent(
     memory_history_changed = False  # 旧记忆工具被投影后不能复用覆盖旧内容的摘要区间。
     parent = None  # 仅核验后的父记录可提供工作摘要复用来源。
     source = context.manifest.history_source
+    delegation = context.manifest.delegation
+    if delegation is not None and delegation.previous_run_id is not None:
+        from agent_harness.subagents.service import read_child
+        parent = read_child(context.runs_root, delegation.previous_parent_id, delegation.previous_run_id)
+        if parent.result is None or parent.result.cleanup_status not in {"complete", "not_needed"}:
+            raise AgentStopped("failed", "subagent_resume_unverified")
+        inherited = history_messages(parent)
     if source is not None:
         try:
             if context.manifest.parent_run_id is None:
@@ -213,7 +220,7 @@ async def _run_agent(
         compressor.inherit(parent, messages, executor.definitions)
     permissions = getattr(executor, "permissions", None)
     resume = context.manifest.permission_resume
-    if resume is not None:
+    if resume is not None and resume.child_run_id is None:
         from agent_harness.work.tasks import TaskError
         try:
             if resume.decision == "approve" and context.deadline <= asyncio.get_running_loop().time():
@@ -260,7 +267,12 @@ async def _run_agent(
             raise AgentStopped("failed", error.code) from None
         finally:
             executor.before_execute = None
+    if resume is not None and resume.child_run_id is not None:
+        reports = await executor.subagents.resume_children()
+        messages.append({"role": "user", "content": "宿主接续子任务后的交接报告：" + json.dumps(reports, ensure_ascii=False)})
     while context.available("model_turns") > 0:
+        if context.budget_parent is not None and context.manifest.delegation.role == "develop" and context.budget_parent.subagent_controller.pause_requested:
+            raise AgentStopped("waiting_input", "subagent_paused")
         # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
         await asyncio.sleep(0)
         controller = getattr(executor, "subagents", None)
@@ -270,7 +282,7 @@ async def _run_agent(
                 reports = await controller.wait_all()
                 messages.append({"role": "user", "content": "宿主收回并行研究报告：" + json.dumps(reports, ensure_ascii=False)})
         delegated = context.manifest.delegation is not None or context.delegation_used
-        handoff = delegated and (context.available("model_turns") == 1
+        handoff = delegated and (getattr(executor, "report_only", False) or context.available("model_turns") == 1
                                  or context.available("tool_calls") <= 0)
         if isinstance(executor, ToolExecutor):
             executor.handoff = handoff
@@ -342,6 +354,10 @@ async def _run_agent(
         try:
             for index, call in enumerate(batch):
                 started = False
+                if context.budget_parent is not None and context.manifest.delegation.role == "develop" and context.budget_parent.subagent_controller.pause_requested:
+                    for remaining in batch[index:]:
+                        _record_tool(context, remaining, _skipped("skipped_child_pause"), messages)
+                    raise AgentStopped("waiting_input", "subagent_paused")
                 await asyncio.sleep(0)
                 # 被接纳处理的未知工具和非法参数也占额度，避免错误调用无限循环。
                 # 委派可能消耗了同批工具剩余额度，每个实际调用前再次核对父子总数。
@@ -361,7 +377,7 @@ async def _run_agent(
                     executor.before_execute = tool_started
                 else:
                     tool_started()  # 注入的测试执行器仍遵循开始后执行的事件契约。
-                if call.name == "delegate_readonly" and context.manifest.delegation is None:
+                if call.name in {"delegate_readonly", "delegate_develop"} and context.manifest.delegation is None:
                     context.delegation_used = True
                 result = await executor.execute(call.name, call.arguments_json)
                 _record_tool(context, call, result, messages)
@@ -371,8 +387,8 @@ async def _run_agent(
                         _record_tool(context, remaining, _skipped("skipped_action_approval"), messages)
                     context.result.final_answer = "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
                     raise AgentStopped("waiting_input", "action_approval")
-                if call.name == "delegate_readonly" and context.manifest.delegation is None:
-                    if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name == "delegate_readonly":
+                if call.name in {"delegate_readonly", "delegate_develop"} and context.manifest.delegation is None:
+                    if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name in {"delegate_readonly", "delegate_develop"}:
                         continue  # 同批独立研究可并发接纳；后续修改仍由交接屏障跳过。
                     # 后续参数在子报告产生前已经生成；成功、失败或拒绝接纳都先交回模型重新决定。
                     for remaining in batch[index + 1:]:
@@ -436,7 +452,11 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
     token = FILE_SCOPE.set((context.manifest.task.workspace.resolve(), roots(context.manifest.task.workspace.resolve(), policy.read_roots) if policy.read == "allow" else ()))
     if getattr(executor, "permissions", None) is None and isinstance(executor, ToolExecutor):
         from agent_harness.permissions.controller import PermissionController
+        spent = context.result.permissions
         executor.permissions = PermissionController(context, getattr(executor, "planning", None))
+        if context.manifest.delegation is not None and context.manifest.permission_resume is None:
+            for field in ("spent_model_turns", "spent_tool_calls", "spent_seconds", "spent_usage", "spent_usage_complete"):
+                setattr(executor.permissions.state, field, getattr(spent, field))
         context.result.permissions = executor.permissions.state.model_copy(deep=True)
         context.emit("permissions_prepared", {"state": context.result.permissions.model_dump(mode="json")})
     try:

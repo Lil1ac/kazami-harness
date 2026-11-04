@@ -1,23 +1,25 @@
-# 只读子 Agent（C07）
+# 子 Agent 委派（C07）
 
-当前提供探索/审阅型只读委派：同步等待与异步并行共用同一个delegate_readonly接口，通过background明确选择执行方式。异步最多两个活动子任务，父模型可以继续独立读取或思考；子执行不进入顶层单机队列，不另占执行槽。当前模型、供应商与实际工作区沿用父运行。
+当前包含探索/审阅只读角色及独立工作树开发角色。开发、动作审批接续及成果采纳见[写入型子 Agent](DEVELOPMENT_SUBAGENTS.md)；下文的共享目录、只读限制和默认4/8/60额度专指只读角色。
+
+探索/审阅提供只读委派：同步等待与异步并行共用同一个delegate_readonly接口，通过background明确选择执行方式。异步最多两个活动子任务，父模型可以继续独立读取或思考；子执行不进入顶层单机队列，不另占执行槽。当前模型、供应商与实际工作区沿用父运行。
 
 ## 角色、权限和输入
 
-explore和review使用独立系统职责及宿主只读集合，与父已开放能力取交集：read_file、search_files、list_files、read_context、memory_search、memory_get。子项不能写文件、执行命令、修改任务/记忆、提问或递归委派。父聊天及工具正文不自动传给子模型，完整子对话不回灌父模型。
+explore和review使用独立系统职责及宿主只读集合，与父已开放能力取交集：read_file、search_files、list_files、read_context、memory_search、memory_get。只读子项不能写文件、执行命令、修改任务/记忆、提问或递归委派。父聊天及工具正文不自动传给子模型，完整子对话不回灌父模型。
 
 2026-11-02 接入统一权限入口：子项继承父宿主策略、会话模式及目录范围，再取只读交集；父批准一个具体动作不会扩大子项能力。子报告和历史保存实际权限快照；范围外文件与自动项目指令加载均不能借委派绕过。协议与本轮回归见[权限控制](PERMISSIONS.md)。
 
 明确objective为执行目标，父要求、批准方案和可选同会话task_id只是背景及关联，不表示子项认领或完成工作项。根AGENTS.md、记忆修订与实际阶段在接纳时固定；skill_names只能选择父已冻结的技能，默认空，不继承父角色system_prompt或全部技能。每个子项独立观察路径、选择记忆、压缩和保存日志。
 
-当前共享目录没有文件快照隔离。因此存在活动子项时，宿主拒绝父write_file、edit_file、run_command、memory_propose，以及进入/提交新计划，返回subagent_readers_active；先等待或停止研究，再修改。外部程序/用户修改目录仍可能使来源过期，父须核对指纹；本能力不提供文件系统沙箱或外部写入锁。
+当前共享目录没有文件快照隔离。因此存在活动只读子项时，宿主拒绝父write_file、edit_file、run_command、memory_propose，以及进入/提交新计划，返回subagent_readers_active；先等待或停止研究，再修改。外部程序/用户修改目录仍可能使来源过期，父须核对指纹；本能力不提供文件系统沙箱或外部写入锁。
 
 ## 模型工具与交接
 
 - delegate_readonly(title, objective, role, task_id, skill_names, background, max_model_turns, max_tool_calls, timeout_seconds)：background默认false，同步返回当前研究报告；true接纳后立即返回子编号、当前状态及accepted，不等同完成。两个活动槽占满返回subagent_concurrency_limit，单轮最多8次接纳。同批连续委派可接纳多个独立研究；后续预生成的其他动作仍跳过，让父重新决定。
 - wait_subagents(run_ids=[], mode="all", timeout_seconds=30)：空集合表示本轮全部；all等全部终态，any等任一终态；有终态时any立即返回。0秒只查询，最长60秒，等待超时不会取消研究。返回各子真实状态、已有结构报告和finished（所选全部终态）；跨父编号整批拒绝。
 - read_subagent(run_id, offset=0, max_bytes=8192)：当前父Run范围内读取固定结构报告，返回content、真实状态和UTF-8安全next_offset；每页4—8192字节，字符内部或越界偏移拒绝，不执行模型。
-- cancel_subagent(run_id)：单独停止并等待封存，返回真实部分报告，兄弟及父继续；重复取消返回原终态。子上下文不能resume，重新研究必须明确创建新委派。
+- cancel_subagent(run_id)：单独停止并等待封存，返回真实部分报告，兄弟及父继续；重复取消返回原终态。只读子上下文不提供resume；开发型动作审批的专用接续见新协议。
 
 父模型最终回答前，宿主等待并交接尚未收取的异步报告，要求父再核对。网页单项停止不假设父模型已经看过结果。父取消、超时、等待用户、额度耗尽或异常退出均在客户端关闭和父终态前取消并等待所有未完成子协程，保留各自终态。存储故障向父传播，不吞为研究成功；服务重启只读旧记录，不恢复模型或重放工具。
 
@@ -51,7 +53,7 @@ explore和review使用独立系统职责及宿主只读集合，与父已开放�
 
 最初参考[Claude Code公开文档](https://code.claude.com/docs/en/sub-agents)的独立角色/上下文和显式技能，[Deep Agents文档](https://docs.langchain.com/oss/python/deepagents/subagents)及[开源实现](https://github.com/langchain-ai/deepagents/blob/main/libs/deepagents/deepagents/middleware/subagents.py)的隔离结果交接，以及[OpenCode](https://opencode.ai/v2/docs/agents#steps)的末轮总结。未声称审阅Claude闭源调度实现；并发限流、额度预留和收拢协议是本项目的设计判断。
 
-子上下文续接、多模型路由、写入委派、工作区隔离集成和Teams继续保留后续。确定性回归证明生命周期与边界，有限真实样例不证明稳定成功率、普遍节省token或G02—G04完成。
+任意子上下文续接、多模型路由和Teams继续保留后续；开发委派及工作树集成首版见[本轮协议](DEVELOPMENT_SUBAGENTS.md)。确定性回归证明生命周期与边界，有限真实样例不证明稳定成功率、普遍节省token或G02—G04完成。
 
 ## 2026-11-01 首版历史验收记录
 

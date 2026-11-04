@@ -60,10 +60,10 @@ class IntegrationStore:
         db.execute("INSERT OR REPLACE INTO integrations VALUES (?,?)", (value["id"], encode(value)))
         self.work.event(db, value["session_id"], {"type": "integration_updated", "integration_id": value["id"], "revision": value["revision"], "status": value["status"]})
 
-    def create(self, run_id: str, session_id: str, target_id: str, request_id: str) -> dict:
+    def create(self, run_id: str, session_id: str, target_id: str, request_id: str, source_run_ids: list[str] | None = None) -> dict:
         """幂等创建指定来源及目标的空集成记录；只登记事实，重试不得更换请求内容。"""
         identifier = str(UUID(request_id))
-        digest = payload_digest([run_id, session_id, target_id])
+        digest = payload_digest([run_id, session_id, target_id, *([source_run_ids] if source_run_ids is not None else [])])
         with self.work.transaction() as db:
             old = db.execute("SELECT body FROM integrations WHERE id=?", (identifier,)).fetchone()
             if old:
@@ -75,6 +75,8 @@ class IntegrationStore:
                      "request_digest": digest, "revision": 1, "status": "preparing", "kind": "apply",
                      "created_at": now(), "updated_at": now(), "error": None, "conflicts": [],
                      "checks": [], "files": [], "applied_at": None, "fingerprint": None}
+            if source_run_ids is not None:
+                value["source_run_ids"] = source_run_ids
             self.save(value, db)
         return value
 
@@ -100,7 +102,7 @@ class IntegrationStore:
             raise TaskError("integration_unsupported_file", "目标索引包含链接或子模块，首版不能采纳。")
         names = git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").split(b"\0")
         names += git(root, "ls-tree", "-r", "--name-only", "-z", "HEAD").split(b"\0")
-        protected = (self.projects.runs_root, self.projects.worktrees_root)
+        protected = tuple(path for path in (self.projects.runs_root, self.projects.worktrees_root) if not root.is_relative_to(path))
         manifest = files.scan(root, [name.decode("utf-8") for name in names if name and not any((root / name.decode("utf-8")).is_relative_to(path) for path in protected)])
         value = {"path": str(root), "identity": directory, "repository": str(common), "repository_identity": identity(common),
                  "head": git(root, "rev-parse", "HEAD").decode().strip(),
@@ -129,6 +131,13 @@ class IntegrationStore:
             self.projects.patch_path(review.run_id)  # 先核对原始补丁，绝不以当前工作树冒充来源。
             owned = self.projects._ownership(review.run_id)
             source_common = Path(owned["common_git_dir"])
+            if owned.get("delegation_parent_id"):
+                from agent_harness.subagents.workspaces import in_scope, changed_paths
+                if (value.get("delegation_parent_id") != owned["delegation_parent_id"]
+                        or str(preset.path) != owned["delegation_parent_path"]
+                        or identity(preset.path) != owned["delegation_parent_identity"]
+                        or any(not in_scope(name, owned["delegation_scope"]) for name in changed_paths(self.projects, review))):
+                    raise TaskError("integration_source_scope", "子成果归属、父目录或实际修改范围无法核对。")
             if identity(source_common) != owned["common_identity"]:
                 raise TaskError("integration_source_unavailable", "来源仓库身份无法核对。")
             directory = self.directory(identifier)
@@ -137,7 +146,7 @@ class IntegrationStore:
             target = self.target(preset.path, files)
             if target["repository"] != str(source_common) or target["path"] == review.worktree:
                 raise TaskError("integration_target_invalid", "请选择同一仓库内、区别于来源工作树的已登记目标。")
-            stream = payload_digest([value["session_id"], target["repository_identity"], target["identity"], target["path"], target["branch"] or target["head"]])
+            stream = payload_digest([value["session_id"], *([str(review.session_id), *sorted(value.get("source_run_ids", []))] if value.get("delegation_parent_id") else []), target["repository_identity"], target["identity"], target["path"], target["branch"] or target["head"]])
             with self.work.transaction() as db:
                 row = db.execute("SELECT body FROM integration_anchors WHERE id=?", (stream,)).fetchone()
                 anchor = json.loads(row[0]) if row else None
@@ -152,13 +161,52 @@ class IntegrationStore:
                 if review.run_id != UUID(value["run_id"]):
                     raise TaskError("integration_source_unavailable", "来源轮次不一致。")
                 from agent_harness.storage.runs import RunStore
-                old_history = RunStore.read(self.work.root, anchor["run_id"])
-                history = RunStore.read(self.work.root, value["run_id"])
-                if history.manifest.turn_index <= old_history.manifest.turn_index:
+                if value.get("delegation_parent_id"):
+                    from agent_harness.subagents.service import read_child
+                    old_history = read_child(self.work.root, UUID(prior["delegation_parent_id"]), UUID(anchor["run_id"]))
+                    history = read_child(self.work.root, UUID(value["delegation_parent_id"]), UUID(value["run_id"]))
+                    newer = history.manifest.created_at > old_history.manifest.created_at
+                else:
+                    old_history = RunStore.read(self.work.root, anchor["run_id"])
+                    history = RunStore.read(self.work.root, value["run_id"])
+                    newer = history.manifest.turn_index > old_history.manifest.turn_index
+                if not newer:
                     raise TaskError("integration_source_older", "来源早于上次已采纳成果，不能隐式倒退采纳。")
             else:
                 base = files.git_tree(self.projects.metadata_root, review.base_commit, git_dir=source_common)
             source = files.git_tree(self.projects.metadata_root, owned["snapshot_tree"], git_dir=source_common)
+            source_hash, patch_hash = owned["snapshot_tree"], owned["patch_sha256"]
+            if len(value.get("sources", [])) > 1:
+                from agent_harness.subagents.workspaces import changed_paths, in_scope
+                touched = set(changed_paths(self.projects, review))
+                hashes = [patch_hash]
+                for member in value["sources"]:
+                    if member["run_id"] == value["run_id"]:
+                        continue
+                    other = self.projects.get(UUID(member["run_id"]))
+                    if other is None or other.snapshot_status != "ready":
+                        raise TaskError("integration_source_unavailable", "组合子成果没有完整固定快照。")
+                    self.projects.patch_path(other.run_id)
+                    ownership = self.projects._ownership(other.run_id)
+                    paths = changed_paths(self.projects, other)
+                    if (ownership.get("common_git_dir") != str(source_common)
+                            or ownership.get("delegation_parent_id") != member["log_parent_id"]
+                            or ownership.get("delegation_parent_path") != str(preset.path)
+                            or ownership.get("delegation_parent_identity") != identity(preset.path)
+                            or any(not in_scope(name, ownership.get("delegation_scope", [])) for name in paths)):
+                        raise TaskError("integration_source_scope", "组合子成果的归属或修改范围无法核对。")
+                    overlap = touched.intersection(paths)
+                    if overlap:
+                        raise TaskError("integration_sources_overlap", "子成果修改路径重叠，请逐项审阅处理：" + "、".join(sorted(overlap)[:10]))
+                    additional = files.git_tree(self.projects.metadata_root, ownership["snapshot_tree"], git_dir=source_common)
+                    for name in paths:
+                        if name in additional:
+                            source[name] = additional[name]
+                        else:
+                            source.pop(name, None)
+                    touched.update(paths)
+                    hashes.append(ownership["patch_sha256"])
+                source_hash, patch_hash = payload_digest(source), payload_digest(hashes)
             source_test = value.get("source_test")
             if source_test is not None:
                 digest = fingerprint({name: entry(normalized(files.read(item)), item["mode"]) for name, item in source.items()})
@@ -175,7 +223,7 @@ class IntegrationStore:
             value.update(target=target, source=source, base=base, candidate=candidate, conflicts=conflicts,
                          workspace=str(workspace), stream=stream, anchor=anchor, target_label=preset.label,
                          expected_anchor=anchor,
-                         source_patch_sha256=owned["patch_sha256"], source_tree=owned["snapshot_tree"],
+                         source_patch_sha256=patch_hash, source_tree=source_hash,
                          test_config={"argv": preset.test_argv, "timeout_seconds": preset.test_timeout_seconds,
                                       "python_executable": preset.python_executable, "python_paths": preset.python_paths},
                          status="conflicts" if conflicts else "ready", revision=value["revision"] + 1)
@@ -195,8 +243,17 @@ class IntegrationStore:
             path = checked_path(root, name)
             if any(part.lower() in PROTECTED for part in Path(name).parts):
                 raise TaskError("integration_protected_path", "不能采纳宿主或Agent的控制目录变更。")
-            if any(path.is_relative_to(protected) for protected in (self.projects.runs_root, self.projects.worktrees_root)):
-                raise TaskError("integration_protected_path", "不能采纳到宿主记录或受管理工作区目录。")
+            if path.is_relative_to(self.projects.runs_root):
+                raise TaskError("integration_protected_path", "不能采纳到宿主记录目录。")
+            if path.is_relative_to(self.projects.worktrees_root):
+                owned = self.projects._ownership(UUID(value["run_id"]))
+                parent_id = value.get("parent_run_id")
+                parent_review = self.projects.get(UUID(parent_id)) if parent_id else None
+                if (not value.get("delegation_parent_id") or parent_review is None
+                        or Path(parent_review.worktree) != root or owned.get("delegation_parent_path") != str(root)
+                        or owned.get("delegation_parent_identity") != identity(root)):
+                    raise TaskError("integration_protected_path", "只能采纳回本子任务所属的父工作树。")
+                self.projects._owned_worktree(parent_review)
             if (path.exists() and name not in before) or (path.exists() and not path.is_file()):
                 raise TaskError("integration_ignored_collision", "采纳路径碰撞目标忽略文件或目录，请保留现场并调整成果路径。")
             old, new = before.get(name), after.get(name)
@@ -458,7 +515,10 @@ class IntegrationStore:
         latest = next((item for item in records if item["kind"] == "apply" and item.get("target", {}).get("path") == original["target"]["path"]), None)
         if latest is None or latest["id"] != original_id:
             raise TaskError("integration_undo_order", "请先撤销目标最近一次采纳，不能跳过后续成果。")
-        value = self.create(original["run_id"], original["session_id"], original["target_id"], request_id)
+        value = self.create(original["run_id"], original["session_id"], original["target_id"], request_id, original.get("source_run_ids"))
+        for key in ("parent_run_id", "delegation_parent_id", "sources"):
+            if key in original:
+                value[key] = original[key]
         if value["status"] != "preparing":
             return value
         value.update(kind="undo", undo_of=original_id, target_label=preset.label)

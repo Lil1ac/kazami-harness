@@ -178,3 +178,6 @@ context_prepared 新增 skills 与 skill_error，RunView.context 原样聚合；
 项目知识通过 MemoryController 在实际执行时固定，ContextBuilder 将少量相关条目与已有规则、技能共用固定 user 前缀，修订固定而类型视图随宿主阶段和工具路径重新选择；无可用记忆时不额外创建前缀。自动正文、工具声明和显式回读全部计入原整体预算，正文按条减少，不能放宽上限。跨轮前缀映射使用统一 has_fixed_context；旧轮 memory_search/get/propose 成功结果不重复作为当前知识输入，包含这些结果的旧摘要不直接继承，原始日志保持。
 
 memory_prepared/selected/read/proposed 在 ContextView.memory 聚合当轮真正注入、回读、候选和跳过原因。此处是固定证据，候选当前人工决定另从项目记忆 API 读取。作业仍通过 POST /api/jobs 接纳，config.memory 仅允许 use/capture 两个选择；宿主限额在接纳时冻结，内容版本在出队时取得。type 现驱动结构、触发和呈现；首次路径约定命中可暂停尚未执行的变更并先交回模型重审。uses 保存各次实际输入，不能把仅可检索知识冒充已注入。完整协议和验收见[项目记忆](MEMORY.md)。
+
+
+2026-11-04 真实开发委派补验发现任务反馈丢失：规划状态投影只替代成功enter_plan_mode/submit_plan，task_create/task_update的实际配对回执保留，由常规工具压缩处理。最新任务概览仍逐轮注入；它不代替刚执行操作的返回编号、版本与成功反馈。离线Runner回归覆盖创建后按真实回执编号读取工作项，原始轨迹不修改。

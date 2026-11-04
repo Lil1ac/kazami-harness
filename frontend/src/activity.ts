@@ -11,6 +11,7 @@ export interface ActivityStep {
 }
 const toolLabels: Record<string, string> = {
   delegate_readonly: '委派只读子 Agent',
+  delegate_develop: '委派开发子 Agent',
   read_subagent: '回读子 Agent 报告',
   list_subagents: '查看子 Agent',
   wait_subagents: '等待子 Agent',

@@ -94,7 +94,7 @@ class DesktopHost:
                 if set(query) != {"path"} or len(query["path"]) != 1:
                     raise ValueError
                 value = self.manager.integrations.store.get(str(UUID(integration[1])))
-                self.manager.management.check_run(value["run_id"])
+                self.manager.management.check_run(value.get("parent_run_id") or value["run_id"])
                 return self.manager.integrations.store.check_artifact(str(UUID(integration[1])), str(UUID(integration[2])), query["path"][0])
             except ValueError:
                 raise WebServiceError(400, "invalid_artifact", "检查输出地址无效。") from None
@@ -107,15 +107,16 @@ class DesktopHost:
             raise WebServiceError(400, "invalid_artifact", "请选择当前任务中已登记的产物。")
         try:
             identifier = UUID(match[1])
-            self.manager.management.check_run(str(identifier))  # 桌面下载与定位也遵守回收站访问限制。
             query = parse_qs(url.query, strict_parsing=True)
+            parent_id = UUID(query["parent_run_id"][0]) if "parent_run_id" in query and len(query["parent_run_id"]) == 1 else None
+            self.manager.management.check_run(str(parent_id or identifier))  # 子附件也从父会话校验回收站访问。
         except ValueError:
             raise WebServiceError(400, "invalid_artifact", "产物地址无效。") from None
-        if match[2] == "patch" and not query:
-            return await self.manager.project_patch(identifier)
-        if match[2] != "artifacts" or set(query) != {"location", "path"} or any(len(values) != 1 for values in query.values()) or query["location"][0] not in {"workspace", "run"}:
+        if match[2] == "patch" and set(query) <= {"parent_run_id"} and all(len(values) == 1 for values in query.values()):
+            return await self.manager.project_patch(identifier, parent_id) if parent_id else await self.manager.project_patch(identifier)
+        if match[2] != "artifacts" or set(query) not in ({"location", "path"}, {"location", "path", "parent_run_id"}) or any(len(values) != 1 for values in query.values()) or query["location"][0] not in {"workspace", "run"}:
             raise WebServiceError(400, "invalid_artifact", "产物地址无效。")
-        return self.manager.artifact_path(identifier, query["location"][0], query["path"][0])
+        return self.manager.artifact_path(identifier, query["location"][0], query["path"][0], parent_id) if parent_id else self.manager.artifact_path(identifier, query["location"][0], query["path"][0])
 
     async def download(self, source: Path) -> dict:
         """让 Electron 保存已核对的 source 并返回路径；目标来自公开设置，不覆盖同名文件。"""

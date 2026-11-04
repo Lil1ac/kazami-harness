@@ -1,5 +1,5 @@
 import { Tag } from 'antd';
-import { reviewLabels } from '../format';
+import { reviewLabels, modelFailureLabel } from '../format';
 import type {
   CleanupStatus,
   ExecutionStatus,
@@ -48,7 +48,7 @@ export interface RunStatusSnapshot {
   project?: RunView['project'] | boolean; // 完整审阅或只读的项目类型标记。
   source_kind?: 'project' | 'workspace' | null; // 原目录Git也显示项目测试，且不伪造待审阅。
   result: Pick<RunResult, 'execution_status' | 'validation_status' | 'cleanup_status'> &
-    Partial<Pick<RunResult, 'repair_attempts'>>; // 列表只有三项状态，完整快照还可报告修复次数。
+    Partial<Pick<RunResult, 'repair_attempts' | 'stop_reason'>>; // 列表可省略结束原因，完整快照用于说明修复次数与证书失败。
 }
 
 /** 根据真实终态生成概览，active/中断/清理异常优先，completed 本身不等于成功。 */
@@ -72,6 +72,8 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
     };
   if (['unknown', 'incomplete'].includes(run.result.cleanup_status))
     return { label: '需检查清理', color: 'warning' };
+  if (run.result.execution_status === 'failed' && modelFailureLabel(run.result.stop_reason))
+    return { label: modelFailureLabel(run.result.stop_reason)!, color: 'error' };
   if (run.phase === 'planning_complete') return { label: '规划已结束' };
   if (run.phase === 'plan_rejected') return { label: '已拒绝计划' };
   if (run.phase === 'user_question') return { label: '等待回答', color: 'warning' };

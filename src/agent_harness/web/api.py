@@ -393,6 +393,29 @@ def create_app(
         return manager.get_subagent(run_id, child_id, after, limit, offset)
 
 
+    @app.get("/api/runs/{run_id}/subagents/{child_id}/diff")
+    async def subagent_diff(run_id: UUID, child_id: UUID) -> dict:
+        """返回run_id登记child_id的固定补丁预览，最多256KiB；读取不捕获现场或执行模型。"""
+        detail = manager.get_subagent(run_id, child_id, 0, 1, 0)
+        if detail["subagent"]["role"] != "develop" or detail["subagent"]["snapshot_status"] != "ready":
+            raise HTTPException(409, detail="开发子成果尚无完整代码快照。")
+        path = await asyncio.to_thread(manager.projects.patch_path, child_id)
+        raw = await asyncio.to_thread(path.read_bytes)
+        return {"content": raw[:256 * 1024].decode("utf-8", errors="replace"), "truncated": len(raw) > 256 * 1024}
+
+    @app.post("/api/runs/{run_id}/subagents/{child_id}/review")
+    async def subagent_review(run_id: UUID, child_id: UUID, request: ReviewDecision) -> dict:
+        """明确保留或丢弃直属child_id工作树；run_id必须停止且无审批/集成待办，历史证据保持。"""
+        detail = manager.get_subagent(run_id, child_id, 0, 1, 0)
+        view = manager.get_run(run_id)
+        manager.management.require_active(str(view.session_id))
+        if detail["subagent"]["role"] != "develop" or view.active or manager.management.busy_reason(str(view.session_id)):
+            raise HTTPException(409, detail="请先完成父运行及相关后台作业。")
+        from agent_harness.permissions.store import PermissionStore
+        if PermissionStore(manager.runs_root).waiting(manager._read_history(run_id)) is not None:
+            raise HTTPException(409, detail="请先处理父会话中的子任务审批。")
+        return (await asyncio.to_thread(manager.projects.decide, child_id, request.decision)).model_dump(mode="json")
+
     @app.post("/api/runs/{run_id}/subagents/{child_id}/cancel")
     async def cancel_subagent(run_id: UUID, child_id: UUID) -> dict:
         """停止run_id直属child_id，返回封存快照；同源与会话生命周期校验沿用公共中间件。"""
@@ -416,16 +439,20 @@ def create_app(
     from agent_harness.web.integrations import IntegrationCreate, IntegrationAction, IntegrationResolutions
 
     @app.get("/api/runs/{run_id}/integration-targets")
-    async def integration_targets(run_id: UUID) -> dict:
+    async def integration_targets(run_id: UUID, parent_run_id: UUID | None = None) -> dict:
         """返回run_id同仓库内的已登记目标；只读目录与分支，不隐式切换或创建工作树。"""
-        return {"items": await asyncio.to_thread(manager.integrations.targets, str(run_id))}
+        return {"items": await asyncio.to_thread(manager.integrations.targets, str(run_id), str(parent_run_id) if parent_run_id else None)}
 
     @app.get("/api/runs/{run_id}/integrations")
-    async def integrations(run_id: UUID) -> dict:
+    async def integrations(run_id: UUID, parent_run_id: UUID | None = None) -> dict:
         """列出run_id所属会话的固定采纳历史；历史查询不执行原动作。"""
-        view = manager.get_run(run_id)
+        view = manager.get_run(parent_run_id or run_id)
+        if parent_run_id is not None and not any(item.run_id == run_id for item in view.result.subagents):
+            raise HTTPException(404, detail={"code": "subagent_not_found", "message": "子成果不属于该父运行。"})
         service = manager.integrations
         values = service.store.list(str(view.session_id or run_id))
+        if parent_run_id is not None:
+            values = [value for value in values if value["run_id"] == str(run_id) or str(run_id) in value.get("source_run_ids", [])]
         return {"items": [service.store.public(value) for value in values]}
 
     @app.post("/api/runs/{run_id}/integrations", status_code=202)
@@ -437,7 +464,7 @@ def create_app(
     async def integration(integration_id: UUID) -> dict:
         """返回integration_id的固定事实；不从当前目标推测成功，也不自动重放。"""
         value = manager.integrations.store.get(str(integration_id))
-        manager.get_run(value["run_id"])
+        manager.get_run(value.get("parent_run_id") or value["run_id"])
         return manager.integrations.store.public(value)
 
     @app.get("/api/integrations/{integration_id}/file")
@@ -449,7 +476,7 @@ def create_app(
     async def integration_check_artifact(integration_id: UUID, check_id: UUID, path: str) -> FileResponse:
         """下载check_id登记的固定path原始输出；遵守来源会话生命周期，不开放任意文件路径。"""
         value = manager.integrations.store.get(str(integration_id))
-        manager.get_run(value["run_id"])
+        manager.get_run(value.get("parent_run_id") or value["run_id"])
         target = manager.integrations.store.check_artifact(str(integration_id), str(check_id), path)
         return FileResponse(target, filename=target.name, media_type="application/octet-stream")
 
@@ -479,11 +506,11 @@ def create_app(
             raise WebServiceError(503, "project_patch_unreadable", "代码补丁暂时无法读取。") from None
 
     @app.get("/api/runs/{run_id}/patch")
-    async def project_patch(run_id: UUID) -> FileResponse:
+    async def project_patch(run_id: UUID, parent_run_id: UUID | None = None) -> FileResponse:
         """下载 run_id 完整固化补丁；强制附件，不将代码作为浏览器可执行内容。"""
-        target = await manager.project_patch(run_id)
+        target = await manager.project_patch(run_id, parent_run_id)
         return FileResponse(
-            target, media_type="application/octet-stream", filename=f"{run_id}.diff" if manager.get_run(run_id).execution_mode == "local" else f"{run_id}.patch",
+            target, media_type="application/octet-stream", filename=f"{run_id}.diff" if parent_run_id is None and manager.get_run(run_id).execution_mode == "local" else f"{run_id}.patch",
             headers={"X-Content-Type-Options": "nosniff"},
         )
 
@@ -552,12 +579,13 @@ def create_app(
         location: Literal["run", "workspace"],
         path: str = Query(min_length=1, max_length=4096),
         preview: bool = False,
+        parent_run_id: UUID | None = None,
     ) -> Response:
         """下载 run_id 已登记产物，或 preview=True 返回最多 64KiB UTF-8 纯文本预览。
 
         location 区分记录与工作区；二进制不可预览但可附件下载，未登记或越界返回 404。
         """
-        target = manager.artifact_path(run_id, location, path)
+        target = manager.artifact_path(run_id, location, path, parent_run_id)
         if not preview:
             return FileResponse(
                 target,

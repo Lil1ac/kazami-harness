@@ -58,3 +58,18 @@ it('修复阶段明确显示次数，重新测试期间继续展示测试状态'
   run.phase = 'verification';
   expect(runSummary(run).label).toBe('测试中');
 });
+
+
+it('模型证书错误直接说明原因，同时保持活动和清理状态优先', () => {
+  // 用户无需展开诊断即可识别证书问题；活动及清理未确认时不提前显示终态。
+  const run = makeRun();
+  run.result.execution_status = 'failed';
+  run.result.stop_reason = 'model_tls_verification';
+  render(<RunStatus run={run} />);
+  expect(screen.getByText('模型服务证书校验失败')).toBeInTheDocument();
+  run.active = true;
+  expect(runSummary(run).label).toBe('运行中');
+  run.active = false;
+  run.result.cleanup_status = 'unknown';
+  expect(runSummary(run).label).toBe('需检查清理');
+});

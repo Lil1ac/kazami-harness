@@ -198,6 +198,7 @@ export function TasksPanel({
                   <strong>
                     #{task.display_id} {task.subject}
                   </strong>
+                  {task.owner?.startsWith('subagent:') && <small>子 Agent 开发中</small>}
                   {task.blocked_reason ? (
                     <small>{task.blocked_reason}</small>
                   ) : task.depends_on.length > 0 ? (
@@ -229,6 +230,7 @@ export function TasksPanel({
               {selected.blocked_reason ? '阻塞' : labels[selected.status]}
             </div>
             <h2>{selected.subject}</h2>
+            {selected.delegation_run_id && <p>{selected.integration_status === 'applied' ? '子成果已采纳，完成情况仍需核对。' : '开发子成果尚待采纳或核对。'}</p>}
             {selected.blocked_reason && <Alert type="warning" title={selected.blocked_reason} />}
             <section>
               <h3>工作范围</h3>

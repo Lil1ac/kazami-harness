@@ -28,6 +28,8 @@ export interface PermissionPolicy {
 
 /** 一条不可变动作及当前处理状态；历史快照保留当时状态。 */
 export interface PermissionAction {
+  child_run_id?: string; // 开发子项动作的来源，无值表示根动作。
+  child_parent_id?: string; // 原子日志父归属，不授予新权限。
   id: string; // 动作UUID。
   source_run_id: string; // 产生请求的原运行。
   fingerprint: string; // 审阅载荷指纹，决定时原样返回。
@@ -338,16 +340,25 @@ export interface SubagentRecord {
   run_id: string; // 只在父运行下读取的子编号。
   title: string; // 委派标题。
   objective: string; // 主Agent指定的研究范围。
-  role: 'explore' | 'review'; // 探索或审阅，均只读。
+  role: 'explore' | 'review' | 'develop'; // 探索、审阅或隔离开发。
   task_id: string | null; // 可选关联工作项，不自动改变其状态。
   status:
     | 'running'
+    | 'waiting_input'
     | 'completed'
     | 'failed'
     | 'cancelled'
     | 'timed_out'
     | 'limit_exceeded'
     | 'interrupted'; // 宿主执行状态。
+  cleanup_status: CleanupStatus; // 子进程最坏清理状态；父结果已聚合。
+  log_parent_id: string | null; // 子日志实际父归属，跨审批保留旧记录。
+  workspace: string | null; // 开发子项独立工作区；只读为空。
+  write_scope: string[]; // 文件写入范围，不等于命令沙箱。
+  changed_paths: string[]; // 相对委派基线的固定变更。
+  scope_violations: string[]; // 非空时阻止成果采纳。
+  pending_action: PermissionAction | null; // 原动作由父会话统一审批。
+  snapshot_status: 'pending' | 'ready' | 'error'; // 开发成果完整性，独立于报告及测试。
   stop_reason: string | null; // 结束原因，活动时为空。
   report: SubagentReport | null; // 统一交接报告，活动时可为空，失败保留部分证据。
   skill_names: string[]; // 明确选择的父级技能快照，不自动继承全部技能。
@@ -367,6 +378,10 @@ export interface SubagentRecord {
 /** 单个子执行的有界报告及事件页；读取不会恢复执行。 */
 export interface SubagentDetail {
   subagent: SubagentRecord; // 父日志中的最新快照。
+  artifacts: ArtifactRef[]; // 子运行固定文件与命令原始输出。
+  artifact_status: 'pending' | 'complete' | 'incomplete'; // 固定文件采集状态。
+  artifact_warnings: string[]; // 有界的采集限制，不替代执行和检查结论。
+  project?: ProjectReview | null; // 开发子成果的固定变更清单。
   report_page: {
     content: string;
     offset: number;
@@ -381,6 +396,10 @@ export interface SubagentDetail {
 
 /** 单个持久工作项；状态与实际项目检查结果分别展示。 */
 export interface AgentTask {
+  owner?: string | null; // 执行负责人；subagent前缀表示由开发子项持有。
+  delegation_run_id?: string; // 最近开发成果来源，完成前须经采纳。
+  integration_status?: string; // 宿主投影的最新采纳状态，独立于工作项完成。
+  integration_id?: string | null; // 对应固定采纳记录；尚未准备时为空。
   id: string; // 跨运行稳定编号。
   display_id: number; // 清单内短编号。
   subject: string; // 标题。
@@ -446,6 +465,8 @@ export interface IntegrationTarget {
 
 /** 一次固定成果集成；写回事实和三类检查分别保存。 */
 export interface IntegrationView {
+  source_run_ids?: string[]; // 同一候选包含的固定开发子成果，缺省为单来源。
+  parent_run_id?: string; // 该子成果集成所属父视图，顶层来源为空。
   candidate_fingerprint?: string | null; // 当前候选内容版本，旧检查不适用于新候选。
   last_job?: {
     id: string; // 最近实际后台作业编号。

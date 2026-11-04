@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Drawer } from 'antd';
+import { Alert, Button, Drawer, Modal } from 'antd';
 import {
   CheckCircleOutlined,
   LoadingOutlined,
@@ -9,17 +9,20 @@ import {
   SearchOutlined,
   CodeOutlined,
 } from '@ant-design/icons';
-import { cancelSubagent, errorMessage, getSubagent } from '../api';
-import { duration } from '../format';
+import { cancelSubagent, errorMessage, getSubagent, getSubagentDiff, discardSubagentWorkspace, patchUrl } from '../api';
+import { duration, modelFailureLabel } from '../format';
 import { MarkdownMessage } from './MarkdownMessage';
 import { EventTrail } from './EventTrail';
 import { ContextPanel } from './ContextPanel';
 import type { SubagentRecord } from '../types';
 import './SubagentsPanel.css';
+import { IntegrationPanel } from './IntegrationPanel';
+import { ArtifactPanel } from './ArtifactPanel';
 
 const statusLabels: Record<SubagentRecord['status'], string> = {
   running: '研究中',
   completed: '报告已返回',
+  waiting_input: '等待批准或接续',
   failed: '研究失败',
   cancelled: '已取消',
   timed_out: '已超时',
@@ -34,10 +37,12 @@ function SubagentDetails({
   parentId,
   record,
   active,
+  siblings,
 }: {
   parentId: string;
   record: SubagentRecord;
   active: boolean;
+  siblings: { run_id: string; title: string }[]; // 同父已固定且范围合规的其他开发成果。
 }) {
   const client = useQueryClient(); // 停止后刷新父快照及子详情，实际状态由后端决定。
   const [stopping, setStopping] = useState(false); // 请求期间防止重复点击。
@@ -58,6 +63,19 @@ function SubagentDetails({
       setStopping(false);
     }
   }
+  const [discarding, setDiscarding] = useState(false); // 真实工作树删除请求进行中，固定证据不删除。
+  /** 用户明确确认后丢弃工作树；返回Promise<void>，失败显示受控原因并允许重试。 */
+  async function discardWorkspace() {
+    setDiscarding(true);
+    try {
+      await discardSubagentWorkspace(parentId, record.run_id);
+      await client.invalidateQueries({ queryKey: ['subagent', parentId, record.run_id] });
+    } catch (error) {
+      setStopError(errorMessage(error));
+    } finally {
+      setDiscarding(false);
+    }
+  }
   const [after, setAfter] = useState(0); // 当前子事件页起点，零为首条。
   const [offset, setOffset] = useState(0); // 当前报告页UTF-8字节起点，使用服务端next_offset前进。
   const query = useQuery({
@@ -67,13 +85,19 @@ function SubagentDetails({
     refetchInterval: active && record.status === 'running' ? 1500 : false,
     retry: false,
   });
+  const patch = useQuery({
+    queryKey: ['subagent-diff', parentId, record.run_id, record.snapshot_status],
+    queryFn: /* 固定补丁不读取正在变化的工作区。 */ () => getSubagentDiff(parentId, record.run_id),
+    enabled: record.role === 'develop' && record.snapshot_status === 'ready',
+    retry: false,
+  });
   const data = query.data;
   const report = data?.subagent.report ?? record.report; // 失败或中断也显示宿主保存的部分证据。
   return (
     <div className="subagent-details">
       <p className="agent-objective">{record.objective}</p>
       <div className="agent-detail-meta">
-        <span>{record.role === 'explore' ? '探索' : '审阅'}</span>
+        <span>{record.role === 'develop' ? '开发' : record.role === 'explore' ? '探索' : '审阅'}</span>
         <span>{duration(record.elapsed_seconds * 1000)}</span>
         <span>{(record.usage.total_tokens ?? 0).toLocaleString()} token</span>
       </div>
@@ -82,6 +106,7 @@ function SubagentDetails({
           停止此子任务
         </Button>
       )}
+      {modelFailureLabel(record.stop_reason) && <Alert type="error" title={modelFailureLabel(record.stop_reason)} description="请检查系统受信任证书；修正后再明确接续。" />}
       {stopError && <Alert type="error" title={stopError} />}
       <details className="agent-runtime">
         <summary>执行信息</summary>
@@ -108,6 +133,7 @@ function SubagentDetails({
           {!record.usage_complete || record.status === 'running' ? ' · 已知部分' : ''}
           ，已计入父运行；子时限 {record.timeout_seconds.toFixed(1)} 秒。
         </p>
+        {record.cleanup_status !== 'not_needed' && <p>进程清理：{record.cleanup_status === 'complete' ? '已完成' : record.cleanup_status === 'unknown' ? '结果不明' : '未完成'}</p>}
         {record.stop_reason && (
           <p>
             结束原因：<code>{record.stop_reason}</code>
@@ -116,6 +142,24 @@ function SubagentDetails({
       </details>
       {query.isPending && <p role="status">正在读取子执行记录…</p>}
       {query.error && <Alert type="error" title={errorMessage(query.error)} />}
+      {record.role === 'develop' && (
+        <div className="subagent-delivery">
+          <p><code>{record.workspace}</code></p>
+          <p>修改范围：{record.write_scope.join('、')}</p>
+          {record.pending_action && <Alert type="info" title="请在父会话处理此子任务的动作审批。" />}
+          {record.scope_violations.length > 0 && <Alert type="error" title={`超出委派范围，不能采纳：${record.scope_violations.join('、')}`} />}
+          {record.snapshot_status === 'error' && <Alert type="error" title="代码快照未完整保存，请核对工作区。" />}
+          {patch.error && <Alert type="error" title={errorMessage(patch.error)} />}
+          {!active && data?.project && data.project.status !== 'discarded' && (
+            <Button danger loading={discarding} onClick={/* 丢弃仅由用户明确确认，保留固定成果。 */ () => Modal.confirm({ title: '丢弃此子任务工作树？', content: '工作目录将删除，已保存的报告、补丁和采纳记录保留。', onOk: discardWorkspace })}>丢弃子工作树</Button>
+          )}
+          {data?.project?.status === 'discarded' && <p>子工作树已丢弃，以下为固定历史证据。</p>}
+          {patch.data && <details><summary>子成果差异 · {record.changed_paths.length} 个文件</summary><pre aria-label="子成果补丁">{patch.data.content}</pre><a href={patchUrl(record.run_id, parentId)} download>下载完整子补丁</a>{patch.data.truncated && <p>预览已截断，完整成果通过集成审阅逐文件查看。</p>}</details>}
+          {!active && record.status === 'completed' && record.snapshot_status === 'ready' && !record.scope_violations.length && (
+            <IntegrationPanel runId={record.run_id} parentRunId={parentId} sourceTest="unverified" siblings={siblings} />
+          )}
+        </div>
+      )}
       {data && (
         <>
           {data.warnings.map(
@@ -167,7 +211,7 @@ function SubagentDetails({
           ) : (
             <p className="muted">
               {record.status === 'running'
-                ? '子 Agent 正在研究，尚无最终报告。'
+                ? '子 Agent 正在执行，尚无最终报告。'
                 : '该子执行没有最终报告。'}
             </p>
           )}
@@ -212,6 +256,9 @@ function SubagentDetails({
               </ul>
             </div>
           )}
+          {record.role === 'develop' && (data.artifacts.length > 0 || data.artifact_status === 'incomplete') && (
+            <details><summary>子产物与命令输出</summary><ArtifactPanel runId={record.run_id} parentRunId={parentId} artifacts={data.artifacts} status={data.artifact_status} warnings={data.artifact_warnings} /></details>
+          )}
           <details>
             <summary>子执行轨迹</summary>
             <EventTrail
@@ -248,7 +295,7 @@ function SubagentDetails({
   );
 }
 
-/** 显示本轮委派及其只读证据；records来自父Run固定/实时快照，inactive时无终态项明确中断。 */
+/** 显示本轮委派、固定成果与交接证据；records取父快照，inactive时缺终态项明确中断。 */
 export function SubagentsPanel({
   parentId,
   records,
@@ -270,7 +317,7 @@ export function SubagentsPanel({
   );
   if (!records.length) return null;
   return (
-    <section className="subagents-panel" aria-label="只读子 Agent">
+    <section className="subagents-panel" aria-label="子 Agent">
       <header className="work-panel-heading">
         <div>
           <h3>
@@ -296,10 +343,10 @@ export function SubagentsPanel({
                 <span className="agent-row-copy">
                   <strong>{record.title}</strong>
                   <small>
-                    {record.role === 'explore' ? '探索' : '审阅'} ·{' '}
+                    {record.role === 'develop' ? '开发' : record.role === 'explore' ? '探索' : '审阅'} ·{' '}
                     {record.status === 'completed' && record.report?.partial
                       ? '报告部分返回'
-                      : statusLabels[record.status]}
+                      : modelFailureLabel(record.stop_reason) || statusLabels[record.status]}
                   </small>
                   <span>{record.objective}</span>
                 </span>
@@ -333,6 +380,7 @@ export function SubagentsPanel({
             parentId={parentId}
             record={selected}
             active={active}
+            siblings={normalized.filter((item) => item.run_id !== selected.run_id && item.role === 'develop' && item.status === 'completed' && item.snapshot_status === 'ready' && !item.scope_violations.length).map((item) => ({ run_id: item.run_id, title: item.title }))}
           />
         )}
       </Drawer>

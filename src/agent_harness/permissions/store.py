@@ -75,7 +75,12 @@ class PermissionStore:
                     continue  # 集成动作由其逐文件日志核对，不能套用模型Run回执推测。
                 status = "unknown"
                 try:
-                    history = RunStore.read(self.work.root, value["execution_run_id"])
+                    if value.get("execution_child_parent_id"):
+                        from agent_harness.subagents.service import read_child
+                        from uuid import UUID
+                        history = read_child(self.work.root, UUID(value["execution_child_parent_id"]), UUID(value["execution_run_id"]))
+                    else:
+                        history = RunStore.read(self.work.root, value["execution_run_id"])
                     if history.manifest.permission_resume is None or history.manifest.permission_resume.action_id != value["id"]:
                         raise StorageError("接续来源无法核对")
                     for event in history.events:
@@ -101,7 +106,18 @@ class PermissionStore:
         仅校验不写状态；指纹、有效期、来源和决定冲突均抛 TaskError，不把过期当成拒绝执行成功。
         """
         value = self.get(decision.action_id, db)
-        if value["source_run_id"] != parent_id or value["fingerprint"] != decision.fingerprint:
+        source_matches = value["source_run_id"] == parent_id
+        if not source_matches and value.get("child_run_id"):
+            # 同一审批链保留兄弟子项的不可变原动作；只能由当前父快照明确指向，不能任意跨会话批准。
+            from agent_harness.storage.runs import RunStore, StorageError
+            try:
+                history = RunStore.read(self.work.root, parent_id)
+                pending = history.result.permissions.pending if history.result else None
+                source_matches = bool(pending and pending["id"] == value["id"]
+                                      and str(history.manifest.session_id or history.manifest.run_id) == value["session_id"])
+            except StorageError:
+                source_matches = False
+        if not source_matches or value["fingerprint"] != decision.fingerprint:
             raise TaskError("permission_stale", "动作或审阅版本已经变化，请刷新当前请求。")
         if value["status"] != "pending":
             if request_id is None or value.get("request_id") != request_id or value.get("decision") != decision.action:

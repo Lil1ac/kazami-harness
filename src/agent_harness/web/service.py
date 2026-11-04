@@ -599,7 +599,7 @@ class WebRunManager:
         return {"items": [item.model_dump(mode="json") for item in items], "active": view.active}
 
     def get_subagent(self, run_id: UUID, child_id: UUID, after: int, limit: int, offset: int) -> dict:
-        """分页读取run_id直属child_id轨迹及报告；返回快照、事件页和上下文，不启动执行。
+        """分页读取run_id直属child_id轨迹及报告；返回快照、事件页、上下文、固定产物及工作树审阅状态，不启动执行。
 
         after是已读子事件序号，limit为1—100，offset为报告UTF-8字节偏移。
         未登记子项返回404，日志损坏/归属变化返回503，非法报告偏移返回422。
@@ -609,16 +609,23 @@ class WebRunManager:
         if record is None:
             raise WebServiceError(404, "subagent_not_found", "该子执行不属于当前运行。")
         try:
-            history = read_child(self.runs_root, run_id, child_id)
+            history = read_child(self.runs_root, UUID(record["log_parent_id"]) if record.get("log_parent_id") else run_id, child_id)
             if record["report"] is None and not view["active"]:
                 recovered = history.result.subagent_report if history.result else None
-                record["report"] = (recovered or partial_report(history.events, "missing_terminal")).model_dump(mode="json")
+                record["report"] = (recovered or partial_report(history.events, "missing_terminal", role=record["role"])).model_dump(mode="json")
             report = report_page(history, offset, 8192)
             report["status"] = record["status"]  # 当前活动状态取父宿主事实，缺终态的报告不擅自标中断。
             selected = [event for event in history.events if event.seq > after][:limit]
             last = selected[-1].seq if selected else after
             context = _context_view(history.events)
+            # 所有附件均来自已固定子结果，绝不回退到当前工作树文件。
+            result = history.result
+            project = self.projects.get(child_id) if record["role"] == "develop" else None
             return {"subagent": record, "report_page": report,
+                    "artifacts": [item.model_dump(mode="json") for item in result.artifacts] if result else [],
+                    "artifact_status": result.artifact_status if result else "pending",
+                    "artifact_warnings": result.artifact_warnings if result else [],
+                    "project": project.model_dump(mode="json") if project else None,
                     "events": {"items": [event.model_dump(mode="json") for event in selected],
                                "has_more": last < len(history.events), "last_seq": len(history.events)},
                     "context": context.model_dump(mode="json") if context else None, "warnings": history.warnings}
@@ -696,14 +703,25 @@ class WebRunManager:
         if self.jobs.worker is not None:
             await asyncio.shield(self.jobs.worker)
 
-    def artifact_path(self, run_id: UUID | str, location: str, path: str) -> Path:
+    def artifact_path(self, run_id: UUID | str, location: str, path: str, parent_run_id: UUID | None = None) -> Path:
         """仅解析已登记产物 path；location 为 run/workspace，越界、链接或未登记抛 404。
 
         每次访问重新检查真实路径，拒绝文件登记后被链接替换；不返回任意工作区文件。
         run/plans/vN.md 是由本轮已保存版本生成的 Markdown 导出，复用网页和原生下载链路。
         """
-        view = self.get_run(run_id)
-        plan_export = re.fullmatch(r"plans/v([1-9][0-9]{0,2})\.md", path) if location == "run" else None
+        child_base = None  # 子日志目录只能从父快照归属解析，客户端不能指定磁盘位置。
+        if parent_run_id is not None:
+            from types import SimpleNamespace
+            detail = self.get_subagent(parent_run_id, UUID(str(run_id)), 0, 1, 0)
+            log_parent = UUID(detail["subagent"]["log_parent_id"]) if detail["subagent"].get("log_parent_id") else parent_run_id
+            history = read_child(self.runs_root, log_parent, UUID(str(run_id)))
+            if history.result is None:
+                raise WebServiceError(409, "artifact_pending", "子执行尚未固定产物。")
+            view = SimpleNamespace(run_id=UUID(str(run_id)), result=history.result, execution_mode="isolated")
+            child_base = self.runs_root / str(log_parent) / "subagents" / str(run_id)
+        else:
+            view = self.get_run(run_id)
+        plan_export = re.fullmatch(r"plans/v([1-9][0-9]{0,2})\.md", path) if location == "run" and child_base is None else None
         if plan_export is not None:
             version = int(plan_export[1])
             plan = next((item for item in view.result.planning.plans if item.version == version), None)
@@ -726,7 +744,7 @@ class WebRunManager:
                 return self.projects.files.saved_file(view.run_id, path)
             except SnapshotError:
                 raise WebServiceError(409, 'project_artifact_unavailable', '本轮固定产物不可用，不会用共享工作树当前文件冒充历史内容。') from None
-        base = self.runs_root / str(view.run_id)
+        base = child_base or self.runs_root / str(view.run_id)
         try:
             candidate = base / path
             # ArtifactRef已校验词法边界，这里检查登记后新增的每一级链接。
@@ -818,8 +836,13 @@ class WebRunManager:
             except ProjectError as error:
                 raise WebServiceError(409, error.code, error.message) from None
 
-    async def project_patch(self, run_id: UUID | str) -> Path:
+    async def project_patch(self, run_id: UUID | str, parent_run_id: UUID | None = None) -> Path:
         """返回终态 run_id 已固化的补丁文件；活动或快照失败时抛受控错误，不重新生成 diff。"""
+        if parent_run_id is not None:
+            detail = self.get_subagent(parent_run_id, UUID(str(run_id)), 0, 1, 0)
+            if detail["subagent"]["role"] != "develop" or detail["subagent"]["snapshot_status"] != "ready":
+                raise WebServiceError(409, "project_snapshot_required", "开发子成果尚无完整补丁。")
+            return await asyncio.to_thread(self.projects.patch_path, UUID(str(run_id)))
         view = self.get_run(run_id)
         if view.execution_mode == 'local':
             if view.active:

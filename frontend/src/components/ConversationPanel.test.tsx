@@ -354,3 +354,18 @@ it('丢弃最新工作树后及时禁止发送，保留已编辑草稿', async (
   expect(screen.getByLabelText('输入消息')).toHaveValue('保留草稿');
   expect(createFollowup).not.toHaveBeenCalled();
 });
+
+
+it('证书校验失败在当前会话直接说明原因，历史记录保持真实终态', async () => {
+  // 使用服务端原有stop_reason字段，避免只在诊断面板显示技术码。
+  const run = makeRun();
+  run.result.execution_status = 'failed';
+  run.result.stop_reason = 'model_tls_verification';
+  const view = conversation();
+  Object.assign(view.turns[0], { final_answer: null, execution_status: 'failed', validation_status: 'unverified', stop_reason: 'model_tls_verification' });
+  vi.mocked(getConversation).mockResolvedValue(view);
+  show(run);
+  expect(await screen.findByText('模型服务证书校验失败，本次执行没有最终回答。')).toBeInTheDocument();
+  expect(screen.getByText('模型服务证书校验失败')).toBeInTheDocument();
+  expect(createFollowup).not.toHaveBeenCalled();
+});

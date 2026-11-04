@@ -10,7 +10,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { ModeSelect } from './ModeSelect';
-import { phaseLabel } from '../format';
+import { phaseLabel, modelFailureLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
 import { useRunPlanning } from '../hooks/useRunPlanning';
 import { MarkdownMessage } from './MarkdownMessage';
@@ -41,6 +41,7 @@ function turnStatus(
   interrupted = false,
   reason?: string | null,
 ): string {
+  if (!interrupted && status === 'failed' && modelFailureLabel(reason)) return modelFailureLabel(reason)!;
   if (!interrupted && reason === 'planning_complete') return '规划已结束';
   if (!interrupted && reason === 'plan_rejected') return '已拒绝计划';
   const labels: Record<string, string> = {
@@ -106,7 +107,7 @@ function TurnMessage({
         ) : selected && run?.active ? null : (
           <p className="message-waiting">
             {turn.execution_status
-              ? turnStatus(turn.execution_status, null, interrupted) + '，本次执行没有最终回答。'
+              ? turnStatus(turn.execution_status, null, interrupted, turn.stop_reason) + '，本次执行没有最终回答。'
               : '运行记录待确认，请查看本次详情。'}
           </p>
         )}

@@ -21,13 +21,13 @@ import type {
 } from './types';
 
 /** 读取runId同仓库的已登记目标；只读，不创建或切换代码分支。 */
-export function getIntegrationTargets(runId: string): Promise<{ items: IntegrationTarget[] }> {
-  return request(`/api/runs/${runId}/integration-targets`);
+export function getIntegrationTargets(runId: string, parentRunId?: string): Promise<{ items: IntegrationTarget[] }> {
+  return request(`/api/runs/${runId}/integration-targets${parentRunId ? `?parent_run_id=${encodeURIComponent(parentRunId)}` : ''}`);
 }
 
 /** 读取runId所属会话全部固定采纳历史；不重放副作用。 */
-export function getIntegrations(runId: string): Promise<{ items: IntegrationView[] }> {
-  return request(`/api/runs/${runId}/integrations`);
+export function getIntegrations(runId: string, parentRunId?: string): Promise<{ items: IntegrationView[] }> {
+  return request(`/api/runs/${runId}/integrations${parentRunId ? `?parent_run_id=${encodeURIComponent(parentRunId)}` : ''}`);
 }
 
 /** 创建requestId标识的集成准备；targetId只能引用已登记项目，重试保持编号。 */
@@ -35,11 +35,13 @@ export function createIntegration(
   runId: string,
   targetId: string,
   requestId: string,
+  parentRunId?: string,
+  sourceRunIds?: string[],
 ): Promise<IntegrationView> {
   return request(`/api/runs/${runId}/integrations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target_id: targetId, request_id: requestId }),
+    body: JSON.stringify({ target_id: targetId, request_id: requestId, ...(parentRunId ? { parent_run_id: parentRunId } : {}), ...(sourceRunIds?.length ? { source_run_ids: sourceRunIds } : {}) }),
   });
 }
 
@@ -281,9 +283,10 @@ export function getEvents(
 }
 
 /** 生成受控产物 URL；preview=false 时后端以附件提供，路径仍由后端校验。 */
-export function artifactUrl(runId: string, artifact: ArtifactRef, preview = false): string {
+export function artifactUrl(runId: string, artifact: ArtifactRef, preview = false, parentRunId?: string): string {
   const query = new URLSearchParams({ location: artifact.location, path: artifact.path });
   if (preview) query.set('preview', 'true');
+  if (parentRunId) query.set('parent_run_id', parentRunId);
   return `/api/runs/${encodeURIComponent(runId)}/artifacts?${query}`;
 }
 
@@ -296,8 +299,9 @@ export function planMarkdownUrl(runId: string, version: number): string {
 export function previewArtifact(
   runId: string,
   artifact: ArtifactRef,
+  parentRunId?: string,
 ): Promise<{ content: string; truncated: boolean; size_bytes: number; encoding: 'utf-8' }> {
-  return request(artifactUrl(runId, artifact, true));
+  return request(artifactUrl(runId, artifact, true, parentRunId));
 }
 
 /** 把未知异常转为用户可读文案；不把对象或堆栈直接写进页面。 */
@@ -311,8 +315,8 @@ export function getDiff(runId: string, signal?: AbortSignal): Promise<DiffRespon
 }
 
 /** 生成完整补丁附件 URL；即使任务工作树已丢弃也从运行证据下载。 */
-export function patchUrl(runId: string): string {
-  return `/api/runs/${encodeURIComponent(runId)}/patch`;
+export function patchUrl(runId: string, parentRunId?: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/patch${parentRunId ? `?parent_run_id=${encodeURIComponent(parentRunId)}` : ''}`;
 }
 
 /** 明确记录人工审阅；keep 只保留工作树，discard 仅移除本任务工作树，均不合并代码。 */
@@ -476,5 +480,17 @@ export function manageConversationBatch(body: object): Promise<{
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+  });
+}
+
+/** 读取parentId登记的childId固定补丁预览；只读取证据，全文保存在宿主快照。 */
+export function getSubagentDiff(parentId: string, childId: string): Promise<{ content: string; truncated: boolean }> {
+  return request(`/api/runs/${parentId}/subagents/${childId}/diff`);
+}
+
+/** 明确丢弃parentId登记的childId工作树；固定报告、补丁和采纳历史仍保留。 */
+export function discardSubagentWorkspace(parentId: string, childId: string): Promise<ProjectReview> {
+  return request(`/api/runs/${parentId}/subagents/${childId}/review`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: 'discard' }),
   });
 }

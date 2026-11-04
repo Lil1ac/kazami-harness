@@ -3,7 +3,7 @@
 from pydantic import Field, ValidationError, model_validator
 
 from agent_harness.schemas import DataModel, RunEvent, RunResult, SubagentEvidence, SubagentFinding, SubagentReport
-from agent_harness.subagents.profiles import READONLY_TOOLS
+from agent_harness.subagents.profiles import READONLY_TOOLS, DEVELOP_TOOLS
 
 
 class ReportDraft(DataModel):
@@ -28,38 +28,40 @@ class ReportDraft(DataModel):
         return self
 
 
-def collect_evidence(events: list[RunEvent]) -> list[SubagentEvidence]:
-    """从events按调用顺序提取成功只读回执，返回每次调用一个入口；不采信模型写出的路径。
+def collect_evidence(events: list[RunEvent], *, role: str = "explore") -> list[SubagentEvidence]:
+    """从events提取role允许的成功回执，返回每次调用一个入口；默认explore只读，develop也接受实际写入/命令。
 
-    搜索和记忆以调用编号指向完整原记录，文件读取保留实际路径、指纹和截断事实。
+    路径、指纹和截断事实由宿主回执提取，不采信模型填写；命令成功不代替项目独立验收。
     """
+    allowed = DEVELOP_TOOLS if role == "develop" else READONLY_TOOLS
     evidence = []
     for event in events:
-        if event.type != "tool_result" or event.payload.get("name") not in READONLY_TOOLS:
+        if event.type != "tool_result" or event.payload.get("name") not in allowed:
             continue
         result = event.payload.get("result", {})
         if not result.get("ok"):
             continue
         data = result.get("data") or {}
         evidence.append(SubagentEvidence(tool_call_id=event.payload["call_id"], tool=event.payload["name"],
-                                         path=data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] == "read_file" else None,
+                                         path=data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] in {"read_file", "edit_file"} else None,
                                          truncated=bool(result.get("truncated"))))
     return evidence
 
 
-def partial_report(events: list[RunEvent], reason: str) -> SubagentReport:
+def partial_report(events: list[RunEvent], reason: str, *, role: str = "explore") -> SubagentReport:
     """用events保存可核对证据并标记reason，返回无虚构发现的部分报告；不发模型或修改执行状态。"""
-    return SubagentReport(summary="研究尚未完整交接，已保留实际读取证据。", evidence=collect_evidence(events)[:8],
+    return SubagentReport(summary="开发尚未完整交接，已保留实际工具证据。" if role == "develop" else "研究尚未完整交接，已保留实际读取证据。", evidence=collect_evidence(events, role=role)[:8],
                           limitations=["当前没有经过结构和来源核验的完整研究结论。"], pending=["核对已有证据，再决定是否继续研究。"], partial=True, reason=reason)
 
 
-def finalize_report(result: RunResult, events: list[RunEvent]) -> SubagentReport:
+def finalize_report(result: RunResult, events: list[RunEvent], *, role: str = "explore") -> SubagentReport:
     """核验result原始模型JSON及events来源并返回报告；非法正常结束改为明确失败，不掩盖原中断原因。
 
-    报告总UTF-8编码最多32KiB；模型可标记未完成，宿主失败始终保持partial。
+    role默认explore，仅接受读取证据；develop也核验实际写入与命令回执。报告总UTF-8编码最多32KiB，
+    模型可标记未完成，宿主失败始终保持partial。
     存储不在本函数进行，调用者必须将返回值和执行终态一起固定。
     """
-    sources = collect_evidence(events)
+    sources = collect_evidence(events, role=role)
     try:
         text = (result.final_answer or "").strip()
         if text.startswith("```json") and text.endswith("```"):
@@ -81,4 +83,4 @@ def finalize_report(result: RunResult, events: list[RunEvent]) -> SubagentReport
         code = str(error) if str(error) in {"subagent_report_evidence_invalid", "subagent_report_too_large"} else "subagent_report_invalid"
         if result.execution_status == "completed":
             result.execution_status, result.stop_reason = "failed", code
-        return partial_report(events, result.stop_reason or code)
+        return partial_report(events, result.stop_reason or code, role=role)

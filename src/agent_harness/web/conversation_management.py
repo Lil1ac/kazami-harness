@@ -189,11 +189,18 @@ class ConversationManager:
             return "请先将对话移入回收站。"
         if busy and record["state"] != "purging":
             return busy
+        if record["state"] == "purging":
+            return None  # 清理已获批准并冻结清单；重试不能再依赖可能已删除的父子日志。
         try:
             session = self.manager.conversations.store.read(UUID(record["session_id"]))
             review = self.manager.projects.get(session.run_ids[-1])
             if review is not None and self.manager.projects.workspace(session.run_ids[-1]).status != "discarded":
                 return "独立工作树仍保留，请先恢复对话，在文件审阅中处理并明确丢弃工作树。"
+            for identifier in session.run_ids:
+                view = self.manager.get_run(identifier)
+                for child in view.result.subagents:
+                    if child.role == "develop" and self.manager.projects.workspace(child.run_id).status != "discarded":
+                        return "开发子工作树仍保留，请先恢复对话，在子任务详情明确丢弃工作树。"
         except Exception:
             return "工作树归属无法核对，请保留记录并处理后重试。"
         return None
@@ -350,11 +357,14 @@ class ConversationManager:
                         raise ConversationError("conversation_purge_blocked", reason)
                     session = self.manager.conversations.store.read(UUID(session_id))
                     ids = {str(identifier) for identifier in session.run_ids} | {str(intent.run_id) for intent in session.requests.values()}
+                    child_ids = set()  # 子日志随父目录删除，子工作树元数据和固定文件仍需纳入清理清单。
                     for identifier in ids:
                         if (self.manager.runs_root / identifier).exists():
                             history = self.manager._read_history(UUID(identifier))
                             if str(history.manifest.session_id or history.manifest.run_id) != session_id:
                                 raise ConversationError("conversation_purge_blocked", "轮次归属不一致，不能清理记录。")
+                            child_ids.update(str(item.run_id) for item in self.manager.get_run(UUID(identifier)).result.subagents if item.role == "develop")
+                    ids.update(child_ids)
                     record.update(state="purging", revision=record["revision"] + 1, purge_ids=sorted(ids), purge_run_count=len(session.run_ids), purge_memory_references=self.memory_references(session_id), purge_error=None,
                                   purge_request_id=str(body.request_id), purge_expected_revision=body.expected_revision)
                     db.execute("INSERT OR REPLACE INTO conversations VALUES (?,?)", (session_id, encode(record)))

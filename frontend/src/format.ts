@@ -63,3 +63,8 @@ export const reviewLabels: Record<ProjectReview['status'], string> = {
   kept: '已保留工作树',
   discarded: '已丢弃工作树',
 };
+
+/** 将模型证书失败reason翻译为操作文案；其他或尚未结束的原因返回null，保留原有状态规则。 */
+export function modelFailureLabel(reason: string | null | undefined): string | null {
+  return reason === 'model_tls_verification' ? '模型服务证书校验失败' : null;
+}

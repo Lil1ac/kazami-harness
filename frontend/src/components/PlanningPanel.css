@@ -9,22 +9,18 @@
   padding: 0;
 }
 .plan-card-pending {
+  display: flex;
+  flex-direction: column;
+  max-height: min(760px, calc(100svh - 330px));
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 20px 22px 0;
+  padding: 0 22px;
   background: var(--surface);
 }
-.plan-heading,
 .plan-eyebrow,
-.plan-overview,
-.plan-status {
+.plan-overview {
   display: flex;
   align-items: center;
-}
-.plan-heading {
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 18px;
 }
 .plan-eyebrow {
   gap: 7px;
@@ -38,21 +34,6 @@
   padding-left: 8px;
   border-left: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
-}
-.plan-status {
-  flex-shrink: 0;
-  gap: 6px;
-  font-size: 10px;
-  color: var(--muted);
-}
-.plan-status > span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.plan-status-pending {
-  color: var(--accent);
 }
 .plan-title {
   font-size: 20px;
@@ -150,6 +131,18 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   padding-right: 12px;
+}
+/* 审阅容器内部消化长正文，标题和决定区不随正文滚走。 */
+.conversation-content .plan-card-pending .plan-reading {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+.plan-card-pending > .review-heading,
+.plan-card-pending > .plan-title,
+.plan-card-pending > .plan-overview,
+.plan-card-pending > .review-footer {
+  flex-shrink: 0;
 }
 .plan-section + .plan-section {
   margin-top: 28px;
@@ -258,14 +251,6 @@
   margin-top: 8px;
   white-space: pre-wrap;
 }
-.plan-decisions {
-  display: grid;
-  gap: 12px;
-  margin: 0 -22px;
-  padding: 16px 22px;
-  border-top: 1px solid var(--line);
-  background: var(--raised);
-}
 .plan-buttons {
   display: flex;
   flex-wrap: wrap;
@@ -350,20 +335,45 @@
   margin-right: 8px;
 }
 @media (max-width: 600px) {
+  /* 手机阅读区为决定按钮预留空间，避免正文和输入栏同时挤压操作区。 */
+  .conversation-content .plan-reading {
+    max-height: 32vh;
+  }
+  .plan-buttons .ant-btn {
+    min-height: 40px;
+    padding-inline: 10px;
+  }
   .plan-card-pending {
-    padding: 17px 16px 0;
+    max-height: calc(100svh - 370px);
+    padding: 0 16px;
   }
   .plan-title {
     font-size: 18px;
   }
-  .plan-decisions {
-    margin-inline: -16px;
-    padding-inline: 16px;
-  }
-  .plan-heading {
-    gap: 8px;
-  }
   .plan-reading-actions {
     gap: 10px;
+  }
+}
+
+/* 计划沿用统一标题与决定区，正文独立滚动。 */
+.plan-card > .review-heading {
+  margin-bottom: 20px;
+  padding-inline: 0;
+}
+.plan-card-pending > .review-heading {
+  margin-inline: -22px;
+  padding-inline: 20px;
+}
+.plan-card-pending > .review-footer {
+  margin: 0 -22px;
+  border-radius: 0 0 10px 10px;
+}
+.plan-card-pending > .review-footer > .review-buttons {
+  display: block;
+}
+@media (max-width: 600px) {
+  .plan-card-pending > .review-heading,
+  .plan-card-pending > .review-footer {
+    margin-inline: -16px;
   }
 }

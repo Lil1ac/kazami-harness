@@ -13,6 +13,7 @@ import {
 } from '../api';
 import type { IntegrationView } from '../types';
 import './IntegrationPanel.css';
+import { readableCommand, ReviewFooter, ReviewHeading, ReviewPatch } from './ReviewSurface';
 
 const labels: Record<IntegrationView['status'], string> = {
   preparing: '准备中',
@@ -315,9 +316,10 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
                         </div>
                       </>
                     ) : (
-                      <pre aria-label="最终集成差异">
-                        {preview.data.diff || '二进制或文件模式变化，请核对文件清单。'}
-                      </pre>
+                      <ReviewPatch
+                        label="最终集成差异"
+                        content={preview.data.diff || '二进制或文件模式变化，请核对文件清单。'}
+                      />
                     )}
                   </>
                 )}
@@ -328,7 +330,11 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
             {Boolean(current.test_config?.argv.length) && (
               <details>
                 <summary>检查命令与执行位置</summary>
-                <pre>{JSON.stringify(current.test_config?.argv, null, 2)}</pre>
+                <pre>{readableCommand(current.test_config?.argv)}</pre>
+                <details>
+                  <summary>完整原始参数</summary>
+                  <pre>{JSON.stringify(current.test_config?.argv, null, 2)}</pre>
+                </details>
                 <p>候选：{current.workspace}</p>
                 <p>目标：{current.target?.path}</p>
                 <p>本机执行，进程按系统权限访问文件和网络。</p>
@@ -376,7 +382,13 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
             )}
           </div>
           {current.status === 'ready' && (
-            <div className="integration-toolbar">
+            <ReviewFooter
+              note={
+                !current.test_config?.argv.length
+                  ? '未配置测试，采纳后保持未验收。'
+                  : '先核对候选检查，再确认写回目标。'
+              }
+            >
               <Button
                 disabled={busy}
                 onClick={
@@ -393,8 +405,7 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
               >
                 {current.kind === 'undo' ? '审阅并确认撤销' : '审阅并确认采纳'}
               </Button>
-              {!current.test_config?.argv.length && <span>未配置测试，采纳后保持未验收。</span>}
-            </div>
+            </ReviewFooter>
           )}
           {current.status === 'applied' && (
             <div className="integration-toolbar">
@@ -476,7 +487,12 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
           )}
           <Modal
             className="integration-confirm"
-            title={current.kind === 'undo' ? '确认撤销这些改动' : '确认采纳这些改动'}
+            title={
+              <ReviewHeading
+                title={current.kind === 'undo' ? '确认撤销这些改动' : '确认采纳这些改动'}
+                status="尚未写回"
+              />
+            }
             open={confirm}
             onCancel={/* 取消确认不发送请求。 */ () => setConfirm(false)}
             onOk={/* 明确确认才批准本次固定写回。 */ () => action.mutate({ action: 'apply' })}
@@ -484,31 +500,34 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
             okText="确认写回"
             cancelText="继续审阅"
           >
-            <p>{current.target?.path}</p>
-            <p>
-              {current.target?.branch || '分离HEAD'} · {current.target?.head}
-            </p>
-            <ul>
-              {current.files.map(
-                /* 完整展示目标实际将发生的变化。 */ (item) => (
-                  <li key={item.path}>
-                    {{ added: '新增', modified: '修改', deleted: '删除' }[item.status]} ·{' '}
-                    {item.path}
-                    {item.binary ? ' · 二进制' : ''}
-                  </li>
-                ),
+            <div className="integration-confirm-body">
+              <span className="review-note">目标工作区</span>
+              <p className="integration-confirm-path">{current.target?.path}</p>
+              <p>
+                {current.target?.branch || '分离HEAD'} · {current.target?.head}
+              </p>
+              <ul>
+                {current.files.map(
+                  /* 完整展示目标实际将发生的变化。 */ (item) => (
+                    <li key={item.path}>
+                      {{ added: '新增', modified: '修改', deleted: '删除' }[item.status]} ·{' '}
+                      {item.path}
+                      {item.binary ? ' · 二进制' : ''}
+                    </li>
+                  ),
+                )}
+              </ul>
+              <p className="review-note">保留原暂存区。本次写回后，目标复验另行明确批准。</p>
+              {current.kind === 'undo' && (
+                <Alert
+                  type="warning"
+                  title="撤销恢复采纳前代码，原有测试可能再次失败；请在写回后复验。"
+                />
               )}
-            </ul>
-            <p>保留原暂存区。本次写回后，目标复验另行明确批准。</p>
-            {current.kind === 'undo' && (
-              <Alert
-                type="warning"
-                title="撤销恢复采纳前代码，原有测试可能再次失败；请在写回后复验。"
-              />
-            )}
-            {!current.test_config?.argv.length && (
-              <Alert type="warning" title="未配置测试，本次成果未验收。" />
-            )}
+              {!current.test_config?.argv.length && (
+                <Alert type="warning" title="未配置测试，本次成果未验收。" />
+              )}
+            </div>
           </Modal>
         </>
       )}

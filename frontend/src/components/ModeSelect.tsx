@@ -1,6 +1,7 @@
 import { Select } from 'antd';
 import { memo } from 'react';
 import { DownOutlined, ThunderboltOutlined, AuditOutlined } from '@ant-design/icons';
+import './ComposerSelect.css';
 
 /** 模式选择输入；切换只设置下一次提交，不改变正在执行的权限。 */
 interface ModeSelectProps {
@@ -23,7 +24,9 @@ export const ModeSelect = memo(function ModeSelect({
       onChange={onChange}
       virtual={false}
       variant="borderless"
-      popupMatchSelectWidth={270}
+      size="small"
+      popupMatchSelectWidth={248}
+      classNames={{ popup: { root: 'composer-select-menu' } }}
       suffixIcon={<DownOutlined />}
       options={[
         {

@@ -4,11 +4,18 @@ import { Alert, Button, Select } from 'antd';
 import { errorMessage, getPermissions } from '../api';
 import type { ActionDecision, PermissionAction, PermissionMode, RunView } from '../types';
 import './PermissionPanel.css';
+import { readableCommand, ReviewDiff, ReviewFooter, ReviewHeading } from './ReviewSurface';
+import { DownOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import './ComposerSelect.css';
 
 const modes = [
-  { value: 'research', label: '仅研究' },
-  { value: 'workspace_edit', label: '工作区编辑' },
-  { value: 'strict', label: '严格审批' },
+  { value: 'research', label: '仅研究', description: '只读取与分析，不修改文件或运行命令' },
+  {
+    value: 'workspace_edit',
+    label: '工作区编辑',
+    description: '允许修改文件，命令与验收默认逐次审批',
+  },
+  { value: 'strict', label: '严格审批', description: '文件修改、命令与验收均需明确批准' },
 ]; // 模式选择不能修改宿主策略，实际有效范围以服务端快照为准。
 const statusLabels: Record<string, string> = {
   pending: '待批准',
@@ -46,56 +53,108 @@ export const PermissionSelect = memo(function PermissionSelect({
 }) {
   return (
     <Select
+      className="permission-select"
       aria-label="权限模式"
       value={value}
       onChange={onChange}
       options={modes}
       disabled={disabled}
       virtual={false}
-      style={{ minWidth: 140 }}
+      variant="borderless"
+      size="small"
+      suffixIcon={<DownOutlined />}
+      popupMatchSelectWidth={248}
+      classNames={{ popup: { root: 'composer-select-menu' } }}
+      labelRender={
+        /* 收起时仅保留图标与当前模式，不用解释文字撑大输入栏。 */ (option) => (
+          <span className="mode-current">
+            <SafetyCertificateOutlined aria-hidden />
+            {option.label}
+          </span>
+        )
+      }
+      optionRender={
+        /* 完整模式名称与行为说明只在选择时展示，不增加权限。 */ (option) => (
+          <div className="mode-option">
+            <SafetyCertificateOutlined aria-hidden />
+            <div>
+              <strong>{option.data.label}</strong>
+              <small>{option.data.description}</small>
+            </div>
+          </div>
+        )
+      }
     />
   );
 });
 
-/** 展示不可编辑的 action 原参数；文件展示替换前后片段，命令保留argv逐项JSON边界。 */
+/** 展示action的固定输入；文件对比快照，集成动作保留完整结构，命令有可读与精确两层。 */
 function ActionContent({ action }: { action: PermissionAction }) {
   const args = action.arguments;
   const command = action.name === 'run_command' || action.name === 'verification';
   return (
     <>
-      <strong>{toolLabels[action.name] || action.name}</strong>
-      <code className="permission-path">
-        {action.inputs.target || action.inputs.cwd || action.workspace}
-      </code>
+      <div className="permission-target">
+        <span>
+          {command
+            ? '工作目录'
+            : action.name.startsWith('integration_')
+              ? '执行工作区'
+              : '目标文件'}
+        </span>
+        <code className="permission-path">
+          {action.inputs.target || action.inputs.cwd || action.workspace}
+        </code>
+      </div>
       {command ? (
         <>
-          <pre aria-label="命令参数">{JSON.stringify(args.argv, null, 2)}</pre>
-          <p>
+          <pre className="permission-command" aria-label="命令参数">
+            {readableCommand(args.argv)}
+          </pre>
+          <p className="permission-executable">
             实际程序：<code>{action.inputs.executable}</code>
           </p>
-          <p className="muted">本机执行；进程可按系统权限访问文件与网络。</p>
+          <details className="review-disclosure">
+            <summary>完整原始参数</summary>
+            <pre>{JSON.stringify(args.argv, null, 2)}</pre>
+          </details>
+          <p className="review-note">本机执行，可按系统权限访问文件与网络。</p>
+        </>
+      ) : action.name.startsWith('integration_') ? (
+        <>
+          <p className="review-note">本次批准绑定以下固定成果及目标，请核对后决定。</p>
+          <pre aria-label="成果采纳参数">{JSON.stringify(args, null, 2)}</pre>
+          <details className="review-disclosure">
+            <summary>目标核验信息</summary>
+            <pre>{JSON.stringify(action.inputs, null, 2)}</pre>
+          </details>
+        </>
+      ) : action.name === 'write_file' || action.name === 'edit_file' ? (
+        <>
+          {action.name === 'edit_file' && <p className="review-note">以下为替换片段。</p>}
+          {action.name === 'write_file' &&
+          action.inputs.file?.exists &&
+          action.inputs.file.text == null ? (
+            <>
+              <p className="review-note">无法展示原文件文本，请核对原文件后决定覆盖。</p>
+              <pre aria-label="待写入内容">{String(args.content ?? '')}</pre>
+            </>
+          ) : (
+            <ReviewDiff
+              before={
+                action.name === 'edit_file'
+                  ? String(args.old_text ?? '')
+                  : (action.inputs.file?.text ?? null)
+              }
+              after={String(args.new_text ?? args.content ?? '')}
+            />
+          )}
+          {args.overwrite === true && (
+            <p className="review-note">允许覆盖；执行前会重新核对目标版本。</p>
+          )}
         </>
       ) : (
-        <>
-          {action.name === 'edit_file' && (
-            <details>
-              <summary>替换前</summary>
-              <pre>{String(args.old_text ?? '')}</pre>
-            </details>
-          )}
-          {action.name === 'write_file' && action.inputs.file?.exists && (
-            <details>
-              <summary>写入前</summary>
-              {action.inputs.file.text === null ? (
-                <p>原文件不是UTF-8文本，请核对原文件后决定。</p>
-              ) : (
-                <pre>{action.inputs.file.text}</pre>
-              )}
-            </details>
-          )}
-          <pre aria-label="待写入内容">{String(args.new_text ?? args.content ?? '')}</pre>
-          {args.overwrite === true && <p>允许覆盖；执行前会重新核对目标版本。</p>}
-        </>
+        <pre aria-label="动作参数">{JSON.stringify(args, null, 2)}</pre>
       )}
     </>
   );
@@ -151,7 +210,7 @@ export function PermissionPanel({
   const state = run.result.permissions;
   return (
     <section className="permission-panel" aria-label="执行权限">
-      <details>
+      <details className="permission-policy review-disclosure">
         <summary>
           权限 ·{' '}
           {modes.find(/* 用固定模式生成中文名称。 */ (item) => item.value === state.mode)?.label}
@@ -189,22 +248,38 @@ export function PermissionPanel({
       </details>
       {pending && (
         <article className="permission-request" aria-label="动作审批">
-          {pending.child_run_id && <p className="muted">子任务：{run.result.subagents?.find((item) => item.run_id === pending.child_run_id)?.title || pending.child_run_id}</p>}
-          <ActionContent action={pending} />
-          <p>
-            {historical
-              ? '当轮快照：待批准'
-              : expired && actionable
-                ? '审批已过期；请取消等待后重新发起任务。'
-                : actionable
-                  ? '尚未执行 · 有效至 ' +
+          <ReviewHeading
+            title={toolLabels[pending.name] || pending.name}
+            status={
+              historical
+                ? '当轮快照：待批准'
+                : expired && actionable
+                  ? '已过期'
+                  : actionable
+                    ? '等待你批准'
+                    : statusLabels[current!.status] || current!.status
+            }
+          />
+          <div className="permission-reading">
+            {pending.child_run_id && <p className="review-note">子任务：{run.result.subagents?.find((item) => item.run_id === pending.child_run_id)?.title || pending.child_run_id}</p>}
+            <ActionContent action={pending} />
+          </div>
+          {expired && actionable && !historical && (
+            <p className="permission-expired" role="status">
+              审批已过期；请取消等待后重新发起任务。
+            </p>
+          )}
+          {onDecision && !historical && actionable && (
+            <ReviewFooter
+              note={
+                expired
+                  ? undefined
+                  : '尚未执行 · 本次批准有效至 ' +
                     new Date(pending.expires_at * 1000).toLocaleTimeString('zh-CN', {
                       hour12: false,
                     })
-                  : statusLabels[current!.status] || current!.status}
-          </p>
-          {onDecision && !historical && actionable && (
-            <div className="permission-actions">
+              }
+            >
               <Button
                 type="primary"
                 disabled={disabled || run.active || expired}
@@ -219,16 +294,18 @@ export function PermissionPanel({
                 拒绝
               </Button>
               <Button
+                type="text"
                 disabled={disabled || run.active}
                 onClick={/* 取消不会回滚已有修改。 */ () => onDecision('cancel')}
               >
                 取消等待
               </Button>
-            </div>
+            </ReviewFooter>
           )}
         </article>
       )}
       <details
+        className="permission-history review-disclosure"
         onToggle={
           /* 仅处理当前折叠块，忽略子项toggle冒泡，不触发执行。 */ (event) => {
             if (event.target === event.currentTarget) setHistoryOpen(event.currentTarget.open);
@@ -239,12 +316,14 @@ export function PermissionPanel({
         {history.error && <Alert type="error" title={errorMessage(history.error)} />}
         {history.data?.items.map(
           /* 每项展开显示原参数，旧动作不提供批准按钮。 */ (action) => (
-            <details key={action.id}>
+            <details className="permission-history-item" key={action.id}>
               <summary>
                 {toolLabels[action.name] || action.name} ·{' '}
                 {statusLabels[action.status] || action.status}
               </summary>
-              <ActionContent action={action} />
+              <div className="permission-reading">
+                <ActionContent action={action} />
+              </div>
             </details>
           ),
         )}

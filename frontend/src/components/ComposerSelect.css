@@ -1,0 +1,78 @@
+/* 输入栏的两个模式入口统一为随文本收缩的轻量控件，保留Select原生键盘和读屏语义。 */
+.mode-select.ant-select,
+.permission-select.ant-select {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  height: 28px;
+  padding-inline: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  border-radius: 6px;
+}
+.mode-select.ant-select .ant-select-content,
+.permission-select.ant-select .ant-select-content {
+  padding-inline: 0 !important;
+  margin-inline-end: 4px;
+  gap: 5px;
+}
+.mode-select.ant-select .ant-select-suffix,
+.permission-select.ant-select .ant-select-suffix {
+  font-size: 9px;
+  color: var(--muted);
+}
+.mode-select.ant-select:not(.ant-select-disabled):hover,
+.permission-select.ant-select:not(.ant-select-disabled):hover {
+  background: var(--hover);
+}
+.mode-select.ant-select .mode-current,
+.permission-select.ant-select .mode-current {
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.message-composer .composer-toolbar {
+  justify-content: flex-start;
+}
+.composer-toolbar > .send-message {
+  margin-left: auto;
+}
+.composer-toolbar > .composer-keyboard-hint + .send-message {
+  margin-left: 0;
+}
+.composer-select-menu .ant-select-item {
+  padding: 9px 10px;
+  border-radius: 6px;
+}
+.composer-select-menu .mode-option {
+  gap: 9px;
+}
+.composer-select-menu .mode-option > div {
+  min-width: 0;
+}
+.composer-select-menu .mode-option strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.composer-select-menu .mode-option small {
+  font-size: 11px;
+  line-height: 1.65;
+  font-weight: 400;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.start-send-area > .mode-select,
+.start-send-area > .permission-select {
+  align-self: center;
+}
+@media (max-width: 600px) {
+  /* 可见轮廓紧凑，触控入口仍保留32px高度。 */
+  .mode-select.ant-select,
+  .permission-select.ant-select {
+    height: 32px;
+  }
+  .composer-toolbar > .send-message,
+  .composer-toolbar > .composer-keyboard-hint + .send-message {
+    margin-left: auto;
+  }
+}

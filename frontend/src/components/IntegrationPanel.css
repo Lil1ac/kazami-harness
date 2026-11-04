@@ -82,3 +82,57 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* 成果审阅与动作审批共用证据阅读层级。 */
+.integration-panel {
+  min-width: 0;
+  color: var(--text);
+}
+.integration-panel .review-footer {
+  padding-inline: 0;
+}
+.integration-panel pre {
+  background: var(--code-bg);
+  color: var(--text);
+  padding: 12px;
+  border-radius: 6px;
+  font-family: var(--code);
+}
+.integration-target {
+  padding: 14px 0;
+  border-block: 1px solid var(--line);
+}
+.integration-files .ant-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.integration-preview > h4 {
+  font: 12px/1.8 var(--code);
+  overflow-wrap: anywhere;
+}
+.integration-confirm .review-heading {
+  padding: 4px 24px 16px 0;
+}
+.integration-confirm-body {
+  max-height: 55vh;
+  overflow: auto;
+  padding-top: 16px;
+}
+.integration-confirm-path {
+  font: 13px/1.8 var(--code);
+  margin: 4px 0 12px;
+}
+.integration-confirm-body ul {
+  list-style: none;
+  padding: 0;
+}
+.integration-confirm-body li {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.integration-toolbar .ant-select {
+  min-width: min(200px, 100%);
+}

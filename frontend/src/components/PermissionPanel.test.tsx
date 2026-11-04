@@ -31,9 +31,13 @@ function action(expires = Date.now() / 1000 + 1800): PermissionAction {
 }
 
 /** 在真实查询环境展示待审批动作；historical只读，expired生成已到期快照，返回决定监听器。 */
-function show({ historical = false, expired = false } = {}) {
+function show({
+  historical = false,
+  expired = false,
+  request = undefined as PermissionAction | undefined,
+} = {}) {
   const run = makeRun();
-  run.result.permissions.pending = action(expired ? Date.now() / 1000 - 10 : undefined);
+  run.result.permissions.pending = request ?? action(expired ? Date.now() / 1000 - 10 : undefined);
   run.result.execution_status = 'waiting_input';
   const decide = vi.fn();
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -66,4 +70,33 @@ it('历史快照不提供任何批准或拒绝按钮', () => {
   expect(screen.getByText('当轮快照：待批准')).toBeVisible();
   expect(screen.queryByRole('button', { name: '批准本次' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '拒绝' })).not.toBeInTheDocument();
+});
+
+it('覆盖审批同时展示固定原文与新文，不需展开才能发现原内容', () => {
+  show({
+    request: {
+      ...action(),
+      name: 'write_file',
+      arguments: { content: 'new value', overwrite: true },
+      inputs: { target: 'D:/project/app.py', file: { exists: true, text: 'old value' } },
+    },
+  });
+  expect(screen.getByText('old value')).toBeVisible();
+  expect(screen.getByText('new value')).toBeVisible();
+  expect(screen.getByText('old value').closest('.review-diff-line')).toHaveClass(
+    'review-diff-removed',
+  );
+});
+
+it('集成历史展示完整固定参数，不误用空白文件编辑预览', () => {
+  show({
+    historical: true,
+    request: {
+      ...action(),
+      name: 'integration_apply',
+      arguments: { fingerprint: 'fixed-target', action: 'apply' },
+    },
+  });
+  expect(screen.getByLabelText('成果采纳参数')).toHaveTextContent('fixed-target');
+  expect(screen.queryByLabelText('待写入内容')).not.toBeInTheDocument();
 });

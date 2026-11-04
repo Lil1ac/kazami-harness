@@ -1,0 +1,142 @@
+/* 共用审阅层级：标题、证据、决定分离，主题色沿用工作台变量。 */
+.review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.review-heading-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 13px;
+}
+.review-heading-title > .anticon {
+  color: var(--accent);
+  font-size: 16px;
+}
+.review-status {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.review-footer {
+  border-top: 1px solid var(--line);
+  padding: 14px 20px;
+  background: var(--surface);
+}
+.review-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.review-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.review-buttons .ant-btn {
+  min-height: 36px;
+  font-size: 12px;
+}
+.review-buttons > .ant-btn-text:last-child {
+  margin-left: auto;
+  color: var(--muted);
+}
+.review-diff,
+.review-large-text {
+  font-family: var(--code);
+  font-size: 12px;
+  line-height: 1.8;
+  overflow: auto;
+  max-height: 360px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.review-diff-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.review-diff-line {
+  display: grid;
+  grid-template-columns: 32px 32px 16px minmax(0, 1fr);
+  padding-right: 12px;
+  min-height: 22px;
+}
+.review-line-number {
+  color: var(--muted);
+  text-align: right;
+  padding-right: 8px;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.review-diff-line code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  color: var(--text);
+}
+.review-patch-line {
+  grid-column: 3 / -1;
+}
+.review-diff-added {
+  background: var(--success-soft);
+}
+.review-diff-removed {
+  background: var(--danger-soft);
+}
+.review-diff-added > span:nth-child(3) {
+  color: var(--success);
+}
+.review-diff-removed > span:nth-child(3) {
+  color: var(--danger);
+}
+.review-large-text {
+  padding: 12px;
+}
+.review-large-text pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-heading,
+.review-footer {
+  transition: background-color 0.15s;
+}
+@media (max-width: 600px) {
+  .review-heading {
+    padding: 14px;
+    align-items: flex-start;
+  }
+  .review-status {
+    max-width: 42%;
+    text-align: right;
+  }
+  .review-footer {
+    padding: 12px 14px;
+  }
+  .review-diff-line {
+    grid-template-columns: 26px 26px 14px minmax(0, 1fr);
+  }
+  .review-buttons .ant-btn {
+    min-height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-heading,
+  .review-footer {
+    transition: none;
+  }
+}

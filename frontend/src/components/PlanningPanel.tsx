@@ -7,12 +7,12 @@ import {
   DownOutlined,
   DownloadOutlined,
   EditOutlined,
-  FileTextOutlined,
 } from '@ant-design/icons';
 import { MarkdownMessage } from './MarkdownMessage';
 import { planMarkdownUrl } from '../api';
 import type { HumanDecision, PlanRevision, PlanningState, UserInteraction } from '../types';
 import './PlanningPanel.css';
+import { ReviewFooter, ReviewHeading } from './ReviewSurface';
 
 const planLabels: Record<PlanRevision['status'], string> = {
   pending: '待批准',
@@ -115,17 +115,9 @@ function PlanCard({
     );
   return (
     <article className={`plan-card plan-card-${plan.status}`} aria-label={`计划 v${plan.version}`}>
-      <header className="plan-heading">
-        <div className="plan-eyebrow">
-          <FileTextOutlined aria-hidden="true" />
-          <span>实施计划</span>
-          <span className="plan-version">v{plan.version}</span>
-        </div>
-        <span className={`plan-status plan-status-${plan.status}`}>
-          <span aria-hidden="true" />
-          {planLabels[plan.status]}
-        </span>
-      </header>
+      <ReviewHeading title="实施计划" status={planLabels[plan.status]}>
+        <span className="plan-version">v{plan.version}</span>
+      </ReviewHeading>
       <h3 className="plan-title">{plan.title}</h3>
       <div className="plan-overview">
         <span className="plan-count" title="工作项执行进度；验收结论见本轮结果">
@@ -259,7 +251,7 @@ function PlanDecisions({
   const [editing, setEditing] = useState(false); // 修改表单按需展开，减少审阅时的无关输入。
   const [answer, setAnswer] = useState(''); // 返回审阅后保留反馈草稿，但不自动发送。
   return (
-    <div className="plan-decisions">
+    <ReviewFooter>
       {editing ? (
         <>
           <Input.TextArea
@@ -324,7 +316,7 @@ function PlanDecisions({
           </Button>
         </div>
       )}
-    </div>
+    </ReviewFooter>
   );
 }
 

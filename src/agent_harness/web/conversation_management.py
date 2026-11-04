@@ -183,8 +183,8 @@ class ConversationManager:
             return "轮次记录无法核对，暂时不能移动或删除。"
         return None
 
-    def purge_reason(self, record: dict, busy: str | None) -> str | None:
-        """核对record物理清理的前置条件，返回阻止原因；不捕获快照或删除工作树。"""
+    def purge_reason(self, record: dict, busy: str | None, db=None) -> str | None:
+        """核对record物理清理条件，返回阻止原因；db非空复用已有事务，不嵌套申请写锁或删除工作树。"""
         if record["state"] not in {"trashed", "purging"}:
             return "请先将对话移入回收站。"
         if busy and record["state"] != "purging":
@@ -196,6 +196,13 @@ class ConversationManager:
             review = self.manager.projects.get(session.run_ids[-1])
             if review is not None and self.manager.projects.workspace(session.run_ids[-1]).status != "discarded":
                 return "独立工作树仍保留，请先恢复对话，在文件审阅中处理并明确丢弃工作树。"
+            from agent_harness.teams.store import TeamStore
+            team = TeamStore(self.manager.runs_root).get(record["session_id"], db)
+            if team:
+                identifiers = [team["stage_run_id"], *team.get("workspace_run_ids", []), *team.get("stage_run_ids", []), *[r["run_id"] for m in team["members"] for r in m["runs"]]]
+                for identifier in identifiers:
+                    if self.manager.projects.get(UUID(identifier)) and self.manager.projects.workspace(UUID(identifier)).status != "discarded":
+                        return "团队工作树仍保留，请恢复对话，在团队面板停止并明确丢弃工作树。"
             for identifier in session.run_ids:
                 view = self.manager.get_run(identifier)
                 for child in view.result.subagents:
@@ -321,7 +328,7 @@ class ConversationManager:
     def _receipt(self, record: dict, db) -> dict:
         """在db当前事务生成record管理回执；不另开写事务，不包含消息或删除清单。"""
         reason = self.busy_reason(record["session_id"], db)
-        purge_reason = self.purge_reason(record, reason)
+        purge_reason = self.purge_reason(record, reason, db)
         return {**{key: record[key] for key in ("session_id", "title_override", "assigned_project_id", "state", "pinned_at", "deleted_at", "restore_state", "revision")},
                 "title": record["title_override"] or record["default_title"], "assigned_project": self.project(record),
                 "can_organize": reason is None, "blocked_reason": reason, "can_purge": purge_reason is None,
@@ -352,7 +359,7 @@ class ConversationManager:
                 if record["state"] != "purging":
                     if record["revision"] != body.expected_revision:
                         raise ConversationError("conversation_revision_conflict", "对话已更新，请刷新后确认删除。")
-                    reason = self.purge_reason(record, self.busy_reason(session_id, db))
+                    reason = self.purge_reason(record, self.busy_reason(session_id, db), db)
                     if reason:
                         raise ConversationError("conversation_purge_blocked", reason)
                     session = self.manager.conversations.store.read(UUID(session_id))
@@ -364,6 +371,15 @@ class ConversationManager:
                             if str(history.manifest.session_id or history.manifest.run_id) != session_id:
                                 raise ConversationError("conversation_purge_blocked", "轮次归属不一致，不能清理记录。")
                             child_ids.update(str(item.run_id) for item in self.manager.get_run(UUID(identifier)).result.subagents if item.role == "develop")
+                    team_row = db.execute("SELECT body FROM teams WHERE id=?", (session_id,)).fetchone()
+                    if team_row:
+                        team = json.loads(team_row[0])
+                        child_ids.update(team.get("stage_run_ids", [team["stage_run_id"]]))
+                        child_ids.update(team.get("workspace_run_ids", []))
+                        if team.get("initial_stage_id"):
+                            child_ids.add(team["initial_stage_id"])
+                        child_ids.update(r["run_id"] for m in team["members"] for r in m["runs"])
+                        record["purge_team_id"] = team["id"]
                     ids.update(child_ids)
                     record.update(state="purging", revision=record["revision"] + 1, purge_ids=sorted(ids), purge_run_count=len(session.run_ids), purge_memory_references=self.memory_references(session_id), purge_error=None,
                                   purge_request_id=str(body.request_id), purge_expected_revision=body.expected_revision)
@@ -387,6 +403,8 @@ class ConversationManager:
                     db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(minimal), row[0]))
                     db.execute("DELETE FROM events WHERE scope=?", (row[0],))
                 db.execute("DELETE FROM lists WHERE id=?", (session_id,))
+                db.execute("DELETE FROM teams WHERE id=?", (session_id,))
+                db.execute("DELETE FROM team_operations WHERE substr(id,1,?)=?", (len(session_id) + 1, session_id + ":"))
                 # 动作中可能包含待写正文；彻底删除必须连同许可一起清理，旧请求也无法再次消费。
                 db.execute("DELETE FROM permission_actions WHERE json_extract(body,'$.session_id')=?", (session_id,))
                 self.manager.integrations.store.cleanup_records(session_id, db)
@@ -414,6 +432,8 @@ class ConversationManager:
         for identifier in record["purge_ids"]:
             identifier = str(UUID(identifier))
             paths.extend(root / prefix / identifier if prefix else root / identifier for prefix in ("", ".local-before", ".local-after", ".local-changes", ".project-files", ".projects"))
+        if record.get("purge_team_id"):
+            paths.append(self.manager.projects.metadata_root / ".teams" / str(UUID(record["purge_team_id"])))
         # 先检查完整清单，不能遇到链接后已经删掉一半可恢复记录。
         for path in paths:
             if not path.is_relative_to(root) or path == root or path.resolve() != path:

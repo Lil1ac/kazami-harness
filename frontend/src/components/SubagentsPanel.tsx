@@ -156,7 +156,7 @@ function SubagentDetails({
           {data?.project?.status === 'discarded' && <p>子工作树已丢弃，以下为固定历史证据。</p>}
           {patch.data && <details><summary>子成果差异 · {record.changed_paths.length} 个文件</summary><pre aria-label="子成果补丁">{patch.data.content}</pre><a href={patchUrl(record.run_id, parentId)} download>下载完整子补丁</a>{patch.data.truncated && <p>预览已截断，完整成果通过集成审阅逐文件查看。</p>}</details>}
           {!active && record.status === 'completed' && record.snapshot_status === 'ready' && !record.scope_violations.length && (
-            <IntegrationPanel runId={record.run_id} parentRunId={parentId} sourceTest="unverified" siblings={siblings} />
+            record.team_id ? <p className="muted">从团队汇集成果统一审阅采纳。</p> : <IntegrationPanel runId={record.run_id} parentRunId={parentId} sourceTest="unverified" siblings={siblings} />
           )}
         </div>
       )}
@@ -248,6 +248,7 @@ function SubagentDetails({
                 {report.evidence.map(
                   /* 来源由宿主工具回执产生，不能从模型文字推断。 */ (source, index) => (
                     <li key={`${source.tool_call_id}:${index}`}>
+                      {source.run_id && source.run_id !== record.run_id && <small>此前执行 {source.run_id.slice(0, 8)} · </small>}
                       <code>{source.path || source.tool}</code>
                       {source.truncated ? '（读取有截断）' : ''}
                     </li>
@@ -380,7 +381,7 @@ export function SubagentsPanel({
             parentId={parentId}
             record={selected}
             active={active}
-            siblings={normalized.filter((item) => item.run_id !== selected.run_id && item.role === 'develop' && item.status === 'completed' && item.snapshot_status === 'ready' && !item.scope_violations.length).map((item) => ({ run_id: item.run_id, title: item.title }))}
+            siblings={normalized.filter((item) => item.run_id !== selected.run_id && !item.team_id && item.role === 'develop' && item.status === 'completed' && item.snapshot_status === 'ready' && !item.scope_violations.length).map((item) => ({ run_id: item.run_id, title: item.title }))}
           />
         )}
       </Drawer>

@@ -11,6 +11,7 @@ from agent_harness.execution.workspace import Workspace
 from agent_harness.work.tasks import WorkStore, TaskController
 from agent_harness.memory.service import MemoryController
 from agent_harness.subagents.service import SUBAGENT_TOOLS
+from agent_harness.teams.models import TEAM_TOOLS
 
 
 def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[dict], list[dict]]:
@@ -38,6 +39,11 @@ def initial_input(value: RunManifest, root: Path) -> tuple[ContextBuilder, list[
         # 此处只准备输入、不创建Runner或供应商连接；补齐运行时绑定的只读委派声明。
         definitions.extend({"type": "function", "function": {"name": name, "description": description,
                             "parameters": arguments.model_json_schema()}} for name, (arguments, description) in SUBAGENT_TOOLS.items())
+        # 未创建团队时运行时只展开创建入口；精确边界同样计入这份真实Schema，不放宽历史空间。
+        arguments, description = TEAM_TOOLS["team_create"]
+        definitions.append({"type": "function", "function": {"name": "team_create", "description": description,
+                            "parameters": arguments.model_json_schema()}})
+
     return builder, messages, definitions
 
 

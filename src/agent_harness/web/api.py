@@ -381,6 +381,9 @@ def create_app(
         """读取 run_id 所属会话和可继续原因；不启动模型或重新拍摄快照。"""
         return manager.conversations.view(run_id)
 
+    from agent_harness.web.teams import install_team_routes
+    install_team_routes(app, manager)
+
     @app.get("/api/runs/{run_id}/subagents")
     async def subagents(run_id: UUID) -> dict:
         """只读run_id本轮委派列表；返回持久进度，不重投作业或调用模型。"""
@@ -448,7 +451,7 @@ def create_app(
         """列出run_id所属会话的固定采纳历史；历史查询不执行原动作。"""
         view = manager.get_run(parent_run_id or run_id)
         if parent_run_id is not None and not any(item.run_id == run_id for item in view.result.subagents):
-            raise HTTPException(404, detail={"code": "subagent_not_found", "message": "子成果不属于该父运行。"})
+            manager.integrations.team_review(str(run_id), view)
         service = manager.integrations
         values = service.store.list(str(view.session_id or run_id))
         if parent_run_id is not None:

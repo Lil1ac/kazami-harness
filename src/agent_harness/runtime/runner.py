@@ -115,6 +115,8 @@ class RunContext:
         self.event_count = self.store.append(kind, payload).seq
         if kind == "tasks_snapshot" and payload is not None:
             self.result.tasks = payload["state"]  # 已提交快照供实时视图与中断历史共同读取。
+        if kind == "team_snapshot" and payload is not None:
+            self.result.team = payload["team"]  # 已落盘的团队代次供实时显示与中断历史。
         phases = {
             "model_request_started": "model_request",
             "context_compaction_started": "context_compaction",
@@ -483,6 +485,8 @@ async def _run_task(
         permissions.store.invalidate(resume.action_id, result.stop_reason or "resume_stopped")
     tasks.service.release("前轮已结束，请核对现场后接续。" if result.execution_status != "completed" else "前轮尚未完成此项，请接续。")
     result.tasks = tasks.snapshot()
+    if getattr(tool_executor, "team", None) is not None:
+        result.team = tool_executor.team.snapshot()
     result.planning = planning.state.model_copy(deep=True)
     result.permissions = permissions.snapshot()
     context.emit("artifact_collection_started")

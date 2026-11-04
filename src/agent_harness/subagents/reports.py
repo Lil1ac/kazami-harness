@@ -1,5 +1,6 @@
 """校验模型交接结构与实际回执；失败时保留证据，绝不从工具轨迹伪造研究结论。"""
 
+from collections import Counter
 from pydantic import Field, ValidationError, model_validator
 
 from agent_harness.schemas import DataModel, RunEvent, RunResult, SubagentEvidence, SubagentFinding, SubagentReport
@@ -42,7 +43,7 @@ def collect_evidence(events: list[RunEvent], *, role: str = "explore") -> list[S
         if not result.get("ok"):
             continue
         data = result.get("data") or {}
-        evidence.append(SubagentEvidence(tool_call_id=event.payload["call_id"], tool=event.payload["name"],
+        evidence.append(SubagentEvidence(run_id=event.run_id, tool_call_id=event.payload["call_id"], tool=event.payload["name"],
                                          path=data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] in {"read_file", "edit_file"} else None,
                                          truncated=bool(result.get("truncated"))))
     return evidence
@@ -67,7 +68,8 @@ def finalize_report(result: RunResult, events: list[RunEvent], *, role: str = "e
         if text.startswith("```json") and text.endswith("```"):
             text = text[7:-3].strip()
         draft = ReportDraft.model_validate_json(text)
-        identifiers = {item.tool_call_id for item in sources}
+        counts = Counter(item.tool_call_id for item in sources)
+        identifiers = {identifier for identifier, count in counts.items() if count == 1}  # 跨执行段同名调用有歧义，不能随意选一份。
         referenced = {identifier for finding in draft.findings for identifier in finding.evidence_call_ids}
         if not referenced.issubset(identifiers):
             raise ValueError("subagent_report_evidence_invalid")

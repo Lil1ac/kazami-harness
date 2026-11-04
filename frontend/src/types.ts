@@ -284,6 +284,7 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  team?: TeamState | null; // 当轮固定团队事实，历史不回查新轮。
   permissions: PermissionState; // 本轮权限和动作等待的固定事实。
   subagents?: SubagentRecord[]; // 本轮只读委派；次数及用量已经包含在本轮总数。
   subagent_report?: SubagentReport | null; // 仅子运行有固定交接报告，根运行为空。
@@ -325,6 +326,7 @@ export interface SubagentReport {
   limitations: string[]; // 已知检查范围与不确定性。
   pending: string[]; // 仍需研究或处理的事项。
   evidence: {
+    run_id?: string | null; // 宿主核验的证据执行段，可能来自同成员此前审批段。
     tool_call_id: string;
     tool: string;
     path: string | null;
@@ -337,6 +339,8 @@ export interface SubagentReport {
 
 /** 父运行内的只读委派快照，不是独立排队会话或任务完成结论。 */
 export interface SubagentRecord {
+  team_id?: string | null; // 持久团队归属，普通委派为空。
+  team_member_id?: string | null; // 跨执行段稳定成员身份。
   run_id: string; // 只在父运行下读取的子编号。
   title: string; // 委派标题。
   objective: string; // 主Agent指定的研究范围。
@@ -961,4 +965,59 @@ export interface MemoryMutation {
   action?: 'edit' | 'accept' | 'reject' | 'delete'; // 新增省略，其余为明确用户决定。
   content?: MemoryContent; // edit 必填，accept 可先编辑。
   replacements?: MemoryReplacement[]; // 明确的冲突替代选择，省略沿用候选建议。
+}
+
+
+/** 一个成员的持久身份、当前归属和已计入父运行的累计用量。 */
+export interface TeamMember {
+  id: string; // 稳定编号，不随执行段变化。
+  name: string; // 团队内唯一显示名。
+  write_scope: string[]; // 不超出父授权的相对路径。
+  status: string; // 空闲、运行、审批等待、失败、待核对或停止。
+  active_run_id: string | null; // 实际在途段，空闲为空。
+  task_id: string | null; // 当前独占工作项。
+  runs: { run_id: string; parent_run_id: string; task_id: string }[]; // 真实子日志及关联工作项。
+  summary: string; // 上一段固定交接摘要。
+  model_turns: number; // 累计成员模型次数，不再叠加到父计数。
+  tool_calls: number; // 累计成员工具次数。
+  total_tokens: number; // 已知token数。
+  usage_complete: boolean; // false时用量不完整。
+}
+
+/** C04工作项的团队授权；依赖仍来自原清单，ready仅表示固定成果可交接。 */
+export interface TeamTask {
+  task_id: string; // 既有清单编号。
+  objective: string; // 本次执行目标。
+  member_id: string | null; // 已认领/指定成员，未指定为空。
+  write_scope: string[]; // 本项可写文件。
+  depends_on: string[]; // C04前置编号。
+  dependency_versions: Record<string, string>; // 本段使用的固定上游成果编号。
+  state: string; // 等待、运行、成果就绪、失效、失败或待核对。
+  run_id: string | null; // 本次成果执行编号。
+  log_parent_id: string | null; // 子日志实际父归属。
+  error: string | null; // 阻塞/停止/冲突原因。
+}
+
+/** 一个会话的唯一团队，负责人由当前会话主Agent固定，不接受消息改变权限。 */
+export interface TeamState {
+  id: string; // 团队稳定编号。
+  title: string; // 批准范围内的团队目标。
+  revision: number; // 人工管理操作绑定的版本。
+  status: string; // active/stopping/stopped。
+  generation: number; // 已发布的固定汇集代次。
+  stage_run_id: string; // 宿主汇集成果编号，不是伪造的模型执行。
+  stage_ready: boolean; // 全部授权项有效就绪才开放整体采纳。
+  members: TeamMember[]; // 成员及累计事实。
+  tasks: TeamTask[]; // 原任务的授权与执行状态。
+  messages: { seq: number; sender: string; recipient: string; content: string; created_at: string }[]; // 有来源、顺序的持久消息。
+  error: string | null; // 汇集冲突或来源失效。
+  cleanup_status: string; // 保留或已明确回收。
+}
+
+/** 团队面板统一响应；历史使用当轮快照，stage为固定Git成果，不代表检查通过。 */
+export interface TeamView {
+  team: TeamState | null; // 尚未创建时为空。
+  tasks: TaskSnapshot; // 同源C04清单。
+  stage: ProjectReview | null; // 固定汇集差异。
+  historical: boolean; // true禁止操作。
 }

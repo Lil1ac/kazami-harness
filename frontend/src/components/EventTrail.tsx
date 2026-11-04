@@ -12,6 +12,8 @@ const eventLabels: Record<string, string> = {
   permission_resuming: '按批准接续原动作',
   tool_requested: '接纳工具请求',
   subagent_snapshot: '子 Agent 进度',
+  team_snapshot: '更新团队状态',
+  team_messages_delivered: '交付团队消息',
   subagent_report_retry: '纠正子 Agent 交接报告',
   subagent_handoff: '收到子报告，重新决定后续动作',
   budget_handoff_started: '预算收尾交接',

@@ -210,7 +210,7 @@ export function ConversationPanel({
   );
   return (
     <section className="conversation-surface" aria-label="连续对话">
-      {run && (taskItems.length > 0 || planning?.plans.length || run.result.subagents?.length) ? (
+      {run && (taskItems.length > 0 || planning?.plans.length || run.result.subagents?.length || run.result.team) ? (
         <div className="conversation-context-bar" aria-label="当前工作">
           {taskItems.length > 0 && (
             <button
@@ -233,14 +233,14 @@ export function ConversationPanel({
               <span>计划</span>
             </button>
           )}
-          {Boolean(run.result.subagents?.length) && (
+          {Boolean(run.result.team || run.result.subagents?.length) && (
             <button
               type="button"
               onClick={/* 查看本轮子执行列表。 */ () => onInspect(run.run_id, 'agents')}
             >
               <TeamOutlined />
-              <span>Agent</span>
-              <small>{run.result.subagents!.length}</small>
+              <span>{run.result.team ? '团队' : 'Agent'}</span>
+              <small>{run.result.team ? run.result.team.members.length : run.result.subagents!.length}</small>
             </button>
           )}
           {currentTask && (

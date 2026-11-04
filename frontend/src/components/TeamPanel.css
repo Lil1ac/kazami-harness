@@ -1,0 +1,16 @@
+.team-panel { display: grid; gap: 20px; }
+.team-panel header, .team-members article > div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.team-panel h3 { margin: 0 0 6px; }
+.team-members, .team-tasks { display: grid; gap: 14px; }
+.team-members article, .team-tasks article { display: grid; gap: 6px; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.team-panel small, .team-panel header span { color: var(--muted); }
+.team-panel code, .team-panel p { overflow-wrap: anywhere; margin: 0; }
+.team-members details a { display: block; margin-block: 6px; }
+.team-mailbox article { padding-block: 10px; }
+.team-mailbox p { white-space: pre-wrap; }
+.team-message-form { display: grid; gap: 10px; }
+.team-message-form > div:last-child { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 长名称与相对路径必须在详情栏内换行，不把窄屏抽屉撑出视口。 */
+.team-panel, .team-panel > *, .team-panel header > div, .team-members article, .team-tasks article { min-width: 0; }
+.team-panel h3 { overflow-wrap: anywhere; }

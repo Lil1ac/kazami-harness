@@ -463,6 +463,8 @@ class DelegationOrigin(DataModel):
     """子执行的宿主归属；与多轮会话的前轮关系分别保存。"""
 
     parent_run_id: UUID  # 唯一委派者；子执行不独立进入全局运行队列。
+    team_id: str | None = None  # 宿主绑定的持久团队编号；普通委派为空。
+    team_member_id: str | None = None  # 稳定成员身份，跨审批和多个执行段保持不变。
     role: Literal["explore", "review", "develop"]  # 探索、审阅只读；开发必须使用独立工作树。
     task_id: UUID | None = None  # 开发必须关联当前父会话工作项；只读时仅关联。
     write_scope: list[str] = Field(default_factory=list)  # 开发可写相对路径前缀；空列表禁止写入。
@@ -476,13 +478,14 @@ class SubagentFinding(DataModel):
     category: Literal["required", "optional", "observation"]  # 范围内必要修复、可选建议或事实观察。
     title: str = Field(min_length=1, max_length=160)  # 简短结论，不能只写空白。
     detail: str = Field(min_length=1, max_length=600)  # 影响与依据，不复制完整文件或扩大父任务要求。
-    evidence_call_ids: list[str] = Field(max_length=2)  # 本子运行成功回执编号；只读角色只接受读取，开发还接受写入/命令；required至少一个。
+    evidence_call_ids: list[str] = Field(max_length=2)  # 本成员可信接续链内唯一成功回执编号；只读仅接受读取，开发可引用写入/命令；required至少一个。
 
 
 class SubagentEvidence(DataModel):
     """宿主从角色允许的实际成功工具回执提取的证据入口；正文始终保存在原子轨迹。"""
 
-    tool_call_id: str = Field(min_length=1, max_length=200)  # 直属子运行内的调用编号，不能引用父或其他子运行。
+    run_id: UUID | None = None  # 真实证据所属子执行段；宿主提取，禁止引用负责人或其他成员。
+    tool_call_id: str = Field(min_length=1, max_length=200)  # 当前可信接续链内唯一的调用编号；同名歧义不能作为证据。
     tool: str  # 角色允许的实际成功工具名，不由模型报告提供。
     path: str | None = None  # 文件或目录的实际相对路径；搜索/记忆等入口可能为空。
     sha256: str | None = None  # 工具已核验的完整文件指纹；无法获得时为空，不冒充完整读取。
@@ -507,6 +510,8 @@ class SubagentRecord(DataModel):
     run_id: UUID  # 子日志编号，同时是父运行内的委派编号。
     title: str = Field(min_length=1, max_length=120)  # 委派标题，用于页面定位。
     objective: str = Field(min_length=1, max_length=8000)  # 主 Agent 明确提供的执行目标，不继承全部聊天历史。
+    team_id: str | None = None  # 宿主绑定的持久团队编号；普通委派为空。
+    team_member_id: str | None = None  # 稳定成员身份，跨审批和多个执行段保持不变。
     role: Literal["explore", "review", "develop"]  # 探索、审阅或隔离开发职责。
     task_id: UUID | None = None  # 可选同会话任务编号，不表示任务已完成。
     status: Literal["running", "waiting_input", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "interrupted"] = "running"  # 可信执行状态；缺终态且父任务已停止时为 interrupted。
@@ -606,6 +611,7 @@ class RunResult(DataModel):
     permissions: PermissionState = Field(default_factory=PermissionState)  # 当轮固定授权、待审批动作及此前预算。
     subagent_report: SubagentReport | None = None  # 子运行结束时核验并固定的报告；根运行为空。
     subagents: list[SubagentRecord] = Field(default_factory=list)  # 该轮委派快照，旧轮不查询新轮状态。
+    team: dict | None = None  # 当轮固定的团队事实；历史不使用后续轮的最新状态。
     tasks: dict = Field(default_factory=dict)  # 当轮固定的工作项快照；历史读取不回查最新清单。
     schema_version: Literal[1] = 1
     run_id: UUID

@@ -89,7 +89,11 @@ class IntegrationService:
             from agent_harness.subagents.service import read_child
             parent = self.manager.get_run(UUID(parent_run_id))
             record = next((item for item in parent.result.subagents if str(item.run_id) == run_id), None)
-            if record is None or record.role != "develop" or record.scope_violations or record.status != "completed":
+            if record is None:
+                return self.team_source(run_id, parent)
+            if record.team_id is not None:
+                raise TaskError("team_source_required", "团队成果包含依赖基线，请从团队汇集成果统一采纳。")
+            if record.role != "develop" or record.scope_violations or record.status != "completed":
                 raise TaskError("integration_source_unavailable", "子成果未完成、超出委派范围或不属于当前父运行。")
             history = read_child(self.manager.runs_root, record.log_parent_id or parent.run_id, record.run_id)
             view = SimpleNamespace(run_id=record.run_id, session_id=parent.session_id, workspace=record.workspace,
@@ -105,6 +109,46 @@ class IntegrationService:
             raise TaskError("integration_source_unavailable", "请先完成工作树运行和代码快照，再采纳成果。")
         self.manager.management.require_active(str(view.session_id or view.run_id))
         return view
+
+    def team_review(self, run_id: str, parent):
+        """核对parent当轮记录的run_id团队快照并返回审阅；历史仅阅读，不要求成果仍可采纳。"""
+        state = parent.result.team
+        identifiers = {state["stage_run_id"], *state.get("stage_run_ids", [])} if state else set()
+        if run_id not in identifiers:
+            raise TaskError("team_source_unavailable", "该固定成果不属于本轮团队记录。")
+        projects = self.manager.projects
+        review = projects.get(UUID(run_id))
+        if review is None or review.snapshot_status != "ready" or projects._ownership(UUID(run_id)).get("team_id") != state["id"]:
+            raise TaskError("team_source_unavailable", "团队固定快照无法核对。")
+        projects.patch_path(UUID(run_id))
+        return review
+
+    def team_source(self, run_id: str, parent):
+        """返回宿主汇集的固定成果描述；parent须是最新停止视图，不伪造模型日志或通过检查。"""
+        from types import SimpleNamespace
+        from agent_harness.teams.store import TeamStore, task_fingerprint
+        session = str(parent.session_id or parent.run_id)
+        state = TeamStore(self.manager.runs_root).get(session)
+        latest = self.manager.conversations.store.read(UUID(session)).run_ids[-1]
+        if (not state or state["stage_run_id"] != run_id or not state["stage_ready"] or parent.active or latest != parent.run_id):
+            raise TaskError("team_source_unavailable", "团队成果尚未完整汇集，或当前不是最新停止轮次。")
+        tasks = {item["id"]: item for item in self.store.work.snapshot(session)["items"]}
+        TeamStore.invalidate(state, tasks)
+        if not state["stage_ready"] or any(t["state"] != "ready" for t in state["tasks"]):
+            raise TaskError("team_source_stale", "团队任务条件已改变，请重新核对成果。")
+        projects = self.manager.projects
+        review = projects.get(UUID(run_id))
+        if review is None or review.snapshot_status != "ready":
+            raise TaskError("team_source_unavailable", "团队固定成果不可核对。")
+        projects.patch_path(UUID(run_id))
+        owned = projects._ownership(UUID(run_id))
+        if owned.get("team_id") != state["id"]:
+            raise TaskError("team_source_unavailable", "成果团队归属不一致。")
+        self.manager.management.require_active(session)
+        return SimpleNamespace(run_id=UUID(run_id), session_id=UUID(session), workspace=review.worktree,
+            active=False, interrupted=False, execution_mode="isolated", project=review,
+            log_parent_id=UUID(owned["delegation_parent_id"]), team_sources=[t["run_id"] for t in state["tasks"]],
+            result=SimpleNamespace(verification=None, cleanup_status="not_needed", execution_status="completed"))
 
     def targets(self, run_id: str, parent_run_id: str | None = None) -> list[dict]:
         """返回run_id同仓库、区别于来源的已登记项目；无效目录省略，不扫描磁盘或切分支。"""
@@ -155,6 +199,8 @@ class IntegrationService:
         """为明确来源和目标登记准备作业并返回记录；重试复用原记录，不重新物化来源。"""
         parent_id = str(body.parent_run_id) if body.parent_run_id else None
         view = self.source(run_id, parent_id)
+        if getattr(view, "team_sources", None) and body.source_run_ids:
+            raise TaskError("team_source_invalid", "团队已汇集全部有效成果，不能再混入单项来源。")
         source_ids = list(dict.fromkeys([run_id, *body.source_run_ids]))
         if body.source_run_ids and parent_id is None:
             raise TaskError("integration_source_invalid", "组合成果必须来自明确父运行。")
@@ -176,6 +222,8 @@ class IntegrationService:
                     raise TaskError("request_conflict", "相同请求不能更换子成果的父视图。")
                 value.update(parent_run_id=parent_id, delegation_parent_id=str(view.log_parent_id),
                              sources=[{"run_id": str(item.run_id), "log_parent_id": str(item.log_parent_id)} for item in sources])
+                if getattr(view, "team_sources", None):
+                    value["team_source_run_ids"] = view.team_sources
                 self.store.save(value)
             if "source_test" not in value:
                 value["source_test"] = {**(view.result.verification.model_dump(mode="json") if view.result.verification else {"status": "unverified"}), "run_id": run_id, "applicable": False}

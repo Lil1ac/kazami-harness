@@ -369,3 +369,18 @@ it('证书校验失败在当前会话直接说明原因，历史记录保持真�
   expect(screen.getByText('模型服务证书校验失败')).toBeInTheDocument();
   expect(createFollowup).not.toHaveBeenCalled();
 });
+
+
+it('尚无子执行时已能打开团队，工作栏统计稳定成员数', async () => {
+  const user = userEvent.setup();
+  const run = makeRun({ run_id: 'run-a' });
+  run.result.subagents = [];
+  run.result.team = {
+    id: 'team-1', title: '前后端', revision: 1, status: 'active', generation: 0, stage_run_id: 'stage-1', stage_ready: false, tasks: [], messages: [], error: null, cleanup_status: 'not_needed',
+    members: ['后端', '前端'].map(/* 只构造稳定身份，未请求任何成员模型。 */ (name) => ({ id: name, name, write_scope: ['.'], status: 'idle', active_run_id: null, task_id: null, runs: [], summary: '', model_turns: 0, tool_calls: 0, total_tokens: 0, usage_complete: true })),
+  };
+  const { onInspect } = show(run);
+  await user.click(await screen.findByRole('button', { name: /团队.*2/ }));
+  expect(onInspect).toHaveBeenCalledWith('run-a', 'agents');
+  expect(createFollowup).not.toHaveBeenCalled();
+});

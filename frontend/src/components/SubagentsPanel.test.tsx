@@ -239,3 +239,14 @@ it('超范围成果明确阻止采纳，读取差异仍保持只读', async () =
   expect(getIntegrationTargets).not.toHaveBeenCalled();
   expect(createIntegration).not.toHaveBeenCalled();
 });
+
+
+it('审批前段的核验证据显示实际执行来源，不冒充当前段工具回执', async () => {
+  const user = userEvent.setup();
+  const previous = structuredClone(record);
+  previous.report!.evidence[0].run_id = 'prior-execution';
+  vi.mocked(getSubagent).mockResolvedValue(detail(previous));
+  show(previous);
+  await user.click(screen.getByText('检查调用方'));
+  expect(await screen.findByText(/此前执行 prior-ex/)).toBeInTheDocument();
+});

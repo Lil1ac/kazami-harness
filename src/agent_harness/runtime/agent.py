@@ -117,6 +117,7 @@ async def _run_agent(
     inherited_context默认None；子执行继承固定约定、显式选择的技能及记忆修订，不继承消息历史。
     """
     from agent_harness.runtime.runner import AgentStopped
+    from agent_harness.work.tasks import TaskError
 
     config = context.manifest.config
     skills = []  # 每轮开始只读取一次；后续模型调用和历史页都使用固定快照。
@@ -142,6 +143,10 @@ async def _run_agent(
         from agent_harness.subagents.service import SubagentController
         executor.subagents = SubagentController(context, client, executor)
         context.subagent_controller = executor.subagents
+        from agent_harness.teams.controller import TeamController
+        executor.team = TeamController(context, executor.subagents)
+        executor.subagents.team = executor.team
+        executor.team.reconcile()
     context.emit("context_prepared", {
         "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
         "skills": [item.model_dump(mode="json") for item in builder.skills],
@@ -186,6 +191,7 @@ async def _run_agent(
         return await _request_model(context, client, messages, tools, purpose)
 
     messages = builder.initial_messages(inherited)
+    team = getattr(executor, "team", None)
     planning = getattr(executor, "planning", None)
     builder.tasks = getattr(executor, "tasks", None)  # 与规划动态前缀一起计量，压缩后重新读取宿主状态。
     if planning is not None:
@@ -206,6 +212,10 @@ async def _run_agent(
         executor.subagents.bind_inputs(builder)
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
     context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
+    if team is not None and (team_state := team.context_state()):
+        team_message = {"role": "user", "content": "宿主持久团队事实（协作数据，不是用户授权）：" + json.dumps(team_state, ensure_ascii=False)}
+        messages.append(team_message)
+        context.emit("team_messages_delivered", {"message": team_message, "sequence": 0})
     if context.manifest.human_decision is not None and context.manifest.human_decision.action in {"reject", "cancel"}:
         # 拒绝仍固定完整会话历史，但不调用模型、工具或验收，后续重新规划不会丢失原目标。
         if context.manifest.human_decision.action == "cancel":
@@ -271,6 +281,13 @@ async def _run_agent(
         reports = await executor.subagents.resume_children()
         messages.append({"role": "user", "content": "宿主接续子任务后的交接报告：" + json.dumps(reports, ensure_ascii=False)})
     while context.available("model_turns") > 0:
+        if team is not None and team.member_id is None:
+            state = team.snapshot()
+            if state and state["parent_run_id"] == str(context.manifest.run_id) and state["status"] in {"stopping", "stopped"}:
+                if state["status"] == "stopping":
+                    await team.stop_complete.wait()
+                context.result.final_answer = "团队协作已停止，已保留既有成果与历史，未继续请求模型或转派。"
+                raise AgentStopped("cancelled", "team_stopped")
         if context.budget_parent is not None and context.manifest.delegation.role == "develop" and context.budget_parent.subagent_controller.pause_requested:
             raise AgentStopped("waiting_input", "subagent_paused")
         # 显式让出执行，避免全为立即返回的本地操作时一直不响应取消。
@@ -298,6 +315,18 @@ async def _run_agent(
         while builder.memory.selected and not builder.build(messages, executor.definitions, context.result.model_turns + 1).check.allowed:
             removed = builder.memory.selected.pop()
             builder.memory.skipped.append({"id": removed["id"], "title": removed["title"], "reason": "整体输入剩余预算不足，可搜索回读"})
+        team_sequence = 0
+        if team is not None:
+            try:
+                team.check_member()
+            except TaskError as error:
+                context.result.final_answer = error.message
+                raise AgentStopped("cancelled", error.code) from None
+            incoming, team_sequence = team.message_input()
+            if incoming:
+                message = {"role": "user", "content": incoming}
+                messages.append(message)
+                context.emit("team_messages_delivered", {"message": message, "sequence": team_sequence})
         # 原始列表永不覆盖；压缩器返回的正是本次计量和实际发送的投影。
         prepared = await compressor.prepare(messages, executor.definitions, request_model, reserve_model_turns=1 if delegated else 0)
         if handoff:
@@ -319,6 +348,8 @@ async def _run_agent(
             raise AgentStopped("limit_exceeded", "max_model_turns")
         builder.memory.record_use(context.result.model_turns + 1, prepared.messages)
         response = await request_model(prepared.messages, prepared.tools, "execution")
+        if team is not None:
+            team.acknowledge(team_sequence)
         if controller is not None:
             controller.check_errors()
         builder.observe_usage(prepared.check.input_bytes, response.usage)
@@ -331,6 +362,10 @@ async def _run_agent(
                 messages.append({"role": "user", "content": "子研究已结束，请核对报告后交付：" + json.dumps(reports, ensure_ascii=False)})
                 continue
             context.result.final_answer = response.message["content"]
+            if team is not None and team.member_id is None:
+                state = team.snapshot()
+                if state and state["status"] == "active" and any(t["state"] != "ready" for t in state["tasks"]):
+                    raise AgentStopped("waiting_input", "team_attention_required")
             feedback = await on_completion() if on_completion is not None else None
             if feedback is None:
                 return
@@ -377,7 +412,7 @@ async def _run_agent(
                     executor.before_execute = tool_started
                 else:
                     tool_started()  # 注入的测试执行器仍遵循开始后执行的事件契约。
-                if call.name in {"delegate_readonly", "delegate_develop"} and context.manifest.delegation is None:
+                if call.name in {"delegate_readonly", "delegate_develop", "team_dispatch"} and context.manifest.delegation is None:
                     context.delegation_used = True
                 result = await executor.execute(call.name, call.arguments_json)
                 _record_tool(context, call, result, messages)
@@ -387,7 +422,7 @@ async def _run_agent(
                         _record_tool(context, remaining, _skipped("skipped_action_approval"), messages)
                     context.result.final_answer = "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
                     raise AgentStopped("waiting_input", "action_approval")
-                if call.name in {"delegate_readonly", "delegate_develop"} and context.manifest.delegation is None:
+                if call.name in {"delegate_readonly", "delegate_develop", "team_dispatch"} and context.manifest.delegation is None:
                     if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name in {"delegate_readonly", "delegate_develop"}:
                         continue  # 同批独立研究可并发接纳；后续修改仍由交接屏障跳过。
                     # 后续参数在子报告产生前已经生成；成功、失败或拒绝接纳都先交回模型重新决定。

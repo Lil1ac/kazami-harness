@@ -142,6 +142,8 @@ def _unfinished_result(history: RunHistory) -> RunResult:
         if event.type == "subagent_snapshot":
             record = SubagentRecord.model_validate_json(json.dumps(event.payload["subagent"]))
             result.subagents = [item for item in result.subagents if item.run_id != record.run_id] + [record]
+        if event.type == "team_snapshot":
+            result.team = event.payload["team"]
         if event.type == "tasks_snapshot":
             result.tasks = event.payload["state"]
         if event.type == "tool_started" and event.payload.get("name") == "run_command":
@@ -839,6 +841,10 @@ class WebRunManager:
     async def project_patch(self, run_id: UUID | str, parent_run_id: UUID | None = None) -> Path:
         """返回终态 run_id 已固化的补丁文件；活动或快照失败时抛受控错误，不重新生成 diff。"""
         if parent_run_id is not None:
+            parent = self.get_run(parent_run_id)
+            if not any(item.run_id == UUID(str(run_id)) for item in parent.result.subagents):
+                self.integrations.team_review(str(run_id), parent)
+                return await asyncio.to_thread(self.projects.patch_path, UUID(str(run_id)))
             detail = self.get_subagent(parent_run_id, UUID(str(run_id)), 0, 1, 0)
             if detail["subagent"]["role"] != "develop" or detail["subagent"]["snapshot_status"] != "ready":
                 raise WebServiceError(409, "project_snapshot_required", "开发子成果尚无完整补丁。")

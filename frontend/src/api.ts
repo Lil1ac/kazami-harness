@@ -1,4 +1,5 @@
 import type {
+  TeamView, TeamState,
   IntegrationView,
   IntegrationTarget,
   PermissionAction,
@@ -492,5 +493,25 @@ export function getSubagentDiff(parentId: string, childId: string): Promise<{ co
 export function discardSubagentWorkspace(parentId: string, childId: string): Promise<ProjectReview> {
   return request(`/api/runs/${parentId}/subagents/${childId}/review`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: 'discard' }),
+  });
+}
+
+
+/** 读取runId团队；historical=true强制当轮固定快照，读取不唤醒成员。 */
+export function getTeam(runId: string, historical = false): Promise<TeamView> {
+  return request(`/api/runs/${runId}/team?historical=${historical}`);
+}
+
+/** 提交版本化用户指示或管理决定；requestId重试沿用，wake仅显式请求一次负责人续轮。 */
+export function teamAction(runId: string, body: {
+  request_id: string; // 同内容重试稳定编号。
+  expected_revision: number; // 实际审阅版本。
+  action: 'message' | 'stop' | 'discard' | 'confirm_stopped'; // 固定管理操作。
+  recipient?: string; // 默认负责人。
+  content?: string; // 不提供权限的消息正文。
+  wake?: boolean; // 空闲时通过既有队列继续一次。
+}): Promise<{ team: TeamState; job?: JobView | null }> {
+  return request(`/api/runs/${runId}/team/actions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
 }

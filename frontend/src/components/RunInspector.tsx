@@ -15,6 +15,7 @@ import { EventTrail } from './EventTrail';
 import { UsageDisplay } from './UsageDisplay';
 import { PlanningPanel } from './PlanningPanel';
 import { TasksPanel } from './TasksPanel';
+import { TeamPanel } from './TeamPanel';
 import { SubagentsPanel } from './SubagentsPanel';
 import { PermissionPanel } from './PermissionPanel';
 import type { RunView } from '../types';
@@ -82,15 +83,8 @@ function InspectorPanels({
           {
             key: 'agents',
             label: 'Agent',
-            children: run.result.subagents?.length ? (
-              <SubagentsPanel
-                parentId={run.run_id}
-                records={run.result.subagents}
-                active={run.active && !historical}
-              />
-            ) : (
-              <p className="panel-empty">本轮尚未委派子 Agent。</p>
-            ),
+            children: <><TeamPanel run={run} historical={historical} readOnly={readOnly} />
+              {Boolean(run.result.subagents?.some(/* 普通一次性委派仍使用原视图。 */ (record) => !record.team_id)) && <SubagentsPanel parentId={run.run_id} records={(run.result.subagents || []).filter(/* 团队执行由上方按成员分组显示。 */ (record) => !record.team_id)} active={run.active && !historical} />}</>,
           },
           {
             key: 'result',

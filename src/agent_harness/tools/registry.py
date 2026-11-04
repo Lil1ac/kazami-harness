@@ -14,6 +14,7 @@ from agent_harness.storage.runs import StorageError
 from agent_harness.work.tasks import TASK_TOOLS, TaskController, TaskError
 from agent_harness.memory.service import MEMORY_TOOLS, MemoryController, MemoryError
 from agent_harness.subagents.service import SUBAGENT_TOOLS, SubagentController, SubagentError
+from agent_harness.teams.models import TEAM_TOOLS
 from agent_harness.subagents.profiles import READONLY_TOOLS
 from agent_harness.execution.workspace import WorkspaceError
 from agent_harness.tools.command import RunCommandArguments, run_command
@@ -23,6 +24,7 @@ from agent_harness.tools.files import (EditFileArguments, ReadFileArguments, Sea
 
 
 _TOOL_SPECS = {
+    **TEAM_TOOLS,
     **SUBAGENT_TOOLS,
     **MEMORY_TOOLS,
     **TASK_TOOLS,
@@ -71,6 +73,7 @@ class ToolExecutor:
         self.delegation_tools: frozenset[str] | None = None  # 开发子项的宿主工具上限，None为根执行。
         self.project_manager = None  # Runner绑定统一工作树与成果管理器，子执行不自行选择路径。
         self.subagents: SubagentController | None = None  # 仅根Agent绑定；子执行没有委派或管理权限。
+        self.team = None  # 根执行绑定团队编排，开发成员仅绑定消息与读取权限。
         self.report_only = False  # 开发报告纠正后永久关闭本子执行工具，不能借格式重试重复修改。
         self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
         self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
@@ -128,7 +131,9 @@ class ToolExecutor:
                 names.append("memory_propose")
         if self.subagents is not None:
             names.extend(SUBAGENT_TOOLS)
-        return names
+        if self.team is not None:
+            names.extend(self.team.names)
+        return list(dict.fromkeys(names))
 
     @property
     def definitions(self) -> list[dict]:
@@ -204,6 +209,8 @@ class ToolExecutor:
         except (ValidationError, TypeError, ValueError):
             return _error("invalid_arguments", "工具参数无效，请按工具 Schema 提供 JSON 对象。")
         try:
+            if self.team is not None:
+                self.team.check_member()
             if self.planning is not None:
                 self.planning.check_permission(name)
             if self.permissions is not None:
@@ -219,6 +226,9 @@ class ToolExecutor:
             if self.memory is not None:
                 phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
                 self.memory.before_tool(name, arguments, phase)
+            if name in TEAM_TOOLS and self.team is not None:
+                data = await self.team.execute(name, arguments)
+                return {"ok": True, "data": data, "error": None, "truncated": False}
             if name in SUBAGENT_TOOLS and self.subagents is not None:
                 data = await self.subagents.execute(name, arguments)
                 child = data.get("subagent")

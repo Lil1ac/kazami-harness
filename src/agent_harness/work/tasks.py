@@ -124,6 +124,8 @@ class WorkStore:
                 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS permission_actions(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS integrations(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS teams(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS team_operations(id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS integration_anchors(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS conversation_operations(id TEXT PRIMARY KEY, session TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL);
@@ -158,7 +160,7 @@ class WorkStore:
                 connection.close()
             for item in items.values():
                 if item.get("delegation_run_id"):
-                    integration = next((value for value in integrations if value["run_id"] == item["delegation_run_id"] or item["delegation_run_id"] in value.get("source_run_ids", [])), None)
+                    integration = next((value for value in integrations if value["run_id"] == item["delegation_run_id"] or item["delegation_run_id"] in value.get("source_run_ids", []) or item["delegation_run_id"] in value.get("team_source_run_ids", [])), None)
                     item["integration_status"] = integration["status"] if integration else "not_integrated"
                     item["integration_id"] = integration["id"] if integration else None
                     if integration and integration["status"] == "applied" and item.get("hold_reason") == "子成果待审阅采纳。":
@@ -233,10 +235,11 @@ class WorkStore:
         for identifier in graph:
             visit(identifier)
 
-    def mutate(self, session: str, operation: str, payload: dict, change) -> dict:
+    def mutate(self, session: str, operation: str, payload: dict, change, *, with_db: bool = False) -> dict:
         """在同一事务对 session 执行 change(state)；operation 幂等，返回固定回执。
 
         payload 用于核对重复请求内容；change 更新内存状态并返回 JSON 结果；必要时只读核对已提交集成事实，不启动嵌套写事务。
+        with_db=True将当前事务作为回调第二参数，供团队与任务共同核验；默认False沿用单参数回调。
         回调异常时整笔回滚；图校验、清单版本和变更事件与回执一起提交。
         """
         key, digest = session + ":" + operation, hashlib.sha256(encode(payload).encode()).hexdigest()
@@ -250,7 +253,7 @@ class WorkStore:
             row = db.execute("SELECT body FROM lists WHERE id=?", (session,)).fetchone()
             state = json.loads(row[0]) if row else {"session_id": session, "revision": 0, "items": []}
             before = {item["id"]: encode(item) for item in state["items"]}  # 用差量事件保留完整变更事实。
-            result = change(state)
+            result = change(state, db) if with_db else change(state)
             self._check_graph(state["items"])
             state["revision"] += 1
             db.execute("INSERT OR REPLACE INTO lists VALUES (?,?)", (session, encode(state)))
@@ -342,7 +345,7 @@ class TaskService:
 
     def update(self, arguments: TaskUpdate) -> dict:
         """按 arguments 修改任务并返回新版本；拒绝过期、越权认领和缺少证据的完成。"""
-        def change(state):
+        def change(state, db):
             """在 state 内核验并更新目标；同时使受影响下游待复核，返回精简回执。"""
             if (arguments.subject is not None and not arguments.subject.strip()) or (arguments.acceptance is not None and any(not value.strip() or len(value) > 2000 for value in arguments.acceptance)):
                 raise TaskError("task_invalid", "任务标题和完成条件必须是有效非空文本。")
@@ -352,6 +355,12 @@ class TaskService:
             if item["revision"] != arguments.expected_revision:
                 raise TaskError("task_revision_conflict", "任务已更新，请重新读取后操作。")
             structural = any(getattr(arguments, field) is not None for field in ("subject", "description", "acceptance", "depends_on"))
+            team_row = db.execute("SELECT body FROM teams WHERE id=?", (self.session,)).fetchone()
+            team = json.loads(team_row[0]) if team_row else None
+            grant = next((t for t in team["tasks"] if t["task_id"] == item["id"]), None) if team else None
+            if grant and grant["state"] in {"running", "waiting_input", "needs_review"} and (arguments.status is not None or structural):
+                raise TaskError("team_task_owned", "团队成员仍持有或尚未核对本项，请先停止并确认清理，再调整任务。")
+
             if structural and (item["source"] or item["status"] in {"in_progress", "completed"}):
                 raise TaskError("task_scope_locked", "批准步骤或进行中/已完成任务不能直接改写范围，请重新规划或先重新打开。")
             view = next(value for value in self.store._view(state)["items"] if value["id"] == item["id"])
@@ -374,7 +383,7 @@ class TaskService:
                         # 外层已持写锁，此只读连接不再申请BEGIN IMMEDIATE，集成事实不会并发改变。
                         connection = sqlite3.connect(self.store.path)
                         try:
-                            integrated = connection.execute("SELECT 1 FROM integrations WHERE (json_extract(body,'$.run_id')=? OR EXISTS (SELECT 1 FROM json_each(integrations.body,'$.source_run_ids') WHERE value=?)) AND json_extract(body,'$.session_id')=? AND json_extract(body,'$.status')='applied' LIMIT 1", (item["delegation_run_id"], item["delegation_run_id"], self.session)).fetchone()
+                            integrated = connection.execute("SELECT 1 FROM integrations WHERE (json_extract(body,'$.run_id')=? OR EXISTS (SELECT 1 FROM json_each(integrations.body,'$.source_run_ids') WHERE value=?) OR EXISTS (SELECT 1 FROM json_each(integrations.body,'$.team_source_run_ids') WHERE value=?)) AND json_extract(body,'$.session_id')=? AND json_extract(body,'$.status')='applied' LIMIT 1", (item["delegation_run_id"], item["delegation_run_id"], item["delegation_run_id"], self.session)).fetchone()
                         finally:
                             connection.close()
                         if not integrated:
@@ -407,25 +416,67 @@ class TaskService:
                     item["run_ids"].append(self.run_id)
             item["revision"] += 1
             item["updated_at"] = now()
+            if team and (target in {"pending", "cancelled"} or structural):
+                from agent_harness.teams.store import TeamStore
+                TeamStore.invalidate(team, {task["id"]: task for task in self.store._view(state)["items"]})
+                if grant and target == "pending":
+                    # 显式重开与子执行正常释放都会变成pending，必须在本事务区分用户的新执行意图。
+                    affected = {item["id"]}
+                    for _ in team["tasks"]:
+                        for task in team["tasks"]:
+                            if task["task_id"] in affected or any(key in affected for key in task["depends_on"]):
+                                affected.add(task["task_id"])
+                                if task["state"] not in {"running", "waiting_input", "needs_review"}:
+                                    task.update(state="stale", error="工作项已重新打开，请明确重新分配并核对依赖。")
+                    team["stage_ready"] = False
+                team.update(revision=team["revision"] + 1, updated_at=now())
+                db.execute("UPDATE teams SET body=? WHERE id=?", (encode(team), self.session))
+                self.store.event(db, self.session, {"type": "team_updated", "team_id": team["id"], "revision": team["revision"]})
             return {"id": item["id"], "revision": item["revision"], "status": item["status"]}
-        return self.store.mutate(self.session, "update:" + arguments.request_id, arguments.model_dump(), change)
+        return self.store.mutate(self.session, "update:" + arguments.request_id, arguments.model_dump(), change, with_db=True)
 
-    def claim_delegation(self, identifier: str, child_id: str) -> None:
-        """原子认领当前清单identifier给child_id；完成条件、依赖或已有开发占用不满足时拒绝。"""
-        def change(state):
+    def claim_delegation(self, identifier: str, child_id: str, *, team_claim: dict | None = None) -> None:
+        """原子认领identifier给child_id；team_claim为宿主可信授权，None沿用普通依赖规则。
+
+        团队依赖只允许使用固定且未失效的上游成果，不能由模型报告替代C04最终完成事实。
+        """
+        def change(state, db):
             """核对state内工作项并冻结开发归属，返回子项编号，不标记完成。"""
             item = next((value for value in state["items"] if value["id"] == identifier), None)
             if item is None:
                 raise TaskError("task_not_found", "委派工作项不属于当前会话。")
             view = next(value for value in self.store._view(state)["items"] if value["id"] == identifier)
-            if item["status"] in {"completed", "cancelled"} or view["is_group"] or view["blocked_reason"] or not item["acceptance"]:
+            blocked = bool(view["blocked_reason"])
+            if team_claim is None:
+                team_row = db.execute("SELECT body FROM teams WHERE id=?", (self.session,)).fetchone()
+                if team_row and any(t["task_id"] == identifier for t in json.loads(team_row[0])["tasks"]):
+                    raise TaskError("team_task_owned", "此项已纳入团队，请通过团队明确分配，不能以普通委派绕过成员归属。")
+            if team_claim is not None:
+                from agent_harness.teams.store import TeamStore, task_fingerprint
+                team = TeamStore(self.store.path.parent).get(self.session, db)
+                grant = next((t for t in (team or {}).get("tasks", []) if t["task_id"] == identifier), None)
+                ready = {t["task_id"]: t["run_id"] for t in (team or {}).get("tasks", []) if t["state"] == "ready"}
+                tasks = {t["id"]: t for t in self.store._view(state)["items"]}
+                if (team is None or team["status"] != "active" or team["id"] != team_claim["team_id"] or grant is None
+                        or grant["state"] != "running" or grant["member_id"] != team_claim["member_id"]
+                        or grant["fingerprint"] != task_fingerprint(item)
+                        or grant["dependency_versions"] != team_claim["dependency_versions"]
+                        or any(ready.get(key) != value for key, value in team_claim["dependency_versions"].items())):
+                    raise TaskError("team_claim_changed", "团队归属或依赖版本变化，不能启动旧授权。")
+                blocked = bool(item.get("review_required")) or any(key not in ready and (tasks[key]["status"] != "completed" or tasks[key].get("blocked_reason")) for key in TeamStore.requirements(item, tasks))
+                ancestor = item["parent_task_id"]
+                while ancestor:
+                    parent = tasks[ancestor]
+                    blocked = blocked or parent["status"] == "cancelled" or bool(parent.get("review_required"))
+                    ancestor = parent["parent_task_id"]
+            if item["status"] in {"completed", "cancelled"} or view["is_group"] or blocked or not item["acceptance"]:
                 raise TaskError("task_blocked", "工作项已结束、被依赖阻塞或缺少完成条件。")
             if (item["owner"] or "").startswith("subagent:") or item["active_run_id"] not in {None, self.run_id}:
                 raise TaskError("task_owned", "工作项已有其他执行者，不能重复委派。")
             item.update(status="in_progress", active_run_id=self.run_id, owner="subagent:" + child_id,
                         delegation_run_id=child_id, revision=item["revision"] + 1, updated_at=now())
             return {"child_id": child_id}
-        self.store.mutate(self.session, "delegate:" + child_id, {"task_id": identifier}, change)
+        self.store.mutate(self.session, "delegate:" + child_id, {"task_id": identifier}, change, with_db=True)
 
     def release_delegation(self, child_id: str, reason: str) -> None:
         """释放child_id持有的工作项，保留成果归属与reason；返回None，不代替成果采纳或人工验收。"""

@@ -142,6 +142,7 @@ class SubagentController:
         self.cancel_reasons: dict[UUID, str] = {}  # 只有明确单项停止时使用user_cancelled，其余为parent_stopped。
         self.pause_requested = False  # 子审批出现后其他子项在模型/工具边界安全暂停。
         self.attention = asyncio.Event()  # 子审批打断all等待，避免被兄弟长请求隐藏。
+        self.team = None  # 根执行绑定持久团队控制器，普通C07委派不使用团队身份。
         self.inputs: "ContextBuilder | None" = None  # 首次模型输入准备后绑定固定约定、技能和记忆。
 
     @property
@@ -230,6 +231,8 @@ class SubagentController:
                         value["status"] = "cancelled"
                         permissions.save(value)
                     record.pending_action, record.status, record.stop_reason = None, "cancelled", "parent_stopped"
+                    if record.team_id is not None:
+                        self.team.cancelled(record)
                     self.parent.emit("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
         # 收尾不再次抛等待异常；致命存储错误仍必须向上传播。
         for task in self.jobs.values():
@@ -267,7 +270,7 @@ class SubagentController:
         record.cleanup_status = child.result.cleanup_status
         self.parent.emit("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
 
-    async def execute(self, name: str, arguments) -> dict:
+    async def execute(self, name: str, arguments, *, team_assignment: dict | None = None) -> dict:
         """处理已校验name/arguments并返回委派回执；无效归属抛SubagentError。
 
         delegate_readonly按background选择等待或异步启动；wait_subagents查询/等待，read_subagent分页读报告。
@@ -343,6 +346,9 @@ class SubagentController:
 
         profile = PROFILES[arguments.role]
         allowed = profile.tools.intersection(self.executor._enabled_names())
+        if team_assignment is not None:
+            from agent_harness.teams.models import MEMBER_TOOLS
+            allowed = allowed.union(MEMBER_TOOLS)
         config = parent.manifest.config.model_copy(deep=True)
         config.tools = [tool for tool in config.tools if tool in allowed]
         config.skills = list(arguments.skill_names)
@@ -352,8 +358,10 @@ class SubagentController:
         planning = self.executor.planning.state if self.executor.planning is not None else parent.manifest.planning
         prompt = json.dumps({"父轮要求": parent.manifest.task.prompt, "批准范围": [plan.model_dump(mode="json") for plan in planning.plans if plan.status == "approved"],
                              "关联工作项": {key: linked_task[key] for key in ("id", "subject", "description", "acceptance")} if linked_task else None,
-                             "研究任务": arguments.objective}, ensure_ascii=False)
+                             "研究任务": arguments.objective, "成员历史交接摘要": team_assignment.get("member_summary", "") if team_assignment else None}, ensure_ascii=False)
         child_id = uuid4()
+        if team_assignment is not None:
+            self.team.preparing(team_assignment, child_id)
         workspace = parent.manifest.task.workspace
         execution = parent.manifest.task.python_execution
         if developing:
@@ -363,8 +371,18 @@ class SubagentController:
             from agent_harness.work.tasks import TaskError
             from agent_harness.projects.manager import ProjectError
             try:
-                self.executor.tasks.service.claim_delegation(str(arguments.task_id), str(child_id))
+                self.executor.tasks.service.claim_delegation(str(arguments.task_id), str(child_id), team_claim=team_assignment)
+                if team_assignment is not None:
+                    stage = self.executor.project_manager.verify_workspace(UUID(team_assignment["stage_run_id"]))
+                    workspace = Path(stage.worktree)
                 review = await _file_operation(prepare_workspace, self.executor.project_manager, workspace, child_id, parent.manifest.run_id, scope)
+                if team_assignment is not None:
+                    from agent_harness.projects.integration_files import identity
+                    projects = self.executor.project_manager
+                    owned = projects._ownership(child_id)
+                    owned.update(team_id=team_assignment["team_id"], team_task_id=team_assignment["task_id"],
+                                 delegation_parent_path=str(parent.manifest.task.workspace), delegation_parent_identity=identity(parent.manifest.task.workspace))
+                    projects._write_json(projects._metadata_dir(child_id) / "ownership.json", owned)
                 workspace = Path(review.worktree)
                 python_paths = [str(path.relative_to(parent.manifest.task.workspace)) for path in execution.python_paths] if execution else None
                 execution = prepare_python_execution(workspace, python_executable=str(execution.executable) if execution and execution.executable else None, python_paths=python_paths)
@@ -380,11 +398,15 @@ class SubagentController:
         manifest = RunManifest(run_id=child_id, session_id=parent.manifest.session_id or parent.manifest.run_id,
                                task=parent.manifest.task.model_copy(update={"prompt": prompt, "verifier": None, "workspace": workspace, "python_execution": execution}),
                                config=config, origin=parent.manifest.origin, planning=planning.model_copy(deep=True),
-                               delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=arguments.role, task_id=arguments.task_id, write_scope=scope))
+                               delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=arguments.role, task_id=arguments.task_id, write_scope=scope,
+                                   team_id=team_assignment["team_id"] if team_assignment else None, team_member_id=team_assignment["member_id"] if team_assignment else None))
         record = SubagentRecord(run_id=manifest.run_id, title=arguments.title.strip(), objective=arguments.objective,
                                 role=arguments.role, task_id=arguments.task_id, skill_names=config.skills, parent_reserve=reserve,
                                 log_parent_id=parent.manifest.run_id, workspace=str(workspace) if developing else None, write_scope=scope,
                                 max_model_turns=turns, max_tool_calls=calls, timeout_seconds=seconds)
+        if team_assignment is not None:
+            record.team_id, record.team_member_id = team_assignment["team_id"], team_assignment["member_id"]
+            self.team.started(team_assignment, record)
         await self._launch(manifest, record, allowed, self.inputs, background=arguments.background)
         return {"subagent": record.model_dump(mode="json"), "accepted": arguments.background,
                 "notice": "子用量已计入父总数；读取报告和实际代码成果后再决定后续操作，开发成果须经人工采纳。"}
@@ -463,6 +485,8 @@ class SubagentController:
         if resume.decision != "approve":
             target.pending_action, target.status, target.stop_reason = None, "cancelled", "permission_" + resume.decision
             parent.result.subagents = records
+            if target.team_id is not None:
+                self.team.cancelled(target)
             for item in records:
                 parent.emit("subagent_snapshot", {"subagent": item.model_dump(mode="json")})
             self.check_errors()
@@ -487,6 +511,9 @@ class SubagentController:
             scope = intersect_scope(record.write_scope, config.permission_policy.write_roots)
             config.permission_policy.write_roots = scope
             allowed = PROFILES[record.role].tools.intersection(self.executor._enabled_names())
+            if record.team_id is not None:
+                from agent_harness.teams.models import MEMBER_TOOLS
+                allowed = allowed.union(MEMBER_TOOLS)
             config.tools = [name for name in config.tools if name in allowed]
             state = history.result.permissions
             spent_turns = state.spent_model_turns + history.result.model_turns
@@ -512,21 +539,53 @@ class SubagentController:
             owned["delegation_parent_id"] = str(parent.manifest.run_id)
             owned["delegation_scope"] = scope
             projects._write_json(projects._metadata_dir(identifier) / "ownership.json", owned)
-            self.executor.tasks.service.claim_delegation(str(record.task_id), str(identifier))
             manifest = RunManifest(run_id=identifier, session_id=parent.manifest.session_id or parent.manifest.run_id,
                 task=old.task, config=config, origin=old.origin, planning=parent.manifest.planning.model_copy(deep=True),
                 permission_resume=child_resume,
                 delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role="develop", task_id=record.task_id,
-                    write_scope=scope, previous_parent_id=record.log_parent_id, previous_run_id=record.run_id))
+                    write_scope=scope, previous_parent_id=record.log_parent_id, previous_run_id=record.run_id,
+                    team_id=record.team_id, team_member_id=record.team_member_id))
             # 安全暂停没有待执行动作，但同样要继承此前预算；单独由启动器初始化，不能伪造审批。
             new_record = record.model_copy(update={"run_id": identifier, "log_parent_id": parent.manifest.run_id,
                 "status": "running", "pending_action": None, "report": None, "snapshot_status": "pending", "write_scope": scope,
                 "max_model_turns": turns, "max_tool_calls": max(1, calls), "timeout_seconds": seconds})
+            assignment = None
+            if record.team_id is not None:
+                team_state = self.team.store.require(self.team.snapshot())
+                item = next(t for t in team_state["tasks"] if t["task_id"] == str(record.task_id))
+                assignment = {"team_id": record.team_id, "member_id": record.team_member_id, "task_id": str(record.task_id),
+                              "dependency_versions": item["dependency_versions"], "stage_run_id": team_state["stage_run_id"]}
+                self.team.started(assignment, new_record)
+            self.executor.tasks.service.claim_delegation(str(record.task_id), str(identifier), team_claim=assignment)
             await self._launch(manifest, new_record, allowed, self.inputs, spent=history.result.permissions.model_copy(update={
                 "spent_model_turns": spent_turns, "spent_tool_calls": spent_calls, "spent_seconds": spent_seconds,
                 "spent_usage": {key: state.spent_usage.get(key, 0) + getattr(history.result.usage, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},
                 "spent_usage_complete": state.spent_usage_complete and history.result.usage_complete}))
         return await self.wait_all()
+
+    def report_events(self, child) -> list:
+        """返回child当前段及可信审批接续链的原始事件；跨成员、跨任务、目录变化或未知结束均拒绝。
+
+        最多十六段且不允许循环。只核验已执行事实，不重放旧工具，也不扩大本段权限或预算。
+        """
+        manifest = child.manifest
+        current = read_child(self.parent.runs_root, manifest.delegation.parent_run_id, manifest.run_id)
+        events, seen = list(current.events), {manifest.run_id}
+        origin = manifest.delegation
+        while origin.previous_run_id is not None:
+            if len(seen) >= 16 or origin.previous_run_id in seen:
+                raise StorageError("子执行接续来源循环或超过可核验上限。")
+            seen.add(origin.previous_run_id)
+            history = read_child(self.parent.runs_root, origin.previous_parent_id, origin.previous_run_id)
+            previous = history.manifest.delegation
+            if (history.result is None or history.result.cleanup_status not in {"not_needed", "complete"} or previous is None
+                    or history.manifest.task.workspace != manifest.task.workspace or previous.role != manifest.delegation.role
+                    or previous.task_id != manifest.delegation.task_id or previous.team_id != manifest.delegation.team_id
+                    or previous.team_member_id != manifest.delegation.team_member_id):
+                raise StorageError("子报告证据接续来源无法核验。")
+            events = [*history.events, *events]
+            origin = previous
+        return events
 
     async def _run_child(self, child, record, allowed, inputs) -> None:
         """用child独立上下文执行record，只授予allowed工具；inputs已固定，返回None并释放未用额度。
@@ -543,6 +602,9 @@ class SubagentController:
                                     readonly=allowed if record.role != "develop" else None)
             executor.bind_run(store.run_dir)
             executor.delegation_tools = allowed if record.role == "develop" else None
+            if record.team_id is not None:
+                from agent_harness.teams.controller import TeamController
+                executor.team = TeamController(child, self, record.team_member_id, executor=executor)
             report_retry = False  # 一段开发子执行最多一次报告纠正，仍消耗原父子模型与活动时间额度。
 
             async def validate_delivery() -> str | None:
@@ -550,7 +612,7 @@ class SubagentController:
                 nonlocal report_retry
                 if record.role != "develop" or report_retry or child.available("model_turns") <= 0:
                     return None
-                events = read_child(parent.runs_root, parent.manifest.run_id, manifest.run_id).events
+                events = self.report_events(child)
                 checked = result.model_copy(deep=True, update={"execution_status": "completed", "stop_reason": None})
                 finalize_report(checked, events, role=record.role)
                 if checked.execution_status != "failed":
@@ -560,7 +622,7 @@ class SubagentController:
                 child.emit("subagent_report_retry", {"reason": checked.stop_reason, "attempt": 1})
                 sources = collect_evidence(events, role=record.role)
                 return ("宿主报告纠正：上一条报告未通过校验（" + str(checked.stop_reason) + "）。"
-                        "只允许一次纠正，不重新执行或请求工具，不增加预算。只重写交接JSON，不改变已执行事实。"
+                        "只允许一次纠正，不重新执行或请求工具，不增加预算。只重写交接JSON，不改变已执行事实。仅引用下列当前段或已核验接续段的唯一成功调用编号。"
                         "必须提供summary、findings、limitations、pending、complete；不添加role/file/before/after等自定义字段。"
                         "findings可为空；未完成时complete=false并说明限制。必要修复仅引用下列真实成功调用编号。"
                         "JSON Schema：" + json.dumps(ReportDraft.model_json_schema(), ensure_ascii=False)
@@ -628,7 +690,7 @@ class SubagentController:
                 if rank[result.cleanup_status] > rank[parent.result.cleanup_status]:
                     parent.result.cleanup_status = result.cleanup_status
             if result.execution_status != "running":
-                events = read_child(parent.runs_root, parent.manifest.run_id, manifest.run_id).events
+                events = self.report_events(child)
                 result.subagent_report = finalize_report(result, events, role=record.role)
                 result.active_duration_seconds = child.active_duration()
                 store.finalize(result)
@@ -636,3 +698,5 @@ class SubagentController:
                 record.status, record.stop_reason = result.execution_status, result.stop_reason
                 record.report = result.subagent_report
                 self._publish(record, child)
+                if record.team_id is not None:
+                    await self.team.finished(record)

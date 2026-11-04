@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   CheckOutlined,
@@ -25,7 +25,7 @@ interface TurnActivityProps {
   onInspect: () => void; // 打开完整证据视图，不触发执行。
 }
 
-/** 按发生顺序展示模型过程与工具；运行时展开，结束后收拢，完整参数按需读取。 */
+/** 按发生顺序展示模型过程与工具；自动展开随运行状态变化，用户的显式选择优先。 */
 export function TurnActivity({
   runId,
   liveEvents,
@@ -34,8 +34,8 @@ export function TurnActivity({
   finalAnswer,
   onInspect,
 }: TurnActivityProps) {
-  const [open, setOpen] = useState(active); // 当前轮默认可见，历史默认折叠。
-  useEffect(/* 可信终态到来后收起过程，不等待手动清理屏幕。 */ () => setOpen(active), [active]);
+  const [expansion, setExpansion] = useState<{ runId: string; open: boolean } | null>(null); // null使用运行状态默认值；选择只对所属运行生效。
+  const open = expansion?.runId === runId ? expansion.open : active; // 用户阅读时不因终态刷新强制收起。
   const query = useQuery({
     queryKey: ['turn-activity', runId],
     queryFn: /* 所有页都经过同一投影，首个 100 条事件不会截断长答复。 */ async ({ signal }) => {
@@ -83,12 +83,17 @@ export function TurnActivity({
   const renderedTools = new Set<string>(); // 开始与结果在同一行更新，不追加两行。
   let verificationId = ''; // 多次修复后的验收分别配对，不复用第一次检查行。
   return (
-    <details
-      className={`turn-activity ${active ? 'is-active' : ''}`}
-      open={open}
-      onToggle={/* 只改变阅读状态。 */ (event) => setOpen(event.currentTarget.open)}
-    >
-      <summary>
+    <details className={`turn-activity ${active ? 'is-active' : ''}`} open={open}>
+      <summary
+        onClick={
+          /* 阻止原生自动切换，统一记录鼠标与键盘触发的用户选择；程序更新open不写回偏好。 */ (
+            event,
+          ) => {
+            event.preventDefault();
+            setExpansion({ runId, open: !open });
+          }
+        }
+      >
         <DownOutlined className="activity-chevron" />
         {active ? <LoadingOutlined spin /> : <span className="activity-mark" />}
         <span>{active ? phase : '执行过程'}</span>
@@ -106,14 +111,10 @@ export function TurnActivity({
                     className={`activity-text ${event.payload.channel === 'reasoning' ? 'activity-reasoning' : ''}`}
                     key={String(event.payload.block_key)}
                   >
-                    {event.payload.channel === 'reasoning' ? (
-                      <details>
-                        <summary>思考</summary>
-                        <MarkdownMessage text={String(event.payload.text)} />
-                      </details>
-                    ) : (
-                      <MarkdownMessage text={String(event.payload.text)} />
+                    {event.payload.channel === 'reasoning' && (
+                      <span className="activity-text-kind">思考</span>
                     )}
+                    <MarkdownMessage text={String(event.payload.text)} />
                     {!active && !event.payload.complete && (
                       <small className="muted">输出未完成</small>
                     )}

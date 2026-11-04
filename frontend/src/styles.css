@@ -1281,12 +1281,25 @@ pre {
 .activity-text .markdown-message p {
   margin-bottom: 12px;
 }
-.activity-reasoning {
+.activity-steps > .activity-reasoning {
   color: var(--muted);
 }
-.activity-reasoning summary {
-  cursor: pointer;
+.activity-text-kind {
+  display: block;
+  margin-bottom: 5px;
   font-size: 11px;
+  color: var(--subtle);
+}
+.activity-text .markdown-message > :last-child {
+  margin-bottom: 0;
+}
+.activity-text .markdown-message {
+  overflow-wrap: anywhere;
+}
+.turn-activity > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
 }
 .activity-icon {
   font-size: 11px;

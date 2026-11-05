@@ -22,7 +22,8 @@ from agent_harness.execution.local import LocalChangeStore
 from agent_harness.projects import ProjectError, ProjectManager
 from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.work.planning import PlanningController
-from agent_harness.work.tasks import WorkStore, TaskController, ExecutionLease
+from agent_harness.work.tasks import WorkStore, TaskController, ExecutionLease, TaskError
+from agent_harness.hooks.controller import HookPending
 from agent_harness.runtime.verifier import Verifier
 
 
@@ -72,6 +73,7 @@ class RunContext:
     command_controller: object | None = None  # 当前段命令句柄，未绑定工具执行器时为 None。
     command_workspaces: dict[str, str] = field(default_factory=dict)  # 根段共享的实际目录占用，活动命令期间禁止其他写入。
     command_controllers: dict[str, object] = field(default_factory=dict)  # 根段聚合父子命令控制器，用于观察及统一停止。
+    hooks: object | None = None  # 当前 Agent 的生命周期扩展调度器；无工具执行器时为空。
 
     @property
     def runs_root(self) -> Path:
@@ -135,6 +137,10 @@ class RunContext:
             "budget_handoff_started": "budget_handoff",
         }
         self.phase = "context_compaction" if kind == "model_request_started" and (payload or {}).get("purpose") == "summary" else phases.get(kind, self.phase)
+        if kind == "hook_record" and payload is not None:
+            status = payload["hook"]["status"]
+            if status in {"running", "waiting"}:
+                self.phase = "hook_execution" if status == "running" else "action_approval"
         if kind == "subagent_snapshot" and (payload or {}).get("subagent", {}).get("status") == "running":
             self.phase = "subagent_execution"
         if self.on_event is not None:
@@ -377,6 +383,14 @@ async def _run_task(
         await context.runtime_control.boundary(tool_executor)
         if asyncio.get_running_loop().time() >= deadline:
             raise TimeoutError
+        if context.hooks is not None and planning.state.phase != "planning":
+            await context.hooks.drain()
+            feedback = await context.hooks.stop()
+            if feedback is not None:
+                result.final_answer = None
+                result.verification = None
+                result.validation_status = "unverified"
+                return feedback
         result.execution_status = "completed"
         result.stop_reason = "final_answer"
         context.emit("execution_completed", {"model_turns": result.model_turns, "tool_calls": result.tool_calls, "repair_attempt": result.repair_attempts})
@@ -473,6 +487,12 @@ async def _run_task(
         })
     except AgentStopped as error:
         result.execution_status, result.stop_reason = error.status, error.reason
+    except HookPending:
+        result.execution_status, result.stop_reason = "waiting_input", "action_approval"
+        result.final_answer = "Hook 等待本次命令批准，已完成的阶段会在接续时保留。"
+    except TaskError as error:
+        result.execution_status, result.stop_reason = "failed", error.code
+        result.final_answer = error.message
     except ModelError as error:
         result.execution_status = "timed_out" if error.code == "model_timeout" else "failed"
         result.stop_reason, result.usage_complete = error.code, False

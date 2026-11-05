@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from agent_harness.context.archive import ContextArchive, ReadContextArguments
 from agent_harness.execution.processes import ProcessRunner
+from agent_harness.hooks.controller import HookPending
 from agent_harness.work.planning import PLANNING_TOOLS, PlanningController, PlanningError
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, validate_python_execution
 from agent_harness.schemas import PythonExecution, RunConfig
@@ -81,6 +82,7 @@ class ToolExecutor:
         self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
         self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
         self.before_execute = None  # 参数和权限检查通过后记录真实开始，None表示无需事件。
+        self.hooks = None  # Agent 初始化后绑定的生命周期调度器；工具单测及无配置场景不运行脚本。
         self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
         self.commands = None  # Runner 绑定的统一命令生命周期，独立工具测试为空。
 
@@ -192,11 +194,22 @@ class ToolExecutor:
             token = FILE_SCOPE.set((self.workspace, allowed))
         try:
             return await self._execute(name, arguments_json)
+        except HookPending as pending:
+            action = pending.action
+            origin = action["hook"]["origin"]
+            _, state = self.hooks.checkpoint(origin)
+            return {"ok": False, "data": {"action_id": action["id"], "tool_executed": "receipt" in state}, "error": {"code": "approval_required", "message": "Hook 等待本次命令批准。"}, "truncated": False}
+        except TaskError as error:
+            result = _error(error.code, error.message)
+            receipt = getattr(error, "hook_tool_receipt", None)
+            if receipt is not None:
+                result["data"] = {"tool_executed": True, "original_result": receipt}
+            return result
         finally:
             if token is not None:
                 FILE_SCOPE.reset(token)
 
-    async def _execute(self, name: str, arguments_json: str) -> dict:
+    async def _execute(self, name: str, arguments_json: str, *, hooked: bool = False) -> dict:
         """严格校验并执行一个工具；业务错误回传模型，存储错误立即上抛。"""
         self.cancelled_result = None
         if self.handoff:
@@ -216,24 +229,40 @@ class ToolExecutor:
             arguments = _TOOL_SPECS[name][0].model_validate_json(arguments_json)
         except (ValidationError, TypeError, ValueError):
             return _error("invalid_arguments", "工具参数无效，请按工具 Schema 提供 JSON 对象。")
+        if self.hooks is not None and self.hooks.definitions and not hooked:
+            if self.planning is not None:
+                try:
+                    self.planning.check_permission(name)
+                except PlanningError as error:
+                    return _error(error.code, error.message)
+            if self.permissions is not None and self.permissions.decision(name) == "deny":
+                return _error("permission_denied", "宿主、会话或规划权限禁止此操作。")
+
+            async def original_operation():
+                """重新核验并执行当前 name/arguments_json；返回原回执，避免 Hook 后沿用旧目标身份。"""
+                return await self._execute(name, arguments_json, hooked=True)
+
+            return await self.hooks.tool(name, arguments_json, original_operation)
         try:
             if self.team is not None:
                 self.team.check_member()
             if self.planning is not None:
                 self.planning.check_permission(name)
             if self.permissions is not None:
-                pending = self.permissions.check(name, arguments.model_dump(mode="json"), self.call_id)
+                pending = self.permissions.check(name, arguments.model_dump(mode="json"), self.call_id, hook_operation=self.hooks.origin if self.hooks is not None else None)
                 if pending is not None:
                     return {"ok": False, "data": {"action_id": pending["id"]}, "error": {"code": "approval_required", "message": "尚未执行，等待用户批准本次动作。"}, "truncated": False}
+            if self.memory is not None and name not in PLANNING_TOOLS:
+                phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
+                self.memory.before_tool(name, arguments, phase)
             if self.before_execute is not None:
                 self.before_execute()
+            if self.hooks is not None:
+                self.hooks.started()
             if self.planning is not None:
                 if name in PLANNING_TOOLS:
                     data = self.planning.execute(name, arguments)
                     return {"ok": True, "data": data, "error": None, "truncated": name == "read_plan" and not data["eof"]}
-            if self.memory is not None:
-                phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
-                self.memory.before_tool(name, arguments, phase)
             if name in TEAM_TOOLS and self.team is not None:
                 data = await self.team.execute(name, arguments)
                 return {"ok": True, "data": data, "error": None, "truncated": False}
@@ -295,6 +324,8 @@ class ToolExecutor:
                 self.cancelled_result = self._command_result(data)
             raise
         except StorageError:
+            raise
+        except HookPending:
             raise
         except SubagentError as error:
             return _error(error.code, error.message)

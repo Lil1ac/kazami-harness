@@ -371,6 +371,11 @@ class ContextCompressor:
         if not region:
             return False
         before = self._size(self._project(messages), tools)
+        hooks = self.context.hooks
+        # 审批会追加宿主交接消息；事件身份绑定同一次逻辑摘要请求，不能因区域重算反复要求批准。
+        hook_key = str(self.context.result.permissions.spent_model_turns + self.context.result.model_turns + 1)
+        if hooks is not None:
+            await hooks.dispatch("PreCompact", hook_key, {"reference": reference, "source_start": start, "source_end": end})
         self.context.emit("context_checked", check.check.model_dump(mode="json"))
         self.summary_calls += 1
         self.context.emit("context_compaction_started", {
@@ -403,6 +408,8 @@ class ContextCompressor:
                 raise ValueError("summary did not shrink")
             self._record("summary", start, end, reference, before, after, summary=summary)
             self.summaries = candidate
+            if hooks is not None:
+                await hooks.dispatch("PostCompact", hook_key, {"reference": reference, "source_start": start, "source_end": end, "before_bytes": before, "after_bytes": after})
             return True
         except asyncio.CancelledError:
             self._record("summary_failed", start, end, reference, before, before, reason="cancelled")

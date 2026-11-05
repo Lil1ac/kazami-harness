@@ -15,6 +15,8 @@ from agent_harness.schemas import DataModel, DelegationOrigin, RunManifest, RunR
 from agent_harness.storage.runs import RunHistory, RunStore, StorageError
 from agent_harness.subagents.profiles import PROFILES
 from agent_harness.subagents.reports import finalize_report, ReportDraft, collect_evidence
+from agent_harness.hooks.controller import HookPending
+from agent_harness.work.tasks import TaskError
 
 if TYPE_CHECKING:
     from agent_harness.context.builder import ContextBuilder
@@ -144,6 +146,7 @@ class SubagentController:
         self.attention = asyncio.Event()  # 子审批打断all等待，避免被兄弟长请求隐藏。
         self.team = None  # 根执行绑定持久团队控制器，普通C07委派不使用团队身份。
         self.inputs: "ContextBuilder | None" = None  # 首次模型输入准备后绑定固定约定、技能和记忆。
+        self.hook_lifecycle: set[tuple[str, str]] = set()  # 当段已发布的子执行起止事件，进度刷新不重复触发。
 
     @property
     def active(self) -> bool:
@@ -269,6 +272,11 @@ class SubagentController:
         record.elapsed_seconds, record.event_count = child.active_duration(), child.event_count
         record.cleanup_status = child.result.cleanup_status
         self.parent.emit("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
+        event = "SubagentStart" if record.status == "running" else "SubagentStop"
+        identity = (str(record.run_id), event)
+        if self.parent.hooks is not None and identity not in self.hook_lifecycle:
+            self.hook_lifecycle.add(identity)
+            self.parent.hooks.enqueue(event, str(record.run_id), {"subagent": record.model_dump(mode="json")})
 
     async def execute(self, name: str, arguments, *, team_assignment: dict | None = None) -> dict:
         """处理已校验name/arguments并返回委派回执；无效归属抛SubagentError。
@@ -618,6 +626,11 @@ class SubagentController:
             async def validate_delivery() -> str | None:
                 """核对当前实际答复及固定工具证据；仅开发格式错误且尚有预算时返回一次纠正提示，否则None收尾。"""
                 nonlocal report_retry
+                if child.hooks is not None:
+                    await child.hooks.drain()
+                    hook_feedback = await child.hooks.stop()
+                    if hook_feedback is not None:
+                        return hook_feedback
                 if record.role != "develop" or report_retry or child.available("model_turns") <= 0:
                     return None
                 events = self.report_events(child)
@@ -646,6 +659,13 @@ class SubagentController:
                 self.pause_requested = True
                 if record.pending_action is not None:
                     self.attention.set()
+        except HookPending:
+            result.execution_status, result.stop_reason = "waiting_input", "action_approval"
+            record.pending_action = executor.permissions.snapshot().pending
+            self.pause_requested = True
+            self.attention.set()
+        except TaskError as error:
+            result.execution_status, result.stop_reason = "failed", error.code
         except TimeoutError:
             result.execution_status, result.stop_reason, result.usage_complete = "timed_out", "subagent_timeout", False
         except asyncio.CancelledError:

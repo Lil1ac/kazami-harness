@@ -59,7 +59,9 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
   if (run.active)
     return {
       label:
-        run.phase === 'project_snapshot'
+        run.phase === 'hook_execution'
+          ? '执行 Hook'
+          : run.phase === 'project_snapshot'
           ? '整理代码改动'
           : run.phase === 'verification'
             ? isProject

@@ -84,6 +84,8 @@ def _phase(events: list[RunEvent]) -> str:
     current = "created"
     for event in events:
         current = "context_compaction" if event.type == "model_request_started" and event.payload.get("purpose") == "summary" else phases.get(event.type, current)
+        if event.type == "hook_record" and event.payload["hook"]["status"] in {"running", "waiting"}:
+            current = "hook_execution" if event.payload["hook"]["status"] == "running" else "action_approval"
         if event.type == "subagent_snapshot" and event.payload.get("subagent", {}).get("status") == "running":
             current = "subagent_execution"
         if event.type == "run_finished":
@@ -135,6 +137,21 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     verifier_pending = False  # 宿主验收已启动而未得到清理结论。
     cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
     for event in history.events:
+        if event.type in {"hooks_prepared", "hooks_restored"}:
+            from copy import deepcopy
+            result.hooks = deepcopy(event.payload["hooks"])
+        elif event.type == "hook_queued":
+            result.hooks.setdefault("queue", []).append(event.payload)
+        elif event.type == "hook_dequeued":
+            result.hooks["queue"] = [item for item in result.hooks.get("queue", []) if (item["event"], item["key"]) != (event.payload["event"], event.payload["key"])]
+        elif event.type == "hook_record":
+            record = event.payload["hook"]
+            records = result.hooks.setdefault("records", [])
+            result.hooks["records"] = [item for item in records if item["id"] != record["id"]] + [record]
+            if record["status"] == "running":
+                result.hooks["calls"] = result.hooks.get("calls", 0) + 1
+            elif record.get("seconds") is not None:
+                result.hooks["seconds"] = result.hooks.get("seconds", 0) + record["seconds"]
         if event.type == "command_snapshot":
             command = event.payload["command"]
             background_commands[command["id"]] = command["status"]
@@ -199,7 +216,8 @@ def _unfinished_result(history: RunHistory) -> RunResult:
         result.http_attempts += record.http_attempts
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             setattr(result.usage, key, getattr(result.usage, key) + record.usage.get(key, 0))
-    if (pending_commands or verifier_pending or any(value in {"starting", "running", "stopping"} for value in background_commands.values())) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
+    hook_running = any(item["status"] == "running" for item in result.hooks.get("records", []))
+    if (pending_commands or verifier_pending or hook_running or any(value in {"starting", "running", "stopping"} for value in background_commands.values())) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
         result.cleanup_status = "unknown"
     return result
 

@@ -3,6 +3,7 @@ import { Alert, Button, Form, Input, InputNumber } from 'antd';
 import { useState } from 'react';
 import { errorMessage, renameProject, saveProjectSettings } from '../api';
 import { cacheProject } from '../projects';
+import { HookSettings } from './HooksPanel';
 import type { LocalProjectOption, OptionsResponse } from '../types';
 
 /** 项目持久设置的表单值；仅保存配置，提交表单不执行命令。 */
@@ -160,6 +161,7 @@ export function ProjectSettingsPanel({ project }: { project: LocalProjectOption 
           )}
         </div>
       </Form>
+      <HookSettings projectId={project.id} />
     </>
   );
 }

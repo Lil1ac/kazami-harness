@@ -18,6 +18,7 @@ import { TasksPanel } from './TasksPanel';
 import { TeamPanel } from './TeamPanel';
 import { SubagentsPanel } from './SubagentsPanel';
 import { PermissionPanel } from './PermissionPanel';
+import { RunHooks } from './HooksPanel';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -155,6 +156,7 @@ function InspectorPanels({
             label: '诊断',
             children: (
               <div className="inspector-diagnostics">
+                <RunHooks snapshot={run.result.hooks} events={events.events} />
                 <details className="diagnostic-section" open>
                   <summary>执行轨迹</summary>
                   <EventTrail {...events} />

@@ -82,6 +82,8 @@ def create_app(
     install_memory_routes(app, manager)
     from agent_harness.web.runtime import install_runtime_routes
     install_runtime_routes(app, manager)
+    from agent_harness.web.hooks import install_hook_routes
+    install_hook_routes(app, manager)
 
     @app.exception_handler(ConversationError)
     async def conversation_error(request: Request, error: ConversationError) -> JSONResponse:

@@ -19,7 +19,7 @@ from agent_harness.work.tasks import TaskError
 
 
 def _parser() -> argparse.ArgumentParser:
-    """定义 run/show/serve 子命令和参数约束，交给 argparse 处理帮助信息与格式错误。"""
+    """定义 run/show/serve/hooks 参数，返回解析器；帮助与非法参数交给 argparse 处理。"""
     parser = argparse.ArgumentParser(prog="harness", description="Agent Harness 任务运行入口")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -50,6 +50,13 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", type=Path, help="任务默认运行配置TOML；网页仅能覆盖支持字段")
     serve.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="与CLI共用的运行记录根目录")
     serve.add_argument("--port", type=int, default=8765, help="本机监听端口，范围1至65535，默认8765")
+    hooks = commands.add_parser("hooks", help="查看、审核或启停项目生命周期脚本；不执行脚本")
+    hooks.add_argument("action", choices=["list", "trust", "enable", "disable"])
+    hooks.add_argument("--workspace", type=Path, required=True, help="已存在的实际项目目录")
+    hooks.add_argument("--config", type=Path, help="与运行相同的宿主 TOML")
+    hooks.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="与运行相同的记录和审核目录")
+    hooks.add_argument("--key", help="list 展示的 source:id")
+    hooks.add_argument("--fingerprint", help="实际审核的完整定义指纹；变化后拒绝")
     return parser
 
 
@@ -225,6 +232,33 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hooks(args: argparse.Namespace) -> int:
+    """按 args 查看/审核固定项目规则；输出 JSON 并返回 0，非法路径或过期指纹抛配置错误。"""
+    from agent_harness.hooks.catalog import HookStore, discover, review
+    from agent_harness.hooks.models import HookReview
+    try:
+        workspace = args.workspace.resolve(strict=True)
+        if not workspace.is_dir():
+            raise ValueError("not directory")
+    except (OSError, ValueError):
+        raise ConfigurationError("Hook 工作区必须是已存在的目录。") from None
+    store = HookStore(args.runs_dir)
+    policy = load_config(args.config).hooks
+    if args.action == "list":
+        items = discover(workspace, policy, store)
+    else:
+        if not args.key or not args.fingerprint:
+            raise ConfigurationError("审核和启停需要 --key 和 --fingerprint，请先 list 查看完整定义。")
+        from pydantic import ValidationError
+        try:
+            request = HookReview(key=args.key, fingerprint=args.fingerprint, action=args.action)
+        except ValidationError:
+            raise ConfigurationError("Hook 标识或定义指纹无效。") from None
+        items = review(workspace, policy, store, request)
+    print(json.dumps({"items": items}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """解析命令并分派操作，将配置、存储错误和用户中断转换为 CLI 退出码。"""
     # Windows 管道和不同终端编码下也保持中文 JSON 可读取。
@@ -233,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             output.reconfigure(encoding="utf-8")
     args = _parser().parse_args(argv)
     try:
-        handlers = {"run": _run, "show": _show, "serve": _serve}
+        handlers = {"run": _run, "show": _show, "serve": _serve, "hooks": _hooks}
         return handlers[args.command](args)
     except (ConfigurationError, TaskError) as exc:
         print(f"配置错误：{exc}", file=sys.stderr)

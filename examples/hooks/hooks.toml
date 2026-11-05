@@ -1,0 +1,11 @@
+# 将本文件复制到实际项目 .agents/hooks.toml，并先在设置页或 CLI 审核。
+# 示例不修改文件，只按工具名执行检查；解释器与脚本路径需按本机项目调整。
+[[hooks]]
+id = "protect-generated"
+event = "PreToolUse"
+argv = ["python", "hooks/protect_generated.py"]
+tools = ["write_file", "edit_file"]
+paths = ["generated/*"]
+required = true
+on_failure = "block"
+timeout_seconds = 10.0

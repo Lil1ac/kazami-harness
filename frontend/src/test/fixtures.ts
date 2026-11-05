@@ -30,6 +30,7 @@ export function makeJob(run: RunView = makeRun()): JobView {
 
 // 完整无密钥配置；与后端字段契约一致，测试不调用真实模型。
 export const config: RunConfig = {
+  hooks: { rules: [], project_enabled: true, max_calls: 64, max_seconds: 120, max_context_bytes: 8192 }, // 宿主扩展策略。
   permission_mode: 'workspace_edit', // 工作区文件自动编辑，本机命令仍需宿主审批。
   permission_policy: { read: 'allow', write: 'allow', command: 'ask', verification: 'ask', read_roots: ['.'], write_roots: ['.'], approval_ttl_seconds: 1800 },
   memory: { use: true, capture: true, max_input_bytes: 16384, max_entries: 6 }, // 与宿主默认一致。
@@ -104,6 +105,7 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
     config,
     context: null, // 默认模拟尚未记录上下文的历史任务。
     result: {
+      hooks: {}, // 尚未加载规则的运行快照。
       permissions: { mode: 'workspace_edit', policy_fingerprint: '', pending: null, effective: { read_file: 'allow', write_file: 'allow', edit_file: 'allow', run_command: 'ask', verification: 'ask' }, spent_model_turns: 0, spent_tool_calls: 0, spent_seconds: 0, spent_usage: {}, spent_usage_complete: true },
       planning: { phase: 'execution', reason: null, plans: [], pending: null, decisions: [] },
       schema_version: 1,

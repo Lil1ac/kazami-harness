@@ -14,6 +14,7 @@ vi.mock(
   '../api',
   /* 页面编辑不启动模型，提交使用可检查请求体的离线替身。 */ () => ({
     getOptions: vi.fn(),
+    getHooks: vi.fn(/* 设置默认没有项目脚本，读取不访问网络。 */ async () => ({ items: [], config_path: '/workspace/.agents/hooks.toml' })),
     createRun: vi.fn(),
     createProject: vi.fn(),
     openProject: vi.fn(),

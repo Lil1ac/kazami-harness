@@ -13,6 +13,7 @@ import { RunsPage } from './RunsPage';
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   getOptions: vi.fn(),
+  getHooks: vi.fn(/* 项目设置的默认扩展列表为空，不访问真实服务。 */ async () => ({ items: [], config_path: '/workspace/.agents/hooks.toml' })),
   saveProjectSettings: vi.fn(),
   renameProject: vi.fn(),
   createRun: vi.fn(),

@@ -163,6 +163,8 @@ class CommandController:
                           result=data, cleanup_status=data["cleanup_status"], finished_at=now())
             self.executor._command_result(data)
             self.publish(record)
+            if self.context.hooks is not None:
+                self.context.hooks.enqueue("CommandFinished", record["id"], {"command": record})
             return data
         except BaseException:
             # 存储或验证异常不得伪造成命令完成；历史保留最后快照以供重启核对。

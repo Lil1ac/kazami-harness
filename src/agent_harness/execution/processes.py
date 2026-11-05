@@ -251,11 +251,22 @@ class ProcessRunner:
             raise StorageError("刷新命令原始输出失败") from failure
         return status
 
+    async def _feed_stdin(self, stream: asyncio.StreamWriter, data: bytes) -> None:
+        """将有界 data 写入 stream 后关闭；返回 None，脚本提前关闭输入时忽略管道错误。"""
+        try:
+            stream.write(data)
+            await stream.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            stream.close()
+
     async def run(
         self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
         extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
         python_execution: PythonExecution | None = None,
         command_id: str | None = None, on_spawn: Callable[[int], None] | None = None,
+        stdin_bytes: bytes | None = None,
     ) -> dict:
         """执行程序并返回退出码、输出预览、原始引用和清理状态。
 
@@ -264,6 +275,7 @@ class ProcessRunner:
         固定验收变量，None 时不补充。python_execution 默认 None，非空时优先加入
         当轮工作区源码目录，命令 cwd 可为子目录。python_paths 默认 None，只供宿主
         验收添加 cwd 内的私有依赖，排在项目源码之后；两者均不继承父环境的 Python 注入项。
+        stdin_bytes=None 禁止输入；非空 bytes 最多 256KiB，供 Hook 的结构化事件协议使用。
         函数会创建输出文件并启动/必要时清理进程。
         存储故障抛 StorageError；取消附带 harness_process_result 后原样重新抛出，
         返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
@@ -271,6 +283,8 @@ class ProcessRunner:
         在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
         """
         timeout = self.limits.command_timeout_seconds if timeout_seconds is None else timeout_seconds
+        if stdin_bytes is not None and (not isinstance(stdin_bytes, bytes) or len(stdin_bytes) > 262144):
+            raise ValueError("命令标准输入必须为不超过256KiB的字节")
         if not argv or any(not isinstance(value, str) or "\x00" in value for value in argv) or not argv[0].strip():
             raise ValueError("命令参数必须是非空字符串数组")
         if not math.isfinite(timeout) or timeout <= 0:
@@ -311,7 +325,7 @@ class ProcessRunner:
             # Windows 桌面任务使用独立进程组并隐藏辅助控制台；输出仍完整保存在运行证据中。
             options = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-                *argv, cwd=cwd, env=child_env, stdin=asyncio.subprocess.DEVNULL,
+                *argv, cwd=cwd, env=child_env, stdin=asyncio.subprocess.DEVNULL if stdin_bytes is None else asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=65536, **options,
             ))
             try:
@@ -341,6 +355,8 @@ class ProcessRunner:
                     asyncio.create_task(self._capture_stream("stdout", process.stdout, capture)),
                     asyncio.create_task(self._capture_stream("stderr", process.stderr, capture)),
                 ]
+                if stdin_bytes is not None:
+                    readers.append(asyncio.create_task(self._feed_stdin(process.stdin, stdin_bytes)))
                 waiter = asyncio.create_task(process.wait())
                 tasks = [*readers, waiter]
                 if reason not in {"cancelled", "timeout"}:

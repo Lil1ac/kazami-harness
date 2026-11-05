@@ -226,6 +226,7 @@ class ConversationService:
             merged['system_prompt'] = self.manager.run_config.system_prompt
             merged['planning_policy'] = self.manager.run_config.planning_policy  # 权限策略始终取当前宿主，旧轮配置不能绕过强制规划。
             merged['permission_policy'] = self.manager.run_config.permission_policy.model_dump()  # 宿主收紧立即应用于接续，不能从旧轮继承放宽。
+            merged['hooks'] = self.manager.run_config.hooks.model_dump()  # 后续运行统一读取当前宿主扩展策略，旧轮只保留阅读快照。
             merged['skill_roots'] = list(self.manager.run_config.skill_roots)  # 技能来源使用当前宿主登记，选择默认沿用前轮。
             patch = request.config.model_dump(exclude_none=True, exclude_unset=True)
             for section in ('limits', 'context', 'memory'):

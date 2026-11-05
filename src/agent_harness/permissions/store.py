@@ -84,9 +84,13 @@ class PermissionStore:
                     if history.manifest.permission_resume is None or history.manifest.permission_resume.action_id != value["id"]:
                         raise StorageError("接续来源无法核对")
                     for event in history.events:
+                        if value.get("hook") and event.type == "hook_record" and event.payload["hook"].get("action_id") == value["id"]:
+                            hook_status = event.payload["hook"]["status"]
+                            if hook_status in {"completed", "failed", "cancelled"}:
+                                status = "executed" if hook_status == "completed" else "failed"
                         if value["name"] == "verification" and event.type == "verification_result":
                             status = "executed" if event.payload["verification"]["status"] == "passed" else "failed"
-                        elif event.type == "tool_result" and event.payload.get("call_id") == "resume_" + value["id"]:
+                        elif not value.get("hook") and event.type == "tool_result" and event.payload.get("call_id") == "resume_" + value["id"]:
                             status = "executed" if event.payload["result"]["ok"] else "failed"
                 except (StorageError, KeyError):
                     pass  # 日志缺失或不完整不能解释为动作未执行。

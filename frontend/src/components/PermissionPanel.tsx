@@ -94,6 +94,7 @@ function ActionContent({ action }: { action: PermissionAction }) {
   const command = action.name === 'run_command' || action.name === 'verification';
   return (
     <>
+      {action.hook && <><p>Hook：<strong>{action.hook.key}</strong> · {action.hook.event}</p><details><summary>本次事件输入</summary><pre>{JSON.stringify(action.hook.input, null, 2)}</pre></details></>}
       <div className="permission-target">
         <span>
           {command

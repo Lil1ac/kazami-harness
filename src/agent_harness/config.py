@@ -87,7 +87,7 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
     for source in sources:
         for key, value in source.items():
             # 预算、上下文和记忆策略逐字段覆盖；工具数组等值由高优先级来源整体替换。
-            if key in {"limits", "context", "memory", "permission_policy"} and isinstance(value, dict) and isinstance(merged[key], dict):
+            if key in {"limits", "context", "memory", "permission_policy", "hooks"} and isinstance(value, dict) and isinstance(merged[key], dict):
                 merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value

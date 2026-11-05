@@ -76,7 +76,8 @@ class PermissionController:
             "tools": self.manifest.config.tools, "workspace": str(self.workspace), "identity": [info.st_dev, info.st_ino],
             "phase": state.phase, "plan": None if plan is None else [plan.version, plan.status],
             "python": self.manifest.task.python_execution.model_dump(mode="json") if self.manifest.task.python_execution else None,
-            "verifier": self.manifest.task.verifier.model_dump(mode="json") if self.manifest.task.verifier else None})
+            "verifier": self.manifest.task.verifier.model_dump(mode="json") if self.manifest.task.verifier else None,
+            "hooks": self.manifest.config.hooks.model_dump(mode="json")})
 
     def decision(self, name: str) -> str:
         """返回工具 name 的有效判定；实时规划和子只读约束在实际入口再次检查。"""
@@ -134,10 +135,11 @@ class PermissionController:
             FILE_SCOPE.reset(token)
         return result
 
-    def check(self, name: str, arguments: dict, call_id: str = "") -> dict | None:
+    def check(self, name: str, arguments: dict, call_id: str = "", *, hook: dict | None = None, hook_operation: dict | None = None) -> dict | None:
         """在执行 name 前检查 arguments；允许返回 None，审批返回请求，拒绝抛 TaskError。
 
-        call_id 关联模型原调用或宿主验收；审批保存失败时不开放执行，不消费已有批准。
+        call_id 关联原调用；hook 固定脚本事件输入，hook_operation 固定原工具阶段，None 表示普通动作。
+        审批保存失败时不开放执行，不消费已有批准。
         """
         decision = self.decision(name)
         if decision == "deny":
@@ -149,6 +151,8 @@ class PermissionController:
             original = self.approved
             if original["name"] != name or original["arguments"] != arguments or original["inputs"] != inputs or original["policy_fingerprint"] != policy:
                 raise TaskError("permission_stale", "动作输入、工作区或权限发生变化，尚未执行。")
+            if hook is not None and (original.get("hook", {}).get("input") != hook["input"] or original.get("hook", {}).get("fingerprint") != hook["fingerprint"]):
+                raise TaskError("permission_stale", "Hook 事件输入或定义与本次批准不一致。")
             self.approved = None  # 临时单次许可不能被后续调用复用。
             return None
         if decision == "allow":
@@ -163,6 +167,12 @@ class PermissionController:
         if self.manifest.delegation is not None and self.manifest.delegation.role == "develop":
             value.update(source_run_id=str(self.manifest.delegation.parent_run_id),
                          child_parent_id=str(self.manifest.delegation.parent_run_id), child_run_id=str(self.manifest.run_id))
+        if hook is not None:
+            value["hook"] = hook
+        if hook_operation is not None:
+            value["hook_operation"] = hook_operation
+        if self.context.hooks is not None and (hook is not None or hook_operation is not None):
+            value["hook_definitions"] = {item["key"]: item["fingerprint"] for item in self.context.hooks.definitions}
         value["fingerprint"] = payload_digest(value)
         self.context.emit("permission_requested", {"action": value})
         self.store.save(value)
@@ -180,6 +190,15 @@ class PermissionController:
             return value
         if self.decision(value["name"]) == "deny" or value["policy_fingerprint"] != self.fingerprint() or value["inputs"] != self.inputs(value["name"], value["arguments"]):
             raise TaskError("permission_stale", "审批期间输入或权限发生变化，原动作未执行。")
+        if "hook_definitions" in value:
+            hooks = self.context.hooks
+            current = {item["key"]: item["fingerprint"] for item in hooks.definitions} if hooks is not None else {}
+            if current != value["hook_definitions"]:
+                raise TaskError("hook_definition_changed", "审批期间 Hook 定义或脚本发生变化，原动作未执行。")
+            if value.get("hook"):
+                item = next((entry for entry in hooks.definitions if entry["key"] == value["hook"]["key"]), None)
+                if item is None or not item["trusted"] or not item["enabled"]:
+                    raise TaskError("hook_definition_changed", "Hook 未审核或已禁用，旧批准不会执行。")
         value = self.store.claim(value["id"], str(self.manifest.run_id))
         if self.manifest.delegation is not None:
             value["execution_child_parent_id"] = str(self.manifest.delegation.parent_run_id)

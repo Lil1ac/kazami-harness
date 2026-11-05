@@ -20,6 +20,7 @@ import type { ConversationSummary, ConversationView, LocalProjectOption } from '
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   getOptions: vi.fn(),
+  getHooks: vi.fn(/* 导航场景读取空扩展列表，不触发网络或脚本。 */ async () => ({ items: [], config_path: '/workspace/.agents/hooks.toml' })),
   getConversations: vi.fn(),
   getConversation: vi.fn(),
   getRun: vi.fn(),

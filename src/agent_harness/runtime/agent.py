@@ -17,6 +17,7 @@ from agent_harness.tools.registry import ToolExecutor
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.storage.sessions import SessionError, history_messages, payload_digest
 from agent_harness.execution.workspace import Workspace
+from agent_harness.hooks.controller import HookController, HALT_HOOK_ERRORS
 
 if TYPE_CHECKING:
     from agent_harness.runtime.runner import RunContext
@@ -194,6 +195,10 @@ async def _run_agent(
         if memory_history_changed:
             context.emit("memory_history_projected", {"reason": "旧轮记忆工具结果由新轮项目记忆替代，旧摘要不直接继承。"})
     archive = ContextArchive(context.store.run_dir, context.manifest)
+    hooks = getattr(executor, "hooks", None)
+    if hooks is not None and (context.manifest.permission_resume is not None or context.manifest.execution_resume is not None or delegation is not None and delegation.previous_run_id is not None):
+        hooks.restore(parent)
+        context.emit("hooks_restored", {"hooks": hooks.snapshot})
     compressor = ContextCompressor(context, builder, archive)
     if hasattr(executor, "bind_context") and config.context.compression != "off":
         executor.bind_context(archive)
@@ -240,6 +245,9 @@ async def _run_agent(
         raise AgentStopped("failed", skill_error.code)
     if parent is not None and not memory_history_changed:
         compressor.inherit(parent, messages, executor.definitions)
+    if hooks is not None and context.manifest.permission_resume is None and context.manifest.execution_resume is None and not (delegation is not None and delegation.previous_run_id is not None):
+        await hooks.dispatch("RunStart", "start", {"prompt": context.manifest.task.prompt})
+        hooks.deliver(messages)
     permissions = getattr(executor, "permissions", None)
     resume = context.manifest.permission_resume
     if resume is not None and resume.child_run_id is None:
@@ -253,7 +261,16 @@ async def _run_agent(
                 context.result.final_answer = "已拒绝本次动作。" if resume.decision == "reject" else "已取消动作等待。"
                 raise AgentStopped("cancelled", "permission_rejected" if resume.decision == "reject" else "permission_cancelled")
             context.emit("permission_resuming", {"action_id": action["id"], "source_run_id": action["source_run_id"]})
-            if action["name"] == "verification":
+            hook_action = action.get("hook")
+            if hook_action is not None and hook_action["origin"]["kind"] == "event":
+                context.result.final_answer = hook_action.get("final_answer")
+                await hooks.dispatch(hook_action["event"], hook_action["event_key"], hook_action["payload"], origin=hook_action["origin"])
+                if hook_action["event"] == "Stop":
+                    feedback = await on_completion() if on_completion is not None else None
+                    if feedback is None:
+                        return
+                    messages.append({"role": "user", "content": feedback})
+            elif action["name"] == "verification":
                 context.result.final_answer = action["final_answer"]
                 feedback = await on_completion() if on_completion is not None else None
                 permissions.finish(action, context.result.validation_status == "passed")
@@ -262,7 +279,10 @@ async def _run_agent(
                 messages.append({"role": "user", "content": feedback})
             else:
                 # 宿主接续原动作不消耗新的模型请求或工具额度，也不伪装成供应商新响应。
-                call = ToolCall("resume_" + action["id"], action["name"], json.dumps(action["arguments"], ensure_ascii=False))
+                origin = hook_action["origin"] if hook_action is not None else action.get("hook_operation")
+                if origin is not None:
+                    hooks.resume_operation = origin
+                call = ToolCall("resume_" + action["id"], origin["name"] if origin is not None else action["name"], origin["arguments_json"] if origin is not None else json.dumps(action["arguments"], ensure_ascii=False))
                 message = {"role": "assistant", "content": None, "tool_calls": [{"id": call.call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments_json}}]}
                 context.emit("assistant_message", {"source": "host_action_resume", "action_id": action["id"], "message": message})
                 messages.append(message)
@@ -280,7 +300,10 @@ async def _run_agent(
                         permissions.finish(action, False)
                     raise
                 _record_tool(context, call, result, messages)
-                permissions.finish(action, bool(result.get("ok")))
+                if hook_action is None:
+                    permissions.finish(action, bool(result.get("ok")) or bool((result.get("data") or {}).get("tool_executed")))
+                if (result.get("error") or {}).get("code") == "approval_required":
+                    raise AgentStopped("waiting_input", "action_approval")
                 if not result.get("ok"):
                     raise AgentStopped("failed", (result.get("error") or {}).get("code", "permission_action_failed"))
         except TaskError as error:
@@ -305,6 +328,9 @@ async def _run_agent(
             await control.boundary(executor)
             control.deliver(messages)
         _command_notifications(context, commands, messages)
+        if hooks is not None:
+            await hooks.drain()
+            hooks.deliver(messages)
         if team is not None and team.member_id is None:
             state = team.snapshot()
             if state and state["parent_run_id"] == str(context.manifest.run_id) and state["status"] in {"stopping", "stopped"}:
@@ -393,6 +419,10 @@ async def _run_agent(
                 continue
             if _command_notifications(context, commands, messages):
                 continue  # 模型请求期间完成的后台命令也必须交回模型核对，不能直接交付旧答复。
+            if hooks is not None:
+                await hooks.drain()
+                if hooks.deliver(messages):
+                    continue
             if controller is not None and controller.pending_reports:
                 reports = await controller.wait_all()
                 messages.append({"role": "user", "content": "子研究已结束，请核对报告后交付：" + json.dumps(reports, ensure_ascii=False)})
@@ -467,8 +497,14 @@ async def _run_agent(
                 if (result.get("error") or {}).get("code") == "approval_required":
                     for remaining in batch[index + 1:]:
                         _record_tool(context, remaining, _skipped("skipped_action_approval"), messages)
-                    context.result.final_answer = "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
+                    context.result.final_answer = "原工具已执行，Hook 后处理等待批准；后续操作已停止。" if (result.get("data") or {}).get("tool_executed") else "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
                     raise AgentStopped("waiting_input", "action_approval")
+                hook_error = (result.get("error") or {}).get("code")
+                if hook_error in HALT_HOOK_ERRORS:
+                    for remaining in batch[index + 1:]:
+                        _record_tool(context, remaining, _skipped("skipped_hook_failure"), messages)
+                    context.result.final_answer = result["error"]["message"]
+                    raise AgentStopped("failed", hook_error)
                 if call.name in {"delegate_readonly", "delegate_develop", "team_dispatch"} and context.manifest.delegation is None:
                     if (result.get("data") or {}).get("accepted") and index + 1 < len(batch) and batch[index + 1].name in {"delegate_readonly", "delegate_develop"}:
                         continue  # 同批独立研究可并发接纳；后续修改仍由交接屏障跳过。
@@ -550,6 +586,10 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
         context.result.permissions = executor.permissions.state.model_copy(deep=True)
         context.emit("permissions_prepared", {"state": context.result.permissions.model_dump(mode="json")})
     try:
+        if isinstance(executor, ToolExecutor):
+            executor.hooks = HookController(context, executor)
+            context.hooks = executor.hooks
+            context.emit("hooks_prepared", {"hooks": executor.hooks.snapshot})
         await _run_agent(context, client, executor, on_completion=on_completion, inherited_context=inherited_context)
     finally:
         FILE_SCOPE.reset(token)

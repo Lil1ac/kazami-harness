@@ -4,6 +4,7 @@ import { CheckOutlined, UndoOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { errorMessage, getOptions, saveDesktopSettings } from '../api';
 import { DesktopCredentials } from '../components/DesktopCredentials';
+import { HookSettings } from '../components/HooksPanel';
 import { effectiveConfig, useConfigDraft } from '../config';
 import type { OptionsResponse, RunConfig, RunLimits, ToolName } from '../types';
 
@@ -244,6 +245,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
           <p className="muted">上下文、重试与输出限制由宿主 TOML 配置维护。</p>
         </aside>
       </div>
+      <HookSettings projects={options.recent_projects} />
     </div>
   );
 }

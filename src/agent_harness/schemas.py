@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
 from agent_harness.execution.budget import RunBudget
+from agent_harness.hooks.models import HookPolicy
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -245,6 +246,7 @@ class MemoryPolicy(MemorySelection):
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
 class RunConfig(DataModel):
+    hooks: HookPolicy = Field(default_factory=HookPolicy)  # 宿主规则及扩展开销上限，页面不能覆盖。
     permission_policy: PermissionPolicy = Field(default_factory=PermissionPolicy)  # 宿主权限上限，网页不能覆盖。
     permission_mode: PermissionMode = "workspace_edit"  # 会话研究、工作区编辑或严格审批模式。
     memory: MemoryPolicy = Field(default_factory=MemoryPolicy)  # 每轮冻结使用/学习选择及宿主注入限额。
@@ -617,6 +619,7 @@ class VerificationAttempt(DataModel):
 
 # 一次运行的当前或最终结果，分别记录执行、验收、清理状态以及回答与计数。
 class RunResult(DataModel):
+    hooks: dict = Field(default_factory=dict)  # 固定 Hook 定义、调用记录及累计开销；不回查当前审核状态。
     permissions: PermissionState = Field(default_factory=PermissionState)  # 当轮固定授权、待审批动作及此前预算。
     subagent_report: SubagentReport | None = None  # 子运行结束时核验并固定的报告；根运行为空。
     subagents: list[SubagentRecord] = Field(default_factory=list)  # 该轮委派快照，旧轮不查询新轮状态。

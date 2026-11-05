@@ -1,5 +1,7 @@
 # Agent Harness
 
+项目可通过 `.agents/hooks.toml` 配置工具前检查、写入后格式化、后台命令结束及完成检查等生命周期动作。先在运行配置或项目设置审核定义，执行仍遵守原命令权限；CLI 提供 `harness hooks list/trust/enable/disable`。配置、审批接续和事件协议见 [Hooks](docs/HOOKS.md)，示例见 [examples/hooks](examples/hooks/hooks.toml)。
+
 面向后端开发者的本地代码任务工作台，以 Windows 桌面端为主要入口，支持直接修改所选目录、可选独立工作树、项目测试和代码差异。Electron 桌面端、CLI 与网页共用一个 Python Runner，支持模型多轮调用、读取/搜索/写入文件、执行命令、保存轨迹和产物，以及可选的宿主独立验收。
 
 当前提供本地单用户、单任务控制台。任务产物可以是代码、文本、CSV 等格式；没有验收器时保持“未验收”。任务结束后可在详情页追加要求，继承会话历史和已有代码，在独立新一轮中执行、测试和审阅；使用与边界见 [多轮任务交互](docs/MULTITURN_TASKS.md)。当前阶段、后续路线、目录职责和完整文档导航见 [PROJECT.md](PROJECT.md)。

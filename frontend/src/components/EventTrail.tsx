@@ -7,6 +7,14 @@ import { toolFailureMessage } from '../activity';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
+  hooks_prepared: '固定 Hooks 定义',
+  hooks_restored: '接续 Hooks 阶段与开销',
+  hook_record: 'Hook 执行状态',
+  hook_tool_receipt: '保存原工具回执',
+  hook_feedback: '交付 Hook 反馈',
+  hook_stop_retry: '按完成检查继续处理',
+  hook_queued: '接纳生命周期事件',
+  hook_dequeued: '生命周期事件已处理',
   permissions_prepared: '固定执行权限',
   permission_requested: '等待动作审批',
   permission_resuming: '按批准接续原动作',
@@ -65,6 +73,11 @@ const connectionLabels: Record<ConnectionState, string> = {
 /** 根据已知事件生成简短摘要；不尝试将工具内容当 HTML 或 Markdown 执行。 */
 function eventSummary(event: RunEvent): string {
   const payload = event.payload;
+  if (event.type === 'hook_record') {
+    const hook = payload.hook as { key: string; event: string; status: string };
+    const labels: Record<string, string> = { running: '执行中', waiting: '等待批准', completed: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过' }; // 保持脚本状态独立于原工具。
+    return `${hook.key} · ${hook.event} · ${labels[hook.status] || hook.status}`;
+  }
   if (event.type === 'subagent_snapshot')
     return String((payload.subagent as { title?: string } | undefined)?.title || '只读委派');
   if (event.type === 'repair_started') return `第 ${String(payload.repair_attempt)} / 2 次修复`;

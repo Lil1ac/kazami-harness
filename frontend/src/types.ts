@@ -28,6 +28,7 @@ export interface PermissionPolicy {
 
 /** 一条不可变动作及当前处理状态；历史快照保留当时状态。 */
 export interface PermissionAction {
+  hook?: { key: string; event: string; input: Record<string, unknown>; fingerprint: string }; // Hook 本次命令的固定事件输入，独立于脚本审核。
   child_run_id?: string; // 开发子项动作的来源，无值表示根动作。
   child_parent_id?: string; // 原子日志父归属，不授予新权限。
   id: string; // 动作UUID。
@@ -235,6 +236,7 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  hooks: { rules: import('./hookTypes').HookRule[]; project_enabled: boolean; max_calls: number; max_seconds: number; max_context_bytes: number }; // 宿主扩展策略，只读。
   permission_policy: PermissionPolicy; // 当前宿主权限上限，只读。
   permission_mode: PermissionMode; // 当前会话权限模式。
   memory: MemoryPolicy; // 独立控制本轮读取与候选，宿主预算只读。
@@ -284,6 +286,7 @@ export interface VerificationAttempt {
 
 /** 当前或最终执行结果；执行、验收和清理状态必须分别解释。 */
 export interface RunResult {
+  hooks: import('./hookTypes').HookSnapshot; // 当轮固定生命周期扩展证据。
   team?: TeamState | null; // 当轮固定团队事实，历史不回查新轮。
   permissions: PermissionState; // 本轮权限和动作等待的固定事实。
   subagents?: SubagentRecord[]; // 本轮只读委派；次数及用量已经包含在本轮总数。

@@ -27,6 +27,19 @@ import type {
   CommandOutput,
   CommandExecution,
 } from './runtimeTypes';
+import type { HookCatalog } from './hookTypes';
+
+/** 读取已登记 projectId 的规则；返回当前定义，不执行脚本。 */
+export function getHooks(projectId: string): Promise<HookCatalog> {
+  return request(`/api/hooks?project_id=${encodeURIComponent(projectId)}`);
+}
+
+/** 对当前定义 key/fingerprint 审核或启停；返回新目录，定义变化由后端拒绝。 */
+export function reviewHook(projectId: string, key: string, fingerprint: string, action: 'trust' | 'enable' | 'disable'): Promise<HookCatalog> {
+  return request(`/api/hooks/review?project_id=${encodeURIComponent(projectId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, fingerprint, action }),
+  });
+}
 
 /** 读取 runId 控制与父子命令；返回持久快照，不触发执行。 */
 export function getRuntime(runId: string): Promise<RuntimeView> {

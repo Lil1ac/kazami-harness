@@ -220,6 +220,7 @@ export function useConversationSend(
         run &&
         run.run_id === conversation.latest_run_id &&
         !run.active &&
+        run.result.stop_reason !== 'user_paused' &&
         !permissionBlocked &&
         text.trim(),
       ));
@@ -306,7 +307,33 @@ export function useConversationSend(
     setPending(submission);
     mutation.mutate(submission);
   }
+
+  /** 明确恢复安全暂停；创建新段且不提交配置覆盖，返回 void，未就绪时忽略。 */
+  function resume(): void {
+    if (
+      inFlight.current ||
+      pending ||
+      !run ||
+      run.active ||
+      run.result.stop_reason !== 'user_paused' ||
+      !conversation.can_continue
+    )
+      return;
+    const submission: PendingSend = {
+      parentId: conversation.latest_run_id,
+      body: {
+        request_id: crypto.randomUUID(),
+        prompt:
+          '恢复暂停前的工作。先核对当前代码、未完成任务及已保存执行证据；不重放旧工具，继续沿用原授权和剩余预算。',
+        resume: true,
+      },
+    };
+    inFlight.current = true;
+    setPending(submission);
+    mutation.mutate(submission);
+  }
   return {
+    resume,
     permissionBlocked,
     permissionMode,
     setPermissionMode,

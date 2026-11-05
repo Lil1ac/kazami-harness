@@ -4,7 +4,17 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getRun, getTasks, createFollowup, getConversation, getDiff, reviewRun } from '../api';
+import {
+  getRun,
+  getTasks,
+  createFollowup,
+  getConversation,
+  getDiff,
+  reviewRun,
+  getRuntime,
+  sendRuntimeInput,
+  pauseRuntime,
+} from '../api';
 import { ConfigDraftProvider } from '../config';
 import { makeProject, makeRun, makeJob, jobRuns } from '../test/fixtures';
 import type { ConversationView, RunView, JobView } from '../types';
@@ -15,6 +25,9 @@ vi.mock(
   '../api',
   /* 只模拟HTTP边界，组件、缓存、输入和幂等状态使用真实实现。 */ () => ({
     getConversation: vi.fn(),
+    getRuntime: vi.fn(),
+    sendRuntimeInput: vi.fn(),
+    pauseRuntime: vi.fn(),
     createFollowup: vi.fn(),
     getRun: vi.fn(),
     getTasks: vi.fn(),
@@ -109,6 +122,18 @@ beforeEach(
     vi.resetAllMocks();
     vi.mocked(getRun).mockImplementation(async (id) => jobRuns.get(id) || makeRun({ run_id: id }));
     vi.mocked(getTasks).mockResolvedValue({ revision: 0, items: [] });
+    vi.mocked(getRuntime).mockResolvedValue({
+      state: {
+        run_id: 'run-a',
+        session_id: 'run-a',
+        status: 'running',
+        messages: [],
+        checkpoint: null,
+        finished_at: null,
+      },
+      commands: [],
+      active: true,
+    });
     sessionStorage.clear();
     vi.mocked(getConversation).mockResolvedValue(conversation());
     vi.mocked(getDiff).mockResolvedValue({ content: '+fixed', truncated: false, size_bytes: 6 });
@@ -171,6 +196,74 @@ it('批准操作经真实发送Hook绑定当前请求和版本，重复点击不
   );
 });
 
+it('执行中可以补充约束并安全暂停，重复确认保持原正文与请求编号', async () => {
+  const user = userEvent.setup();
+  const run = makeRun({ active: true });
+  run.result.execution_status = 'running';
+  vi.mocked(getConversation).mockResolvedValue(
+    conversation({ can_continue: false, blocked_code: 'run_busy', blocked_reason: '任务运行中' }),
+  );
+  vi.mocked(sendRuntimeInput)
+    .mockRejectedValueOnce(new Error('响应丢失'))
+    .mockResolvedValue({
+      id: 'receipt',
+      prompt: '不要修改配置',
+      delivery: 'steer',
+      status: 'received',
+      created_at: '',
+      consumers: {},
+      job_id: null,
+      error: null,
+    });
+  vi.mocked(pauseRuntime).mockResolvedValue({
+    run_id: 'run-a',
+    session_id: 'run-a',
+    status: 'pausing',
+    messages: [],
+    checkpoint: null,
+    finished_at: null,
+  });
+  show(run);
+  await user.type(await screen.findByRole('textbox', { name: '输入消息' }), '不要修改配置');
+  await user.click(await screen.findByRole('button', { name: '发送消息' }));
+  expect(await screen.findByText('响应丢失')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '重试确认' }));
+  await waitFor(
+    /* 宿主接纳确认后清除对应草稿，操作不创建独立续轮。 */ () =>
+      expect(screen.getByRole('textbox', { name: '输入消息' })).toHaveValue(''),
+  );
+  expect(sendRuntimeInput).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(sendRuntimeInput).mock.calls[0]).toEqual(
+    vi.mocked(sendRuntimeInput).mock.calls[1],
+  );
+  expect(vi.mocked(sendRuntimeInput).mock.calls[0][1]).toMatchObject({
+    prompt: '不要修改配置',
+    delivery: 'steer',
+  });
+  expect(createFollowup).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '暂停' }));
+  expect(pauseRuntime).toHaveBeenCalledWith('run-a', expect.any(String));
+});
+
+it('安全暂停只从恢复入口接续，发送载荷不覆盖原预算或权限', async () => {
+  const user = userEvent.setup();
+  const run = makeRun();
+  run.result.execution_status = 'waiting_input';
+  run.result.stop_reason = 'user_paused';
+  vi.mocked(createFollowup).mockResolvedValue(makeJob(makeRun({ run_id: 'run-b' })));
+  vi.mocked(getRun).mockResolvedValue(makeRun({ run_id: 'run-b' }));
+  show(run);
+  await user.click(await screen.findByRole('button', { name: '恢复执行' }));
+  await waitFor(
+    /* 只沿用宿主检查点，页面不构造累计预算。 */ () =>
+      expect(createFollowup).toHaveBeenCalledOnce(),
+  );
+  const body = vi.mocked(createFollowup).mock.calls[0][1];
+  expect(body.resume).toBe(true);
+  expect(body.config).toBeUndefined();
+  expect(body.action_decision).toBeUndefined();
+});
+
 it('发送实际载荷，服务确认前显示发送中，确认后交付真实新轮', async () => {
   // pending用户消息不会被伪装成真实Agent回答。
   const user = userEvent.setup();
@@ -191,7 +284,11 @@ it('发送实际载荷，服务确认前显示发送中，确认后交付真实�
   expect(createFollowup).toHaveBeenCalledWith('run-a', {
     request_id: expect.stringMatching(/^[a-f0-9-]{36}$/),
     prompt: '补充类型提示',
-    config: { permission_mode: 'workspace_edit', auto_repair: false, memory: { use: true, capture: true } },
+    config: {
+      permission_mode: 'workspace_edit',
+      auto_repair: false,
+      memory: { use: true, capture: true },
+    },
   });
   accept(makeJob(makeRun({ run_id: 'run-b' })));
   await waitFor(
@@ -281,17 +378,34 @@ it('Enter发送、Shift+Enter换行，输入法选字不触发提交且连续Ent
   expect(vi.mocked(createFollowup).mock.calls[0][1].prompt).toBe('第一行\n第二行');
 });
 
-it('运行中可编辑下一条，但禁止新提交', async () => {
-  // 活动任务不会被编辑或Enter打断。
+it('运行中输入经独立收件箱接纳，不并发创建新的会话运行', async () => {
+  // 活动任务继续执行，新输入在安全边界交付。
   const user = userEvent.setup();
   vi.mocked(getConversation).mockResolvedValue(
     conversation({ can_continue: false, blocked_code: 'run_busy', blocked_reason: '等待执行结束' }),
   );
   show(makeRun({ active: true, phase: 'model' }));
+  vi.mocked(sendRuntimeInput).mockResolvedValue({
+    id: 'message-next',
+    prompt: '下一条要求',
+    delivery: 'steer',
+    status: 'received',
+    created_at: '',
+    consumers: {},
+    job_id: null,
+    error: null,
+  });
   await user.type(await screen.findByLabelText('输入消息'), '下一条要求');
   await user.keyboard('{Enter}');
   expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled();
-  expect(screen.getByLabelText('输入消息')).toHaveValue('下一条要求');
+  await waitFor(
+    /* 清空已经确认的正文，不发起新的 Runner。 */ () =>
+      expect(screen.getByLabelText('输入消息')).toHaveValue(''),
+  );
+  expect(sendRuntimeInput).toHaveBeenCalledWith(
+    'run-a',
+    expect.objectContaining({ prompt: '下一条要求', delivery: 'steer' }),
+  );
   expect(createFollowup).not.toHaveBeenCalled();
 });
 
@@ -355,29 +469,59 @@ it('丢弃最新工作树后及时禁止发送，保留已编辑草稿', async (
   expect(createFollowup).not.toHaveBeenCalled();
 });
 
-
 it('证书校验失败在当前会话直接说明原因，历史记录保持真实终态', async () => {
   // 使用服务端原有stop_reason字段，避免只在诊断面板显示技术码。
   const run = makeRun();
   run.result.execution_status = 'failed';
   run.result.stop_reason = 'model_tls_verification';
   const view = conversation();
-  Object.assign(view.turns[0], { final_answer: null, execution_status: 'failed', validation_status: 'unverified', stop_reason: 'model_tls_verification' });
+  Object.assign(view.turns[0], {
+    final_answer: null,
+    execution_status: 'failed',
+    validation_status: 'unverified',
+    stop_reason: 'model_tls_verification',
+  });
   vi.mocked(getConversation).mockResolvedValue(view);
   show(run);
-  expect(await screen.findByText('模型服务证书校验失败，本次执行没有最终回答。')).toBeInTheDocument();
+  expect(
+    await screen.findByText('模型服务证书校验失败，本次执行没有最终回答。'),
+  ).toBeInTheDocument();
   expect(screen.getByText('模型服务证书校验失败')).toBeInTheDocument();
   expect(createFollowup).not.toHaveBeenCalled();
 });
-
 
 it('尚无子执行时已能打开团队，工作栏统计稳定成员数', async () => {
   const user = userEvent.setup();
   const run = makeRun({ run_id: 'run-a' });
   run.result.subagents = [];
   run.result.team = {
-    id: 'team-1', title: '前后端', revision: 1, status: 'active', generation: 0, stage_run_id: 'stage-1', stage_ready: false, tasks: [], messages: [], error: null, cleanup_status: 'not_needed',
-    members: ['后端', '前端'].map(/* 只构造稳定身份，未请求任何成员模型。 */ (name) => ({ id: name, name, write_scope: ['.'], status: 'idle', active_run_id: null, task_id: null, runs: [], summary: '', model_turns: 0, tool_calls: 0, total_tokens: 0, usage_complete: true })),
+    id: 'team-1',
+    title: '前后端',
+    revision: 1,
+    status: 'active',
+    generation: 0,
+    stage_run_id: 'stage-1',
+    stage_ready: false,
+    tasks: [],
+    messages: [],
+    error: null,
+    cleanup_status: 'not_needed',
+    members: ['后端', '前端'].map(
+      /* 只构造稳定身份，未请求任何成员模型。 */ (name) => ({
+        id: name,
+        name,
+        write_scope: ['.'],
+        status: 'idle',
+        active_run_id: null,
+        task_id: null,
+        runs: [],
+        summary: '',
+        model_turns: 0,
+        tool_calls: 0,
+        total_tokens: 0,
+        usage_complete: true,
+      }),
+    ),
   };
   const { onInspect } = show(run);
   await user.click(await screen.findByRole('button', { name: /团队.*2/ }));

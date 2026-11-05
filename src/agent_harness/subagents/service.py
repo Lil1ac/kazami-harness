@@ -462,7 +462,7 @@ class SubagentController:
             self.check_errors()
 
     async def resume_children(self) -> list[dict]:
-        """从父清单绑定的审批恢复开发上下文并返回全部报告；拒绝时零模型、零工具。
+        """从父清单绑定的具体审批或安全暂停恢复子上下文并返回报告；拒绝时零模型、零工具。
 
         保存兄弟终态与待审批动作，只接续已批准子项及安全暂停子项；旧工具回执只读继承。
         父与子均扣除各自累计预算，旧工作树复用，结果未知或环境变化不自动重放。
@@ -478,11 +478,15 @@ class SubagentController:
         records = [item.model_copy(deep=True) for item in previous.result.subagents]
         for item in records:
             item.log_parent_id = item.log_parent_id or previous.manifest.run_id
-        target = next((item for item in records if str(item.run_id) == resume.child_run_id
-                       and str(item.log_parent_id) == resume.child_parent_id), None)
-        if target is None or target.pending_action is None or target.pending_action["id"] != resume.action_id:
+        target = None
+        if resume is not None:
+            target = next((item for item in records if str(item.run_id) == resume.child_run_id
+                           and str(item.log_parent_id) == resume.child_parent_id), None)
+            if target is None or target.pending_action is None or target.pending_action["id"] != resume.action_id:
+                raise AgentStopped("failed", "subagent_resume_unverified")
+        elif parent.manifest.execution_resume is None or previous.result.stop_reason != "user_paused" or any(item.pending_action is not None for item in records):
             raise AgentStopped("failed", "subagent_resume_unverified")
-        if resume.decision != "approve":
+        if resume is not None and resume.decision != "approve":
             target.pending_action, target.status, target.stop_reason = None, "cancelled", "permission_" + resume.decision
             parent.result.subagents = records
             if target.team_id is not None:
@@ -508,8 +512,10 @@ class SubagentController:
             config.permission_policy = parent.manifest.config.permission_policy.model_copy(deep=True)
             config.permission_mode = parent.manifest.config.permission_mode
             from agent_harness.subagents.workspaces import intersect_scope
-            scope = intersect_scope(record.write_scope, config.permission_policy.write_roots)
-            config.permission_policy.write_roots = scope
+            developing = record.role == "develop"
+            scope = intersect_scope(record.write_scope, config.permission_policy.write_roots) if developing else []
+            if developing:
+                config.permission_policy.write_roots = scope
             allowed = PROFILES[record.role].tools.intersection(self.executor._enabled_names())
             if record.team_id is not None:
                 from agent_harness.teams.models import MEMBER_TOOLS
@@ -526,23 +532,24 @@ class SubagentController:
                 raise AgentStopped("limit_exceeded", "subagent_budget_exhausted")
             config.limits = config.limits.model_copy(update={"max_model_turns": spent_turns + turns, "max_tool_calls": spent_calls + calls})
             child_resume = None
-            if record is target:
+            if resume is not None and record is target:
                 child_resume = PermissionResume(action_id=resume.action_id, decision="approve",
                     spent_model_turns=spent_turns, spent_tool_calls=spent_calls, spent_seconds=spent_seconds,
                     spent_usage={key: state.spent_usage.get(key, 0) + getattr(history.result.usage, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},
                     spent_usage_complete=state.spent_usage_complete and history.result.usage_complete)
             identifier = uuid4()
-            preset = ProjectPreset(id="delegation", label="开发子任务", path=Path(self.executor.project_manager.get(record.run_id).repository))
-            await _file_operation(self.executor.project_manager.prepare_turn, preset, record.run_id, identifier)
-            projects = self.executor.project_manager
-            owned = projects._ownership(identifier)
-            owned["delegation_parent_id"] = str(parent.manifest.run_id)
-            owned["delegation_scope"] = scope
-            projects._write_json(projects._metadata_dir(identifier) / "ownership.json", owned)
+            if developing:
+                preset = ProjectPreset(id="delegation", label="开发子任务", path=Path(self.executor.project_manager.get(record.run_id).repository))
+                await _file_operation(self.executor.project_manager.prepare_turn, preset, record.run_id, identifier)
+                projects = self.executor.project_manager
+                owned = projects._ownership(identifier)
+                owned["delegation_parent_id"] = str(parent.manifest.run_id)
+                owned["delegation_scope"] = scope
+                projects._write_json(projects._metadata_dir(identifier) / "ownership.json", owned)
             manifest = RunManifest(run_id=identifier, session_id=parent.manifest.session_id or parent.manifest.run_id,
                 task=old.task, config=config, origin=old.origin, planning=parent.manifest.planning.model_copy(deep=True),
                 permission_resume=child_resume,
-                delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role="develop", task_id=record.task_id,
+                delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=record.role, task_id=record.task_id,
                     write_scope=scope, previous_parent_id=record.log_parent_id, previous_run_id=record.run_id,
                     team_id=record.team_id, team_member_id=record.team_member_id))
             # 安全暂停没有待执行动作，但同样要继承此前预算；单独由启动器初始化，不能伪造审批。
@@ -556,7 +563,8 @@ class SubagentController:
                 assignment = {"team_id": record.team_id, "member_id": record.team_member_id, "task_id": str(record.task_id),
                               "dependency_versions": item["dependency_versions"], "stage_run_id": team_state["stage_run_id"]}
                 self.team.started(assignment, new_record)
-            self.executor.tasks.service.claim_delegation(str(record.task_id), str(identifier), team_claim=assignment)
+            if developing:
+                self.executor.tasks.service.claim_delegation(str(record.task_id), str(identifier), team_claim=assignment)
             await self._launch(manifest, new_record, allowed, self.inputs, spent=history.result.permissions.model_copy(update={
                 "spent_model_turns": spent_turns, "spent_tool_calls": spent_calls, "spent_seconds": spent_seconds,
                 "spent_usage": {key: state.spent_usage.get(key, 0) + getattr(history.result.usage, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},

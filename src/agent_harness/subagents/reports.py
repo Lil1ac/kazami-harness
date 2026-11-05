@@ -43,6 +43,8 @@ def collect_evidence(events: list[RunEvent], *, role: str = "explore") -> list[S
         if not result.get("ok"):
             continue
         data = result.get("data") or {}
+        if event.payload["name"] == "read_command" or (event.payload["name"] == "run_command" and data.get("accepted")):
+            continue  # 启动句柄或输出观察不证明进程成功；wait_command 的实际结束回执才可引用。
         evidence.append(SubagentEvidence(run_id=event.run_id, tool_call_id=event.payload["call_id"], tool=event.payload["name"],
                                          path=data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] in {"read_file", "edit_file"} else None,
                                          truncated=bool(result.get("truncated"))))

@@ -111,6 +111,46 @@ class TeamModel:
         return response('团队已汇集，待人工采纳和父目录复验。')
 
 
+def test_user_pause_resumes_team_member_without_reclaim_or_budget_reset(project_config, monkeypatch):
+    """用户安全暂停后明确恢复原成员、工作树及剩余预算；旧未执行参数不被宿主重放。"""
+    class PauseAwareModel(TeamModel):
+        """在原团队离线模型上识别未执行回执，恢复后重新决策原工作项。"""
+
+        async def complete(self, messages, tools):
+            """仅在可信接续子段过滤模型已知的未执行回执供脚本选择；返回真实工具调用，不伪造结果。"""
+            context = REQUEST_CONTEXT.get()
+            if context.manifest.delegation and context.manifest.delegation.previous_run_id:
+                messages = [item for item in messages if not (item.get('role') == 'tool' and
+                            (json.loads(item['content']).get('error') or {}).get('code') == 'runtime_input_requires_review')]
+            return await super().complete(messages, tools)
+
+    async def scenario():
+        """从 HTTP 请求暂停、等待真实成员收尾并恢复；返回 None，核对稳定身份和旧日志。"""
+        model = PauseAwareModel(gated=True)
+        app = create_development_app(project_config, monkeypatch, model)
+        async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
+            started = await approved_run(client, wait=False)
+            await asyncio.wait_for(model.entered.wait(), 45)
+            state = (await client.get(f"/api/runs/{started['run_id']}/team")).json()['team']
+            member = state['members'][0]['id']
+            paused = await client.post(f"/api/runs/{started['run_id']}/pause", json={'request_id': str(uuid4())})
+            assert paused.status_code == 202, paused.text
+            model.release.set()
+            previous = await finished(client, started['run_id'])
+            assert previous['result']['stop_reason'] == 'user_paused', previous['result']
+            before = (app.state.manager.runs_root / started['run_id'] / 'events.jsonl').read_bytes()
+            from tests.web.job_helpers import submit_followup
+            result = await submit_followup(client, f"/api/runs/{started['run_id']}/followups", json={'request_id': str(uuid4()), 'prompt': '恢复暂停前团队工作', 'resume': True})
+            assert result.status_code == 202, result.text
+            latest = await finished(client, result.json()['run_id'])
+            assert latest['result']['execution_status'] == 'completed', latest['result']
+            current = (await client.get(f"/api/runs/{latest['run_id']}/team")).json()['team']
+            assert current['stage_ready'] and current['members'][0]['id'] == member
+            assert latest['result']['permissions']['spent_model_turns'] == previous['result']['model_turns']
+            assert (app.state.manager.runs_root / started['run_id'] / 'events.jsonl').read_bytes() == before
+    asyncio.run(scenario())
+
+
 def test_dependency_versions_messages_reuse_and_adoption(project_config, monkeypatch):
     """下游确实读取未采纳上游源码，成员跨任务复用，消息只交付一次，最终整体采纳保留真实索引。"""
     model = TeamModel()

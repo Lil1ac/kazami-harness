@@ -122,6 +122,7 @@ class WorkStore:
                 CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, digest TEXT, result TEXT);
                 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS runtime_controls(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS permission_actions(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS integrations(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS teams(id TEXT PRIMARY KEY, body TEXT NOT NULL);
@@ -338,7 +339,8 @@ class TaskService:
                 raise TaskError("task_invalid_evidence", "人工完成请明确记录人工确认。")
             return
         history = RunStore.read(self.store.root, self.run_id)
-        valid = {event.payload.get("call_id") for event in history.events if event.type == "tool_result" and event.payload.get("result", {}).get("ok") and event.payload.get("name") not in {*TASK_TOOLS, "memory_propose"}}
+        valid = {event.payload.get("call_id") for event in history.events if event.type == "tool_result" and event.payload.get("result", {}).get("ok") and event.payload.get("name") not in {*TASK_TOOLS, "memory_propose", "read_command"}
+                 and not (event.payload.get("name") == "run_command" and (event.payload["result"].get("data") or {}).get("accepted"))}
         for reference in references:
             if set(reference) != {"run_id", "tool_call_id"} or reference["run_id"] != self.run_id or reference["tool_call_id"] not in valid:
                 raise TaskError("task_invalid_evidence", "完成证据必须指向本轮已保存的成功工具结果。")

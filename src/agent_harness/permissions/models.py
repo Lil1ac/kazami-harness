@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from agent_harness.execution.budget import RunBudget
 
 
 PermissionMode = Literal["research", "workspace_edit", "strict"]  # 会话可选择的研究、编辑和逐项审批模式。
@@ -46,18 +47,11 @@ class ActionDecision(PermissionModel):
     action: Literal["approve", "reject", "cancel"]  # 批准本次、拒绝或取消等待，不支持批量提升权限。
 
 
-class PermissionResume(PermissionModel):
+class PermissionResume(RunBudget):
     """宿主生成的动作接续检查点，页面和模型不能直接提交。"""
 
     action_id: str  # 事务内绑定接续作业的待执行动作。
     decision: Literal["approve", "reject", "cancel"]  # 本轮消费的人类决定。
-    spent_model_turns: int = Field(default=0, ge=0)  # 同一审批链此前已经消耗的模型轮次。
-    spent_tool_calls: int = Field(default=0, ge=0)  # 此前接纳的工具调用；接续原动作不重复计数。
-    spent_seconds: float = Field(default=0.0, ge=0)  # 此前实际运行秒数，不包含人工等待和排队。
-    spent_usage: dict[str, int] = Field(default_factory=dict)  # 此前各段已知prompt/completion/total_tokens；缺失用量不推算。
-    spent_usage_complete: bool = True  # 任一此前模型请求缺失用量时为False。
-    repair_attempts: int = Field(default=0, ge=0, le=2)  # 已经开始的自动修复次数，审批不得清零。
-    delegation_used: bool = False  # 原执行已经使用委派时，继续保留末轮收尾约束。
     child_parent_id: str | None = None  # 子动作原日志的父编号，根动作为空，宿主填写。
     child_run_id: str | None = None  # 需逻辑接续的开发子执行，与child_parent_id配对。
 

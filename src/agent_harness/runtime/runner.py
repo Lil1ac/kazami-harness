@@ -68,6 +68,10 @@ class RunContext:
     timeout_scope: asyncio.Timeout | None = None  # 根运行实际超时管理器；None为尚未进入，避免Windows时钟粒度误判取消来源。
     delegation_used: bool = False  # 曾尝试委派后启用父级末轮交接；失败接纳也须为父保留总结机会。
     request_turn: int = 0  # 当前自身请求启动时的轮号；父总计数可能被并行子项推进，不能拿响应时总数配对。
+    runtime_control: object | None = None  # 当前执行段安全边界及用户输入；子段读取根收件箱。
+    command_controller: object | None = None  # 当前段命令句柄，未绑定工具执行器时为 None。
+    command_workspaces: dict[str, str] = field(default_factory=dict)  # 根段共享的实际目录占用，活动命令期间禁止其他写入。
+    command_controllers: dict[str, object] = field(default_factory=dict)  # 根段聚合父子命令控制器，用于观察及统一停止。
 
     @property
     def runs_root(self) -> Path:
@@ -341,15 +345,18 @@ async def _run_task(
     result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True, planning=manifest.planning.model_copy(deep=True))
     started_at = asyncio.get_running_loop().time()
     resume = manifest.permission_resume
-    deadline = started_at + max(0, manifest.config.limits.run_timeout_seconds - (resume.spent_seconds if resume and resume.decision == "approve" else 0))
+    budget = manifest.execution_resume or (resume if resume and resume.decision == "approve" else None)
+    deadline = started_at + max(0, manifest.config.limits.run_timeout_seconds - (budget.spent_seconds if budget else 0))
     context = RunContext(manifest, store, result, deadline, started_at=started_at)
+    from agent_harness.runtime.control import RuntimeControl
+    context.runtime_control = RuntimeControl(context)
     planning = PlanningController(manifest.planning, root, context.emit)
     from agent_harness.permissions.controller import PermissionController
     permissions = PermissionController(context, planning)
     result.permissions = permissions.state.model_copy(deep=True)
     context.emit("permissions_prepared", {"state": result.permissions.model_dump(mode="json")})
-    result.repair_attempts = resume.repair_attempts if resume is not None else 0
-    context.delegation_used = bool(resume and resume.delegation_used)
+    result.repair_attempts = budget.repair_attempts if budget is not None else 0
+    context.delegation_used = bool(budget and budget.delegation_used)
     tool_executor.permissions = permissions
     tool_executor.project_manager = project_manager or ProjectManager(runs_root, runs_root / ".worktrees")
     tasks = TaskController(WorkStore(runs_root), manifest, planning)
@@ -367,6 +374,7 @@ async def _run_task(
         只在正常断言失败且清理安全时继续；模型/工具/时间总预算不重置，
         测试异常和隐藏检查永不启动修复。修复开始即清除当前检查，旧事实保留在历史。
         """
+        await context.runtime_control.boundary(tool_executor)
         if asyncio.get_running_loop().time() >= deadline:
             raise TimeoutError
         result.execution_status = "completed"
@@ -392,6 +400,7 @@ async def _run_task(
         if asyncio.get_running_loop().time() >= deadline:
             raise TimeoutError
         _apply_verification(context, detail)
+        await context.runtime_control.boundary(tool_executor)
         if not manifest.config.auto_repair or detail.status != "failed" or result.cleanup_status not in {"not_needed", "complete"}:
             return None
         if result.repair_attempts >= 2:
@@ -501,6 +510,7 @@ async def _run_task(
         reason = "not_configured" if verifier is None else "execution_not_completed"
         context.emit("verification_skipped", {"reason": reason})
     result.active_duration_seconds = context.active_duration()
+    context.runtime_control.store.finish(context)  # 成果证据固定后才发布安全暂停，累计秒数与本段结果一致。
     store.finalize(result)
     return RunOutcome(result, store.run_dir, context.event_count + 1)
 

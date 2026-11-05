@@ -6,8 +6,8 @@ import math
 import os
 from pathlib import Path
 import signal
-from typing import BinaryIO
-from uuid import uuid4
+from typing import BinaryIO, Callable
+from uuid import UUID, uuid4
 
 from agent_harness.execution.python import python_command, validate_python_execution
 from agent_harness.schemas import PythonExecution, RunLimits
@@ -63,8 +63,8 @@ class ProcessRunner:
         self.artifacts_dir = artifacts_dir.absolute()
         self.last_result: dict | None = None
 
-    def _open_capture(self) -> _Capture:
-        """排他创建独立命令目录与双流文件，拒绝已有符号链接重定向输出位置。"""
+    def _open_capture(self, command_id: str | None = None) -> _Capture:
+        """为 command_id 排他创建双流文件；None 分配新编号，已有目录或链接拒绝覆盖。"""
         handles: dict[str, BinaryIO] = {}
         try:
             if self.artifacts_dir.is_symlink():
@@ -79,7 +79,7 @@ class ProcessRunner:
             commands.mkdir(exist_ok=True)
             if not commands.resolve(strict=True).is_relative_to(root):
                 raise StorageError("命令输出目录越出产物范围")
-            command_id = str(uuid4())
+            command_id = str(uuid4()) if command_id is None else str(UUID(command_id))
             directory = commands / command_id
             directory.mkdir()
             if directory.is_symlink() or not directory.resolve(strict=True).is_relative_to(root):
@@ -111,6 +111,7 @@ class ProcessRunner:
                 # 计数与写入之间没有 await，两个流不会竞争后共同突破上限。
                 if saved:
                     capture.handles[name].write(saved)
+                    capture.handles[name].flush()  # 后台读取必须看到已捕获的字节，不能等进程结束才刷新缓冲。
                     capture.captured_bytes += len(saved)
                     capture.stream_bytes[name] += len(saved)
                     preview_remaining = preview_bytes - len(capture.previews[name])
@@ -254,6 +255,7 @@ class ProcessRunner:
         self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
         extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
         python_execution: PythonExecution | None = None,
+        command_id: str | None = None, on_spawn: Callable[[int], None] | None = None,
     ) -> dict:
         """执行程序并返回退出码、输出预览、原始引用和清理状态。
 
@@ -265,6 +267,8 @@ class ProcessRunner:
         函数会创建输出文件并启动/必要时清理进程。
         存储故障抛 StorageError；取消附带 harness_process_result 后原样重新抛出，
         返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
+        command_id 为宿主生成的输出 UUID，None 自动生成；on_spawn 默认不通知，非空时
+        在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
         """
         timeout = self.limits.command_timeout_seconds if timeout_seconds is None else timeout_seconds
         if not argv or any(not isinstance(value, str) or "\x00" in value for value in argv) or not argv[0].strip():
@@ -293,7 +297,7 @@ class ProcessRunner:
                     imports.append(str(resolved))
         if imports:
             child_env["PYTHONPATH"] = os.pathsep.join(imports)
-        capture = self._open_capture()
+        capture = self._open_capture(command_id)
         process: asyncio.subprocess.Process | None = None
         tasks: list[asyncio.Task] = []
         reason = "spawn_failed"
@@ -331,6 +335,8 @@ class ProcessRunner:
                 process, confirmed = recovery.result()
                 spawn_unconfirmed = not confirmed
             if process is not None:
+                if on_spawn is not None:
+                    on_spawn(process.pid)
                 readers = [
                     asyncio.create_task(self._capture_stream("stdout", process.stdout, capture)),
                     asyncio.create_task(self._capture_stream("stderr", process.stderr, capture)),

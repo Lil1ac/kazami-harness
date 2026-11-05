@@ -88,7 +88,7 @@ def _phase(events: list[RunEvent]) -> str:
             current = "subagent_execution"
         if event.type == "run_finished":
             reason = event.payload.get("result", {}).get("stop_reason")
-            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled", "action_approval", "permission_rejected", "permission_cancelled", "verification_permission_denied"}:
+            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled", "action_approval", "permission_rejected", "permission_cancelled", "verification_permission_denied", "user_paused"}:
                 current = reason
     return current
 
@@ -131,9 +131,16 @@ def _unfinished_result(history: RunHistory) -> RunResult:
     )
     # 未封存终态不等于每个旧进程都失联；采用已配对结果的清理事实，只有在途动作未知。
     pending_commands: set[str] = set()  # 已开始但尚无结果的命令编号。
+    background_commands: dict[str, str] = {}  # 独立命令快照，接纳回执不能代替进程结束事实。
     verifier_pending = False  # 宿主验收已启动而未得到清理结论。
     cleanup_rank = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
     for event in history.events:
+        if event.type == "command_snapshot":
+            command = event.payload["command"]
+            background_commands[command["id"]] = command["status"]
+            command_cleanup = command.get("cleanup_status", "unknown")
+            if command_cleanup in cleanup_rank and cleanup_rank[command_cleanup] > cleanup_rank[result.cleanup_status]:
+                result.cleanup_status = command_cleanup
         if event.type == "permissions_prepared":
             from agent_harness.permissions.models import PermissionState
             result.permissions = PermissionState.model_validate(event.payload["state"])
@@ -152,7 +159,7 @@ def _unfinished_result(history: RunHistory) -> RunResult:
             pending_commands.discard(str(event.payload.get("call_id")))
             observation = event.payload.get("result")
             data = observation.get("data") if isinstance(observation, dict) else None
-            status = data.get("cleanup_status", "unknown") if isinstance(data, dict) else "unknown"
+            status = data.get("cleanup_status", "not_needed" if data.get("accepted") else "unknown") if isinstance(data, dict) else "unknown"
             if status not in cleanup_rank:
                 status = "unknown"
             if cleanup_rank[status] > cleanup_rank[result.cleanup_status]:
@@ -184,13 +191,15 @@ def _unfinished_result(history: RunHistory) -> RunResult:
                 if type(value) is int and value >= 0:
                     setattr(result.usage, field, getattr(result.usage, field) + value)
     for record in result.subagents:
+        if record.log_parent_id is not None and record.log_parent_id != history.manifest.run_id:
+            continue  # 接续保留的旧兄弟快照已计入此前预算，不能再加到当前段用量。
         # 父事件仅保存子快照；从各自最新快照累计一次，避免把每次进度重复相加。
         result.model_turns += record.model_turns
         result.tool_calls += record.tool_calls
         result.http_attempts += record.http_attempts
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             setattr(result.usage, key, getattr(result.usage, key) + record.usage.get(key, 0))
-    if (pending_commands or verifier_pending) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
+    if (pending_commands or verifier_pending or any(value in {"starting", "running", "stopping"} for value in background_commands.values())) and cleanup_rank["unknown"] > cleanup_rank[result.cleanup_status]:
         result.cleanup_status = "unknown"
     return result
 

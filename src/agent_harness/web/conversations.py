@@ -11,7 +11,8 @@ from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.projects import ProjectError
 from agent_harness.runtime.runner import validate_auto_repair, validate_execution
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution
-from agent_harness.schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec
+from agent_harness.schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec, ExecutionResume
+from agent_harness.runtime.control import ControlStore
 from agent_harness.storage.sessions import SessionError, SessionStore, history_messages, payload_digest
 from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.storage.runs import StorageError
@@ -182,6 +183,17 @@ class ConversationService:
                 raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
             origin = self._ready(parent)
             resume = None
+            execution_resume = None
+            if request.resume or (parent.result is not None and parent.result.stop_reason == "user_paused"):
+                control = ControlStore(self.manager.runs_root).get(str(parent_id))
+                if not request.resume or control is None or control["status"] != "paused" or parent.result is None or parent.result.stop_reason != "user_paused":
+                    raise SessionError("execution_resume_required", "请使用恢复暂停入口接续，原预算不会重置。")
+                checkpoint = dict(control["checkpoint"])
+                checkpoint["source_run_id"] = UUID(checkpoint["source_run_id"])
+                execution_resume = ExecutionResume.model_validate(checkpoint)
+                info = parent.manifest.task.workspace.stat()
+                if execution_resume.workspace_identity != [info.st_dev, info.st_ino]:
+                    raise SessionError("workspace_changed", "暂停后的目录身份已变化，不能恢复。")
             pending = parent.result.permissions.pending if request.action_decision is not None and parent.result is not None else PermissionStore(self.manager.runs_root).waiting(parent)
             if request.action_decision is not None:
                 if pending is None or pending["id"] != request.action_decision.action_id:
@@ -224,7 +236,7 @@ class ConversationService:
                 merged["memory"] = self.manager._queued_memory_policy
             try:
                 config = load_config(overrides=merged)
-                if resume is not None and config.limits != parent.manifest.config.limits:
+                if (resume is not None or execution_resume is not None) and config.limits != parent.manifest.config.limits:
                     raise SessionError("permission_stale", "动作审批接续不能修改原预算，请先处理等待再提交新要求。")
                 if config.planning_policy == "required" and not (planning.plans and planning.plans[-1].status == "approved"):
                     planning.phase, planning.reason = "planning", "宿主要求先批准计划"
@@ -233,7 +245,7 @@ class ConversationService:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 identifier = self.manager._queued_run_id or uuid4()
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
-                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, permission_resume=resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
+                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)

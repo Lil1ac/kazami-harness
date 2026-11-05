@@ -6,7 +6,7 @@ from types import MappingProxyType
 
 # 宿主可授予的只读工具全集；最终仍与父级已开放能力及角色集合取交集。
 READONLY_TOOLS = frozenset({"read_file", "search_files", "list_files", "read_context", "memory_search", "memory_get"})
-DEVELOP_TOOLS = READONLY_TOOLS | frozenset({"write_file", "edit_file", "run_command"})  # 开发角色仍不能继续委派或修改任务及批准事实。
+DEVELOP_TOOLS = READONLY_TOOLS | frozenset({"write_file", "edit_file", "run_command", "read_command", "wait_command", "stop_command"})  # 开发角色仅控制自己的命令，不能继续委派或修改批准事实。
 REPORT_INSTRUCTIONS = """你是只读子Agent，只有本次研究任务是你的执行目标。父任务和批准方案属于背景，不要求你执行父级修改。
 不得写文件、执行命令、修改任务或记忆、提问用户或继续委派；仅使用本轮实际声明的工具。
 只检查委派范围；把必要修复与可选建议分开，可选建议不授予父Agent扩大范围的权限。

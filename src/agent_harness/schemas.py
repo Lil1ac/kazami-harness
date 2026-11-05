@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
+from agent_harness.execution.budget import RunBudget
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -539,6 +540,13 @@ class SubagentRecord(DataModel):
     timeout_seconds: float = Field(gt=0, le=180, allow_inf_nan=False)  # 接纳时固定的子时限，秒；父任务截止时间始终优先。
 
 
+class ExecutionResume(RunBudget):
+    """宿主核验后的安全暂停接续；新执行段不自动重放旧工具，也不重置预算。"""
+
+    source_run_id: UUID  # 生成本检查点的直接父运行，不允许任意历史来源。
+    workspace_identity: list[int]  # 安全停止时的设备与目录标识，替换目录后禁止恢复。
+
+
 class RunManifest(DataModel):
     """运行开始时固定的任务、来源、配置、计划与当前用户决定；不保存密钥。"""
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
@@ -557,6 +565,7 @@ class RunManifest(DataModel):
     human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
     delegation: DelegationOrigin | None = None  # 非空表示父运行内的委派子执行，不是会话续轮。
     permission_resume: PermissionResume | None = None  # 宿主绑定的原动作与累计预算；页面不得直接构造。
+    execution_resume: ExecutionResume | None = None  # 仅安全暂停恢复时由宿主固定，不能与动作批准混用。
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。

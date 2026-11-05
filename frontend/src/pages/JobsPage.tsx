@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { errorMessage, getJob, getJobs, jobAction, resumeQueue } from '../api';
 import type { JobView } from '../types';
 import '../components/TasksPanel.css';
+import { RuntimePanel } from '../components/RuntimePanel';
 
 const labels: Record<JobView['status'], string> = {
   queued: '排队中',
@@ -128,7 +129,9 @@ export function JobsPage() {
                             unknown: '动作结果待核对',
                           } as Record<string, string>
                         )[job.approval_status || 'pending'] || '审批已处理'
-                      : labels[job.status]}
+                      : job.wait_reason === 'user_paused'
+                        ? '已暂停'
+                        : labels[job.status]}
                   </span>
                   <span>
                     {
@@ -142,6 +145,16 @@ export function JobsPage() {
                   </span>
                 </div>
                 {job.error && <p role="status">{job.error}</p>}
+                {job.kind !== 'integration' && job.execution_status !== null && (
+                  <details>
+                    <summary>命令与补充要求</summary>
+                    <RuntimePanel
+                      runId={job.run_id}
+                      active={job.status === 'running'}
+                      readOnly={job.status !== 'running'}
+                    />
+                  </details>
+                )}
                 <div>
                   {!['queued', 'preparing', 'needs_review'].includes(job.status) &&
                     job.execution_status !== null && (

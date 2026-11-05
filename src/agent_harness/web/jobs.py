@@ -167,6 +167,10 @@ class JobQueue:
                 raise TaskError("request_conflict", "作业和续轮请求编号必须一致。")
             self.manager.get_run(request.parent_run_id)  # 统一不存在与损坏运行的 HTTP 语义。
             parent = self.manager._read_history(request.parent_run_id)
+            if parent.result is not None and parent.result.stop_reason == "user_paused" and not request.followup.resume:
+                raise TaskError("execution_resume_required", "当前执行已暂停，请使用恢复入口沿用剩余预算。")
+            if request.followup.resume and (parent.result is None or parent.result.stop_reason != "user_paused"):
+                raise TaskError("execution_not_paused", "只有可信安全暂停的执行可以恢复。")
             session = str(parent.manifest.session_id or request.parent_run_id)
             self.manager.management.require_active(session)
             intent_digest = payload_digest({'parent_run_id': str(request.parent_run_id), **request.followup.model_dump(mode='json', exclude={'request_id'})})
@@ -311,6 +315,9 @@ class JobQueue:
                     self.paused = True
                 else:
                     self.finish(job, view.result)
+                    if view.result.execution_status == "completed" and view.result.cleanup_status in {"complete", "not_needed"}:
+                        from agent_harness.web.runtime import dispatch_next_input
+                        await dispatch_next_input(self.manager, str(view.session_id or view.run_id), str(view.run_id))
                 if view.result.cleanup_status in {"unknown", "incomplete"}:
                     self.paused = True
             except asyncio.CancelledError:

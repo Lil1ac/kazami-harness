@@ -51,6 +51,7 @@ export function phaseLabel(phase: string): string {
         permission_cancelled: '已取消动作',
         verification_permission_denied: '验收未获授权',
         interaction_cancelled: '已取消等待',
+        user_paused: '已暂停',
         running: '正在执行',
       } as Record<string, string>
     )[phase] ?? phase

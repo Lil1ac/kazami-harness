@@ -187,7 +187,7 @@ def history_messages(history: RunHistory, *, allow_interrupted: bool = False) ->
             continue
         if event.type == 'assistant_message':
             messages.append(deepcopy(event.payload.get('message')))
-        elif event.type in {'repair_started', 'team_messages_delivered'}:
+        elif event.type in {'repair_started', 'team_messages_delivered', 'runtime_input_delivered', 'command_notifications', 'subagent_resume_reports'}:
             feedback = event.payload.get('message')
             if not isinstance(feedback, dict) or feedback.get('role') != 'user' or not isinstance(feedback.get('content'), str):
                 raise SessionError('history_unverified', '历史项目测试反馈无法核对。')

@@ -20,6 +20,88 @@ import type {
   JobView,
   TaskSnapshot,
 } from './types';
+import type {
+  RuntimeView,
+  RuntimeInputRequest,
+  RuntimeMessage,
+  CommandOutput,
+  CommandExecution,
+} from './runtimeTypes';
+
+/** 读取 runId 控制与父子命令；返回持久快照，不触发执行。 */
+export function getRuntime(runId: string): Promise<RuntimeView> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/runtime`);
+}
+
+/** 幂等提交 runId 的固定 body；请求失败时调用方保留同一编号重试。 */
+export function sendRuntimeInput(
+  runId: string,
+  body: RuntimeInputRequest,
+): Promise<RuntimeMessage> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/inputs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/** 请求 runId 在安全边界暂停；requestId 重试保持，返回值不代表进程已停止。 */
+export function pauseRuntime(
+  runId: string,
+  requestId: string,
+): Promise<NonNullable<RuntimeView['state']>> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId }),
+  });
+}
+
+/** 撤回 runId 尚未投递的 messageId；已处理内容不能撤销。 */
+export function retractRuntimeInput(runId: string, messageId: string): Promise<RuntimeMessage> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/inputs/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/** 读取 runId 中 commandId 的 owner/stream 增量输出，offset 为原始字节游标。 */
+export function getCommandOutput(
+  runId: string,
+  commandId: string,
+  owner: string,
+  stream: string,
+  offset: number,
+): Promise<CommandOutput> {
+  return request(
+    `/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(commandId)}/output?owner_run_id=${encodeURIComponent(owner)}&stream=${stream}&offset=${offset}`,
+  );
+}
+
+/** 停止 runId 直属 owner 的 commandId 并等待真实清理；不接受系统 PID。 */
+export function stopCommand(
+  runId: string,
+  commandId: string,
+  owner: string,
+): Promise<{ command: CommandExecution; result: NonNullable<CommandExecution['result']> }> {
+  return request(
+    `/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(commandId)}/stop?owner_run_id=${encodeURIComponent(owner)}`,
+    { method: 'POST' },
+  );
+}
+
+/** 明确投递 runId 会话中未自动入队的下一轮要求；返回已有或新建的原队列作业。 */
+export function dispatchNextInput(
+  runId: string,
+  requestId: string,
+): Promise<{ job: JobView | null }> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/dispatch-next`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId }),
+  });
+}
+
+
 
 /** 读取runId同仓库的已登记目标；只读，不创建或切换代码分支。 */
 export function getIntegrationTargets(runId: string, parentRunId?: string): Promise<{ items: IntegrationTarget[] }> {

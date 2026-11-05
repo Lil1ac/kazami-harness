@@ -727,6 +727,7 @@ export interface EventsResponse {
 
 /** 用户追加要求；请求编号在网络重试时保持，避免重复修改。 */
 export interface FollowupRequest {
+  resume?: boolean; // 仅安全暂停接续；沿用原预算，不与配置或批准决定混用。
   action_decision?: ActionDecision; // 与计划决定及配置覆盖互斥的动作审批。
   mode?: 'auto' | 'plan'; // auto不解除待批准状态；plan明确重新规划。
   decision?: HumanDecision; // 只有用户明确操作才携带计划批准。

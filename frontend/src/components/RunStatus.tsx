@@ -72,6 +72,7 @@ export function runSummary(run: RunStatusSnapshot): { label: string; color?: str
     };
   if (['unknown', 'incomplete'].includes(run.result.cleanup_status))
     return { label: '需检查清理', color: 'warning' };
+  if (run.result.stop_reason === 'user_paused') return { label: '已暂停', color: 'warning' };
   if (run.result.execution_status === 'failed' && modelFailureLabel(run.result.stop_reason))
     return { label: modelFailureLabel(run.result.stop_reason)!, color: 'error' };
   if (run.phase === 'planning_complete') return { label: '规划已结束' };

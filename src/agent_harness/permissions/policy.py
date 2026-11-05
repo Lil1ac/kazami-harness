@@ -14,7 +14,7 @@ CONTROL_TOOLS = frozenset({"enter_plan_mode", "submit_plan", "ask_user_question"
 
 def planning_allows(name: str) -> bool:
     """返回规划阶段是否允许 name；规划控制器和统一权限入口共用这一份白名单。"""
-    return name in READ_TOOLS or name in {"enter_plan_mode", "submit_plan", "ask_user_question", "delegate_readonly", "cancel_subagent"}
+    return name in READ_TOOLS or name in {"enter_plan_mode", "submit_plan", "ask_user_question", "delegate_readonly", "cancel_subagent", "read_command", "wait_command", "stop_command"}
 
 
 def roots(workspace: Path, values: list[str]) -> tuple[Path, ...]:
@@ -35,6 +35,8 @@ def evaluate(policy: PermissionPolicy, mode: str, name: str, *, planning: bool =
 
     此函数不访问文件、不保存决定。未知工具默认拒绝，读取 ask 暂不提供人工提升。
     """
+    if name in {"read_command", "wait_command", "stop_command"}:
+        return "allow"  # 只访问宿主已授权启动的本 Run 命令；不能创建进程或扩展目录。
     if planning and not planning_allows(name):
         return "deny"
     if name in {"write_file", "edit_file"}:

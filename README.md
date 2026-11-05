@@ -162,6 +162,8 @@ npm.cmd --prefix frontend run build
 
 批准计划后自动生成持久工作项，Agent 通过 task_create/get/list/update 管理依赖、进度和完成证据。会话内可查看、编辑待处理项、取消或重新打开；后台工作页查看排队、运行和待核对作业。首版单机串行，退出保留未执行队列，重启后明确恢复。历史记录不自动重放工具；详见[任务协议](docs/TASKS.md)。
 
+长命令可通过 `run_command(background=true)` 返回句柄，使用 `read_command`、`wait_command` 和 `stop_command` 管理；同一目录有活动命令时不继续写文件。页面执行中可发送本轮补充或排队下一轮，支持安全暂停和明确恢复；恢复沿用原预算，未知进程结果先核对。桌面/Web 可查看父子命令、增量输出和处理状态；详见[长任务协议](docs/LONG_RUNNING.md)。
+
 
 ## 项目长期记忆
 

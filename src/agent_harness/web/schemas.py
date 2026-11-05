@@ -54,6 +54,7 @@ class CreateRunRequest(DataModel):
 
 # 追加要求只接受会话请求内容，工作区和验收来源继承父运行并由宿主核对。
 class FollowupRequest(DataModel):
+    resume: bool = False  # True 仅恢复安全暂停，沿用原预算且不能混入配置或审批决定。
     action_decision: ActionDecision | None = None  # 具体动作决定，与计划决定互斥，不接受动作参数。
     mode: Literal["auto", "plan"] | None = None  # None继承；auto不能解除未批准计划的只读状态。
     decision: HumanDecision | None = None  # 当前问题回答或计划决定；不接受模型生成的批准。
@@ -66,6 +67,8 @@ class FollowupRequest(DataModel):
         """保证一次请求只处理一种决定；动作审批不允许夹带设置或重新规划，返回自身。"""
         if self.action_decision is not None and (self.decision is not None or self.mode is not None or self.config.model_dump(exclude_unset=True)):
             raise ValueError("动作决定不能同时修改配置、模式或计划")
+        if self.resume and (self.action_decision is not None or self.decision is not None or self.mode is not None or self.config.model_dump(exclude_unset=True)):
+            raise ValueError("暂停恢复不能修改配置、权限或计划")
         return self
 
 

@@ -1,6 +1,7 @@
 """注册实际可用的工具，统一参数校验、错误结果、产物与清理状态。"""
 
 import asyncio
+import traceback
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -18,12 +19,14 @@ from agent_harness.teams.models import TEAM_TOOLS
 from agent_harness.subagents.profiles import READONLY_TOOLS
 from agent_harness.execution.workspace import WorkspaceError
 from agent_harness.tools.command import RunCommandArguments, run_command
+from agent_harness.execution.commands import COMMAND_TOOLS
 from agent_harness.tools.listing import ListFilesArguments, list_files
 from agent_harness.tools.files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, WriteFileArguments,
                     edit_file, read_file, search_files, write_file)
 
 
 _TOOL_SPECS = {
+    **COMMAND_TOOLS,
     **TEAM_TOOLS,
     **SUBAGENT_TOOLS,
     **MEMORY_TOOLS,
@@ -35,7 +38,7 @@ _TOOL_SPECS = {
     "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
     "edit_file": (EditFileArguments, "局部修改已有UTF-8文件：先read_file取得sha256，用expected_sha256校验完整版本。old_text须唯一匹配；统一LF/CRLF等价并保持原格式，mixed/cr须提供原换行。new_text可为空。file_changed或edit_not_found时重读核对，edit_ambiguous时增加上下文；禁止原样盲重试或覆盖绕过冲突。"),
     "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件优先使用 edit_file；整文件覆盖必须显式 overwrite=true，不具备版本冲突检查。写入有大小上限。"),
-    "run_command": (RunCommandArguments, "用 argv 数组在工作区运行程序，不自动解析 Shell；python/python3 使用项目配置或 PATH 解析的本轮解释器，并加载当轮工作区源码目录，返回退出码、输出、超时与清理状态。"),
+    "run_command": (RunCommandArguments, "用argv数组在工作区运行程序，不自动解析Shell；python/python3使用本轮项目解释器和源码目录。background=true返回命令句柄，用read_command/wait_command/stop_command管理；目录有活动命令时不能写文件或再启动命令。接纳不代表成功，实际结束回执才可作证据。"),
 }
 _CLEANUP_RANK = {"not_needed": 0, "complete": 1, "unknown": 2, "incomplete": 3}
 
@@ -79,6 +82,7 @@ class ToolExecutor:
         self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
         self.before_execute = None  # 参数和权限检查通过后记录真实开始，None表示无需事件。
         self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
+        self.commands = None  # Runner 绑定的统一命令生命周期，独立工具测试为空。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -115,7 +119,9 @@ class ToolExecutor:
         if self.readonly is not None:
             return sorted(self.readonly)
         if self.delegation_tools is not None:
-            return sorted(self.delegation_tools)
+            return sorted(self.delegation_tools | (frozenset(COMMAND_TOOLS) if self.commands is not None and "run_command" in self.delegation_tools else frozenset()))
+        if self.commands is not None and "run_command" in names:
+            names.extend(COMMAND_TOOLS)
         if self.config.context.compression != "off":
             names.append("read_context")
         if self.planning is not None:
@@ -195,6 +201,8 @@ class ToolExecutor:
         self.cancelled_result = None
         if self.handoff:
             return _error("handoff_tools_disabled", "收尾交接阶段只允许总结已有证据，不执行任何新工具。")
+        if self.commands is not None and self.commands.workspace in self.commands.gates and name in {"write_file", "edit_file", "run_command", "delegate_readonly", "delegate_develop", "team_dispatch", "enter_plan_mode", "submit_plan"}:
+            return _error("workspace_command_active", "当前工作区有活动命令，请先等待或停止，再修改、检查、委派或切换计划。")
         if self.readonly is not None and name not in self.readonly:
             return _error("subagent_read_only", "子Agent仅允许父级授予的读取和检索，不能修改文件、执行命令或委派。")
         if self.subagents is not None and self.subagents.readers_active and name in {"write_file", "edit_file", "run_command", "memory_propose", "enter_plan_mode", "submit_plan"}:
@@ -255,7 +263,19 @@ class ToolExecutor:
             if name == "run_command":
                 if self.process_runner is None:
                     return _error("command_not_ready", "命令工具尚未绑定运行目录。")
-                data = await run_command(self.workspace, self.runs_root, arguments, self.process_runner, self.python_execution)
+                if self.commands is not None:
+                    data = await self.commands.start(arguments)
+                    if data.get("accepted"):
+                        return {"ok": True, "data": data, "error": None, "truncated": False}
+                else:
+                    data = await run_command(self.workspace, self.runs_root, arguments, self.process_runner, self.python_execution)
+                return self._command_result(data)
+            if name in COMMAND_TOOLS and self.commands is not None:
+                if name == "read_command":
+                    from agent_harness.execution.commands import output_page
+                    record = self.commands.get(arguments.command_id)
+                    return {"ok": True, "data": {"command": record, "output": output_page(self.run_dir, record, arguments.stream, arguments.offset, arguments.max_bytes)}, "error": None, "truncated": False}
+                data = await (self.commands.wait(arguments.command_id) if name == "wait_command" else self.commands.stop(arguments.command_id))
                 return self._command_result(data)
             if name == "read_file":
                 data = read_file(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars, self.config.limits.max_file_write_bytes)
@@ -292,5 +312,9 @@ class ToolExecutor:
             return _error("python_execution_changed", str(error))
         except WorkspaceError as error:
             return _error(error.code, error.message)
-        except Exception:
+        except Exception as error:
+            if self.commands is not None:
+                frames = traceback.extract_tb(error.__traceback__)[-6:]
+                self.commands.context.emit("tool_runtime_error", {"name": name, "error_type": type(error).__name__,
+                    "trace": [{"file": Path(frame.filename).name, "function": frame.name, "line": frame.lineno} for frame in frames]})
             return _error("tool_execution_error", "工具执行失败，请检查输入与文件状态。")

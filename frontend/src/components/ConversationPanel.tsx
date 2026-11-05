@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Input } from 'antd';
+import { Alert, Button, Checkbox, Input, Select } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -12,6 +12,8 @@ import {
 import { ModeSelect } from './ModeSelect';
 import { phaseLabel, modelFailureLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
+import { useRuntimeControl } from '../hooks/useRuntimeControl';
+import { RuntimePanel } from './RuntimePanel';
 import { useRunPlanning } from '../hooks/useRunPlanning';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
@@ -41,9 +43,11 @@ function turnStatus(
   interrupted = false,
   reason?: string | null,
 ): string {
-  if (!interrupted && status === 'failed' && modelFailureLabel(reason)) return modelFailureLabel(reason)!;
+  if (!interrupted && status === 'failed' && modelFailureLabel(reason))
+    return modelFailureLabel(reason)!;
   if (!interrupted && reason === 'planning_complete') return '规划已结束';
   if (!interrupted && reason === 'plan_rejected') return '已拒绝计划';
+  if (!interrupted && reason === 'user_paused') return '已暂停';
   const labels: Record<string, string> = {
     created: '已创建',
     running: '执行中',
@@ -107,7 +111,8 @@ function TurnMessage({
         ) : selected && run?.active ? null : (
           <p className="message-waiting">
             {turn.execution_status
-              ? turnStatus(turn.execution_status, null, interrupted, turn.stop_reason) + '，本次执行没有最终回答。'
+              ? turnStatus(turn.execution_status, null, interrupted, turn.stop_reason) +
+                '，本次执行没有最终回答。'
               : '运行记录待确认，请查看本次详情。'}
           </p>
         )}
@@ -139,6 +144,11 @@ function TurnMessage({
             </button>
           )}
         </div>
+        <RuntimePanel
+          runId={turn.run_id}
+          active={Boolean(selected && run?.active)}
+          readOnly={readOnly || !selected}
+        />
       </div>
     </div>
   );
@@ -156,6 +166,7 @@ export function ConversationPanel({
   skills = [],
 }: ConversationPanelProps) {
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
+  const runtime = useRuntimeControl(run?.run_id, Boolean(run?.active));
   const { tasks, planning } = useRunPlanning(run);
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
   const content = useRef<HTMLDivElement>(null); // 用尺寸变化补偿字体加载与过程展开。
@@ -192,7 +203,19 @@ export function ConversationPanel({
   /** 原生表单提交与Enter共用同一防重入口；不会发送空白要求。 */
   function submit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    send.send();
+    sendMessage();
+  }
+
+  /** 将当前草稿按活动状态投递；运行中输入固定意图，成功确认后才清除对应正文。 */
+  function sendMessage(): void {
+    if ((run?.active || runtime.pending) && conversation.management.state === 'active') {
+      const original = send.text;
+      void runtime.send(original).then(
+        /* 不清空等待期间新写入的另一份草稿。 */ (confirmed) => {
+          if (confirmed) send.setText((previous) => (previous === original ? '' : previous));
+        },
+      );
+    } else send.send();
   }
   const pendingVisible =
     send.pending &&
@@ -210,7 +233,11 @@ export function ConversationPanel({
   );
   return (
     <section className="conversation-surface" aria-label="连续对话">
-      {run && (taskItems.length > 0 || planning?.plans.length || run.result.subagents?.length || run.result.team) ? (
+      {run &&
+      (taskItems.length > 0 ||
+        planning?.plans.length ||
+        run.result.subagents?.length ||
+        run.result.team) ? (
         <div className="conversation-context-bar" aria-label="当前工作">
           {taskItems.length > 0 && (
             <button
@@ -240,7 +267,9 @@ export function ConversationPanel({
             >
               <TeamOutlined />
               <span>{run.result.team ? '团队' : 'Agent'}</span>
-              <small>{run.result.team ? run.result.team.members.length : run.result.subagents!.length}</small>
+              <small>
+                {run.result.team ? run.result.team.members.length : run.result.subagents!.length}
+              </small>
             </button>
           )}
           {currentTask && (
@@ -302,7 +331,13 @@ export function ConversationPanel({
               onDecision={send.decide}
             />
           )}
-          {run?.result.permissions.pending && <PermissionPanel run={run} disabled={!send.canDecide || conversation.management.state !== 'active'} onDecision={send.decideAction} />}
+          {run?.result.permissions.pending && (
+            <PermissionPanel
+              run={run}
+              disabled={!send.canDecide || conversation.management.state !== 'active'}
+              onDecision={send.decideAction}
+            />
+          )}
         </div>
       </div>
       <div className="conversation-composer">
@@ -316,6 +351,25 @@ export function ConversationPanel({
             <p role="status">
               请求已接纳 · <Link to={'/jobs/' + send.queuedJob.id}>查看后台作业</Link>
             </p>
+          )}
+          {runtime.error && <Alert type="error" title={runtime.error} />}
+          {runtime.pending && !runtime.sending && (
+            <p role="status">运行中输入尚未确认，重试会核对原内容。</p>
+          )}
+          {runtime.query.data?.state?.status === 'pausing' && run?.active && (
+            <p role="status">正在暂停，等待当前操作和子任务安全收尾；需要立即终止可点击停止。</p>
+          )}
+          {run?.result.stop_reason === 'user_paused' && !run.active && (
+            <div className="composer-toolbar">
+              <span>已暂停 · 继续沿用剩余预算</span>
+              <Button
+                type="primary"
+                onClick={send.resume}
+                disabled={!conversation.can_continue || send.sending || !!send.pending}
+              >
+                恢复执行
+              </Button>
+            </div>
           )}
           {send.error && (
             <Alert
@@ -421,18 +475,45 @@ export function ConversationPanel({
                     event.keyCode !== 229
                   ) {
                     event.preventDefault();
-                    send.send();
+                    sendMessage();
                   }
                 }
               }
             />
             <div className="composer-toolbar">
-              <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
-              <PermissionSelect value={send.permissionMode} onChange={send.setPermissionMode} disabled={send.permissionBlocked} />
+              {run?.active ? (
+                <Select
+                  aria-label="运行中消息生效时机"
+                  value={runtime.delivery}
+                  onChange={runtime.setDelivery}
+                  disabled={Boolean(runtime.pending)}
+                  options={[
+                    { value: 'steer', label: '本轮补充' },
+                    { value: 'next', label: '下一轮执行' },
+                  ]}
+                />
+              ) : (
+                <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
+              )}
+              <PermissionSelect
+                value={send.permissionMode}
+                onChange={send.setPermissionMode}
+                disabled={send.permissionBlocked || Boolean(run?.active) || run?.result.stop_reason === 'user_paused'}
+              />
               <span className="composer-keyboard-hint">
                 {!run ? '正在核对最新运行状态…' : run.active ? '' : 'Enter 发送 · Shift+Enter 换行'}
               </span>
-              {run?.active && onStop ? (
+              {run?.active && conversation.management.state === 'active' && (
+                <Button
+                  aria-label="暂停"
+                  onClick={/* 暂停只改变调度意图；真实状态以宿主快照为准。 */ () => runtime.pause()}
+                  loading={runtime.pausing}
+                  disabled={stopping || runtime.query.data?.state?.status !== 'running'}
+                >
+                  暂停
+                </Button>
+              )}
+              {run?.active && onStop && (
                 <Button
                   className="send-message"
                   aria-label="停止当前执行"
@@ -443,19 +524,27 @@ export function ConversationPanel({
                 >
                   停止
                 </Button>
-              ) : (
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  className="send-message"
-                  aria-label={send.confirming ? '重试确认' : '发送消息'}
-                  disabled={!send.canSend}
-                  loading={send.sending}
-                  icon={send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />}
-                >
-                  {send.confirming ? '重试确认' : '发送'}
-                </Button>
               )}
+              <Button
+                type="primary"
+                htmlType="submit"
+                className="send-message"
+                aria-label={runtime.pending || send.confirming ? '重试确认' : '发送消息'}
+                disabled={
+                  run?.active || runtime.pending
+                    ? conversation.management.state !== 'active' ||
+                      runtime.sending ||
+                      (!runtime.pending &&
+                        (!send.text.trim() ||
+                          send.text.length > 16000 ||
+                          runtime.query.data?.state?.status !== 'running'))
+                    : !send.canSend
+                }
+                loading={runtime.sending || send.sending}
+                icon={runtime.pending || send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />}
+              >
+                {runtime.pending || send.confirming ? '重试确认' : '发送'}
+              </Button>
             </div>
           </form>
         </div>

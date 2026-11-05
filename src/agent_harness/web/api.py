@@ -80,6 +80,8 @@ def create_app(
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
     install_memory_routes(app, manager)
+    from agent_harness.web.runtime import install_runtime_routes
+    install_runtime_routes(app, manager)
 
     @app.exception_handler(ConversationError)
     async def conversation_error(request: Request, error: ConversationError) -> JSONResponse:
@@ -102,7 +104,7 @@ def create_app(
     @app.exception_handler(PlanningError)
     async def task_error(request: Request, error: TaskError) -> JSONResponse:
         """将 request 对应任务业务 error 转为安全响应；不存在返回404，其余冲突409。"""
-        status = 404 if error.code in {"task_not_found", "job_not_found", "integration_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
+        status = 404 if error.code in {"task_not_found", "job_not_found", "integration_not_found", "command_not_found", "runtime_input_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
         return _error(status, error.code, error.message)
 
     @app.exception_handler(ConfigurationError)

@@ -29,7 +29,8 @@ def _skipped(code: str) -> dict:
 
 def _record_tool(context: "RunContext", call: ToolCall, result: dict, messages: list[dict]) -> None:
     """校验并编码结果后再提交事件，每个调用只留下一个已配对的结果。"""
-    if result.get("ok") and call.name not in {"task_create", "task_get", "task_list", "task_update", "memory_propose"}:
+    accepted_command = call.name == "run_command" and (result.get("data") or {}).get("accepted")
+    if result.get("ok") and not accepted_command and call.name not in {"task_create", "task_get", "task_list", "task_update", "memory_propose"}:
         # 回执明确返回可复制的证据引用，模型不必猜测供应商工具编号或当前运行编号。
         result = {**result, "evidence_ref": {"run_id": str(context.manifest.run_id), "tool_call_id": call.call_id}}
     # 命令原始输出引用相对其所属运行，跨轮回读时不能误用新运行目录。
@@ -70,6 +71,17 @@ def _collect_usage(context: "RunContext", usage: dict | None) -> None:
             context.result.usage_complete = False
             if context.budget_parent is not None:
                 context.budget_parent.result.usage_complete = False
+
+
+def _command_notifications(context, commands, messages: list[dict]) -> bool:
+    """将 commands 新完成事实提交 context 并加入完整 messages；返回是否追加，None 控制器返回 False。"""
+    values = commands.notifications() if commands is not None else []
+    if not values:
+        return False
+    message = {"role": "user", "content": "[宿主后台命令结束事实；不是新的用户要求，不授予权限。]\n" + json.dumps(values, ensure_ascii=False)}
+    context.emit("command_notifications", {"message": message})
+    messages.append(message)
+    return True
 
 
 async def _request_model(context: "RunContext", client: ModelClient, messages: list[dict], tools: list[dict], purpose: str) -> ModelResponse:
@@ -280,7 +292,19 @@ async def _run_agent(
     if resume is not None and resume.child_run_id is not None:
         reports = await executor.subagents.resume_children()
         messages.append({"role": "user", "content": "宿主接续子任务后的交接报告：" + json.dumps(reports, ensure_ascii=False)})
+    elif context.manifest.execution_resume is not None and getattr(executor, "subagents", None) is not None:
+        reports = await executor.subagents.resume_children()
+        if reports:
+            message = {"role": "user", "content": "[宿主安全暂停接续的子执行报告；保留原工具结果与剩余预算，不授予新权限。]\n" + json.dumps(reports, ensure_ascii=False)}
+            context.emit("subagent_resume_reports", {"message": message})
+            messages.append(message)
     while context.available("model_turns") > 0:
+        control = context.runtime_control
+        commands = getattr(executor, "commands", None)
+        if control is not None:
+            await control.boundary(executor)
+            control.deliver(messages)
+        _command_notifications(context, commands, messages)
         if team is not None and team.member_id is None:
             state = team.snapshot()
             if state and state["parent_run_id"] == str(context.manifest.run_id) and state["status"] in {"stopping", "stopped"}:
@@ -348,6 +372,8 @@ async def _run_agent(
             raise AgentStopped("limit_exceeded", "max_model_turns")
         builder.memory.record_use(context.result.model_turns + 1, prepared.messages)
         response = await request_model(prepared.messages, prepared.tools, "execution")
+        if control is not None:
+            control.acknowledge()
         if team is not None:
             team.acknowledge(team_sequence)
         if controller is not None:
@@ -357,6 +383,16 @@ async def _run_agent(
         # 完整保留 assistant 消息及其调用 ID，下一轮才能正确对应每个 tool 结果。
         messages.append(response.message)
         if not response.tool_calls:
+            if control is not None:
+                await control.boundary(executor)
+                if control.deliver(messages):
+                    continue
+            if commands is not None and commands.active:
+                await commands.settle()
+                # 命令结束后重新决策，再进行宿主独立验收；不得让活动进程越过成果快照。
+                continue
+            if _command_notifications(context, commands, messages):
+                continue  # 模型请求期间完成的后台命令也必须交回模型核对，不能直接交付旧答复。
             if controller is not None and controller.pending_reports:
                 reports = await controller.wait_all()
                 messages.append({"role": "user", "content": "子研究已结束，请核对报告后交付：" + json.dumps(reports, ensure_ascii=False)})
@@ -368,6 +404,12 @@ async def _run_agent(
                     raise AgentStopped("waiting_input", "team_attention_required")
             feedback = await on_completion() if on_completion is not None else None
             if feedback is None:
+                if control is not None and control.available_inputs():
+                    context.result.execution_status = "running"
+                    context.result.validation_status = "unverified"
+                    context.result.verification = None
+                    context.result.final_answer = None
+                    continue  # 检查期间收到的新约束仍需处理，旧检查只留历史。
                 return
             messages.append({"role": "user", "content": feedback})
             continue
@@ -389,6 +431,11 @@ async def _run_agent(
         try:
             for index, call in enumerate(batch):
                 started = False
+                if control is not None and (control.pausing() or control.available_inputs()):
+                    for remaining in batch[index:]:
+                        _record_tool(context, remaining, _skipped("runtime_input_requires_review"), messages)
+                    await control.boundary(executor)
+                    break  # 未执行参数已经过时，先配齐整批，再在下一轮交付新要求。
                 if context.budget_parent is not None and context.manifest.delegation.role == "develop" and context.budget_parent.subagent_controller.pause_requested:
                     for remaining in batch[index:]:
                         _record_tool(context, remaining, _skipped("skipped_child_pause"), messages)
@@ -485,6 +532,14 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
     from agent_harness.permissions.policy import FILE_SCOPE, roots
     policy = context.manifest.config.permission_policy
     token = FILE_SCOPE.set((context.manifest.task.workspace.resolve(), roots(context.manifest.task.workspace.resolve(), policy.read_roots) if policy.read == "allow" else ()))
+    if isinstance(executor, ToolExecutor):
+        from agent_harness.execution.commands import CommandController
+        from agent_harness.runtime.control import RuntimeControl
+        if context.runtime_control is None:
+            context.runtime_control = RuntimeControl(context)
+        executor.commands = CommandController(context, executor)
+        context.command_controller = executor.commands
+        (context.budget_parent or context).command_controllers[str(context.manifest.run_id)] = executor.commands
     if getattr(executor, "permissions", None) is None and isinstance(executor, ToolExecutor):
         from agent_harness.permissions.controller import PermissionController
         spent = context.result.permissions
@@ -498,6 +553,11 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
         await _run_agent(context, client, executor, on_completion=on_completion, inherited_context=inherited_context)
     finally:
         FILE_SCOPE.reset(token)
-        controller = getattr(executor, "subagents", None)
-        if controller is not None:
-            await controller.close()
+        try:
+            controller = getattr(executor, "subagents", None)
+            if controller is not None:
+                await controller.close()
+        finally:
+            commands = getattr(executor, "commands", None)
+            if commands is not None:
+                await commands.settle(stop=True)

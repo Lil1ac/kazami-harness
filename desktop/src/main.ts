@@ -65,18 +65,18 @@ async function requestQuit(): Promise<void> {
   try {
     const state = backend
       ? await backend
-          .read<{ busy_run_id: string | null; queue_pending: number }>(
+          .read<{ active_run_ids: string[]; queue_pending: number; scheduler: { active_jobs: string[] } }>(
             "/api/options",
           )
           .catch(/* 后台已停止时仍允许退出窗口。 */ () => null)
       : null;
-    if ((state?.busy_run_id || state?.queue_pending) && window) {
+    if ((state?.active_run_ids.length || state?.queue_pending || state?.scheduler.active_jobs.length) && window) {
       const answer = await dialog.showMessageBox(window, {
         type: "question",
         title: "退出 Agent Harness",
         message: "仍有运行或排队工作",
         detail:
-          "退出将停止出队并取消活动运行，等待清理和记录保存；未执行请求保留，重启后手动恢复。",
+          "退出将停止出队并取消活动运行，等待清理和记录保存；未执行请求保留，重启后按后台工作中的恢复设置处理。",
         buttons: ["继续运行", "取消任务并退出"],
         defaultId: 0,
         cancelId: 0,
@@ -132,6 +132,8 @@ async function start(): Promise<void> {
   args.push("--data-dir", dataDirectory, "--runs-dir", runs);
   const config = argument("--config");
   if (config) args.push("--config", config);
+  const webConfig = argument("--web-config"); // 宿主调度容量与串行资源组；页面不能覆盖。
+  if (webConfig) args.push("--web-config", webConfig);
   backend = new BackendProcess({
     executable,
     args,

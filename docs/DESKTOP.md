@@ -1,5 +1,7 @@
 # Windows 桌面端
 
+> 2026-11-05：跨项目调度现已改为受资源约束的并发，默认双槽；同仓库、重叠目录和共享资源仍串行。启动恢复、终态对账、单项停止及当前接口以[调度协议](SCHEDULING.md)为准。下文早期验收中的单槽仅描述对应历史批次。
+
 Agent Harness 以 Electron 桌面工作台为主要入口，React/TypeScript 提供界面，Python/FastAPI/Runner 提供统一任务执行核心。CLI 适合脚本调用，独立网页服务保留为开发与调试入口。
 
 ## 启动
@@ -14,7 +16,7 @@ npm.cmd --prefix desktop run dev
 
 修改前端后运行 `npm.cmd --prefix frontend run build`，再重新打开桌面端。主进程和预加载 TypeScript 会由开发命令自动编译。
 
-可在命令后追加 `-- --data-dir D:\data\harness --runs-dir D:\data\runs --config D:\config\harness.toml`。路径始终在启动时固定，任务的执行目录由页面另行选择。相同数据目录重复启动只聚焦已有窗口。
+可在命令后追加 `-- --data-dir D:\data\harness --runs-dir D:\data\runs --config D:\config\harness.toml --web-config D:\config\web.toml`。路径始终在启动时固定，任务的执行目录由页面另行选择。相同数据目录重复启动只聚焦已有窗口。
 
 ## 架构与生命周期
 

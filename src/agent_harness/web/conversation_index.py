@@ -139,4 +139,4 @@ class ConversationIndex:
         if status is not None:
             summaries = [item for item in summaries if item.latest is not None and item.latest.execution_status == status]
         summaries.sort(key=lambda item: ((item.management.deleted_at or "") if state == "trashed" else (item.management.pinned_at or ""), item.updated_at, str(item.session_id)), reverse=True)
-        return ConversationPage(items=summaries[offset:offset + limit], total=len(summaries), busy_run_id=self.manager.busy_run_id)
+        return ConversationPage(items=summaries[offset:offset + limit], total=len(summaries), active_run_ids=self.manager.active_run_ids)

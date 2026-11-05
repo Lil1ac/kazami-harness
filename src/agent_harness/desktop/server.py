@@ -28,10 +28,11 @@ class Bootstrap(DataModel):
     api_key: SecretStr = Field(max_length=2560)  # 解密后的模型凭据；空值允许查看历史。
 
 
-async def serve(data_directory: Path, runs_directory: Path, config_path: Path | None, bootstrap: Bootstrap, bridge: NativeBridge, model_client: ModelClient | None = None) -> None:
+async def serve(data_directory: Path, runs_directory: Path, config_path: Path | None, bootstrap: Bootstrap, bridge: NativeBridge, model_client: ModelClient | None = None, *, web_config_path: Path | None = None) -> None:
     """启动本机后台并等待完整关闭；路径固定数据/记录/配置，bootstrap 仅驻留内存。
 
     bridge 在父进程关闭管道或发送 shutdown 时请求停止；model_client=None 使用真实模型，
+    web_config_path=None 使用内置宿主容量；非空读取调度容量、共享资源及受控项目配置。
     测试可显式注入离线模型。返回 None，启动失败抛受控配置错误，不自动重放任务。
     """
     root = resource_root()
@@ -39,7 +40,8 @@ async def serve(data_directory: Path, runs_directory: Path, config_path: Path | 
     config = load_config(config_path or root / "harness.example.toml")
     if store.value.config is not None:
         config = store.value.config.apply(config)
-    web_config = load_web_config(project_dir=root).model_copy(update={"worktrees_root": store.directory / "worktrees"})
+    # 桌面复用宿主预设和调度规则；界面始终使用随应用分发的构建，工作树仍由应用数据目录管理。
+    web_config = load_web_config(web_config_path, project_dir=root).model_copy(update={"worktrees_root": store.directory / "worktrees", "frontend_dist": root / "frontend" / "dist"})
     if not (web_config.frontend_dist / "index.html").is_file():
         raise ConfigurationError("前端尚未构建，请先运行 npm.cmd --prefix frontend run build。")
     host = DesktopHost(store, bridge, bootstrap.token, bootstrap.api_key.get_secret_value())
@@ -76,6 +78,7 @@ def main(argv: list[str] | None = None, *, model_client: ModelClient | None = No
     parser.add_argument("--data-dir", type=Path, required=True, help="应用公开设置目录")
     parser.add_argument("--runs-dir", type=Path, required=True, help="固定运行记录目录")
     parser.add_argument("--config", type=Path, help="宿主默认运行配置，省略使用打包配置")
+    parser.add_argument("--web-config", type=Path, help="宿主目录、调度容量及串行资源组配置，省略使用内置默认值")
     args = parser.parse_args(argv)
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -87,7 +90,7 @@ def main(argv: list[str] | None = None, *, model_client: ModelClient | None = No
         if len(line) > 65536:
             raise ValueError("启动信息超过限制")
         bootstrap = Bootstrap.model_validate_json(line)
-        asyncio.run(serve(args.data_dir.resolve(), args.runs_dir.resolve(), args.config, bootstrap, bridge, model_client))
+        asyncio.run(serve(args.data_dir.resolve(), args.runs_dir.resolve(), args.config, bootstrap, bridge, model_client, web_config_path=args.web_config))
         return 0
     except (ConfigurationError, ValidationError, ValueError):
         bridge.send({"type": "error", "message": "后台启动配置无效，请检查应用设置和配置文件。"})

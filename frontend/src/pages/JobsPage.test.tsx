@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getJobs, jobAction, resumeQueue } from '../api';
+import { getJobs, jobAction, resumeQueue, configureQueue } from '../api';
 import { makeJob } from '../test/fixtures';
 import { JobsPage } from './JobsPage';
 
@@ -11,6 +11,7 @@ vi.mock(
   '../api',
   /* HTTP 替身只提供持久作业快照，页面不调用模型。 */ () => ({
     getJobs: vi.fn(),
+    configureQueue: vi.fn(),
     getJob: vi.fn(),
     jobAction: vi.fn(),
     resumeQueue: vi.fn(),
@@ -36,6 +37,14 @@ beforeEach(
     vi.resetAllMocks();
     vi.mocked(getJobs).mockResolvedValue({
       paused: true,
+      scheduler: {
+        max_concurrent_runs: 2,
+        active_jobs: [],
+        resume_on_start: false,
+        paused: true,
+        model_limit: 2,
+        process_limit: 4,
+      },
       items: [
         {
           ...makeJob(),
@@ -74,6 +83,14 @@ it('失联的集成检查提供进程核对，失联写回只能进入逐文件�
   const user = userEvent.setup();
   vi.mocked(getJobs).mockResolvedValue({
     paused: true,
+    scheduler: {
+      max_concurrent_runs: 2,
+      active_jobs: [],
+      resume_on_start: false,
+      paused: true,
+      model_limit: 2,
+      process_limit: 4,
+    },
     items: [
       {
         ...makeJob(),
@@ -104,4 +121,80 @@ it('失联的集成检查提供进程核对，失联写回只能进入逐文件�
     /* 仅解除检查进程阻塞，不跳过写回日志。 */ () =>
       expect(jobAction).toHaveBeenCalledWith('check-job', 'resolve'),
   );
+});
+
+it('同时展示独立运行、资源阻塞与启动恢复设置', async () => {
+  const user = userEvent.setup();
+  vi.mocked(getJobs).mockResolvedValue({
+    paused: false,
+    scheduler: {
+      max_concurrent_runs: 2,
+      active_jobs: ['first', 'second'],
+      resume_on_start: false,
+      paused: false,
+      model_limit: 2,
+      process_limit: 4,
+    },
+    items: [
+      { ...makeJob(), id: 'first', title: '项目一', status: 'running' },
+      { ...makeJob(), id: 'second', title: '项目二', status: 'running' },
+      {
+        ...makeJob(),
+        id: 'third',
+        title: '项目一后续',
+        status: 'queued',
+        blocked_reason: '等待相关项目或共享资源',
+        blocked_by: 'first',
+      },
+    ],
+  });
+  show();
+  expect(await screen.findByText('运行 2 / 2')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '运行中' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '排队' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '查看占用工作' })).toHaveAttribute('href', '/jobs/first');
+  await user.click(screen.getByRole('switch', { name: '启动后继续未开始的队列' }));
+  await waitFor(
+    /* 切换只保存用户明确偏好，不恢复旧运行。 */ () =>
+      expect(configureQueue).toHaveBeenCalledWith(true, expect.anything()),
+  );
+  expect(resumeQueue).not.toHaveBeenCalled();
+});
+
+it('停止一项等待清理时仍可停止另一项独立运行', async () => {
+  const user = userEvent.setup();
+  let finishFirst: (value: ReturnType<typeof makeJob>) => void = () => {}; // 第一项真实响应由测试最后释放。
+  const pending = new Promise<ReturnType<typeof makeJob>>(
+    /* 暂存首项清理回执，不阻塞另一项。 */ (resolve) => {
+      finishFirst = resolve;
+    },
+  );
+  vi.mocked(getJobs).mockResolvedValue({
+    paused: false,
+    scheduler: {
+      max_concurrent_runs: 2,
+      active_jobs: ['first', 'second'],
+      resume_on_start: false,
+      paused: false,
+      model_limit: 2,
+      process_limit: 4,
+    },
+    items: [
+      { ...makeJob(), id: 'first', title: '任务一', status: 'running' },
+      { ...makeJob(), id: 'second', title: '任务二', status: 'running' },
+    ],
+  });
+  vi.mocked(jobAction).mockImplementation(
+    /* 每个编号等待各自的后端响应。 */ (id) =>
+      id === 'first' ? pending : Promise.resolve({ ...makeJob(), id, status: 'cancelled' }),
+  );
+  show();
+  const first = (await screen.findByText('任务一')).closest('li')!;
+  const second = screen.getByText('任务二').closest('li')!;
+  await user.click(within(first).getByRole('button', { name: '停止' }));
+  expect(within(second).getByRole('button', { name: '停止' })).toBeEnabled();
+  await user.click(within(second).getByRole('button', { name: '停止' }));
+  expect(jobAction).toHaveBeenCalledWith('first', 'cancel');
+  expect(jobAction).toHaveBeenCalledWith('second', 'cancel');
+  finishFirst({ ...makeJob(), id: 'first', status: 'cancelled' });
 });

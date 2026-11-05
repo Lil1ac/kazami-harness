@@ -21,7 +21,7 @@ from agent_harness.schemas import RunConfig
 from agent_harness.storage.sessions import SessionError
 from agent_harness.storage.runs import StorageError
 from agent_harness.web.config import WebConfig
-from agent_harness.web.schemas import ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
+from agent_harness.web.schemas import QueueSettings, ConversationPage, CreateProjectRequest, ProjectNameRequest, ProjectSettingsRequest, ConversationView, CreateRunRequest, FollowupRequest, RunView, ReviewDecision
 from agent_harness.web.service import WebRunManager, WebServiceError
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.jobs import JobRequest
@@ -73,6 +73,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """在 app 生命周期内维护后台任务，退出时等待取消清理；yield None 不产生额外资源。"""
         try:
+            manager.jobs.kick()
             yield
         finally:
             await manager.shutdown()
@@ -123,7 +124,12 @@ def create_app(
     @app.get("/api/jobs")
     async def jobs() -> dict:
         """返回后台作业及队列暂停状态；只读，不恢复执行。"""
-        return {"items": [manager.jobs.public(job) for job in manager.jobs.list()], "paused": manager.jobs.paused}
+        return {"items": [manager.jobs.public(job) for job in manager.jobs.list()], "paused": manager.jobs.paused, "scheduler": manager.jobs.snapshot()}
+
+    @app.put("/api/queue/settings")
+    async def queue_settings(body: QueueSettings) -> dict:
+        """保存 body 明确的重启调度偏好，返回容量和状态；不恢复旧工具或当前暂停。"""
+        return manager.jobs.configure(body.resume_on_start)
 
     @app.get("/api/jobs/{job_id}")
     async def job(job_id: UUID) -> dict:
@@ -142,7 +148,7 @@ def create_app(
 
     @app.post("/api/queue/resume")
     async def resume_queue() -> dict:
-        """明确恢复尚未执行队列；中断作业未核对时拒绝，返回暂停状态。"""
+        """明确恢复可用资源上的未执行队列；未知资源仍阻塞，返回暂停状态。"""
         manager.jobs.resume()
         return {"paused": manager.jobs.paused}
 
@@ -169,7 +175,7 @@ def create_app(
     async def create_task(run_id: UUID, body: TaskCreate) -> dict:
         """人工创建 body 工作项；当前会话执行中时拒绝结构性变更，返回创建回执。"""
         service = task_service(run_id)
-        active = manager._active
+        active = manager.active_for_session(service.session)
         if active and str(active.manifest.session_id or active.manifest.run_id) == service.session:
             raise TaskError("session_busy", "请先停止当前运行，再修改任务范围。")
         return service.create(body)
@@ -178,7 +184,7 @@ def create_app(
     async def update_task(run_id: UUID, body: TaskUpdate) -> dict:
         """人工更新 body 工作项；取消进行中项先停止其真实 Run，其他变更要求会话空闲。"""
         service = task_service(run_id)
-        active = manager._active
+        active = manager.active_for_session(service.session)
         if active and str(active.manifest.session_id or active.manifest.run_id) == service.session:
             if body.status != "cancelled":
                 raise TaskError("session_busy", "请先停止当前运行，再修改任务范围。")
@@ -195,7 +201,7 @@ def create_app(
                     parent = items[parent]["parent_task_id"]
             if owned:
                 await manager.cancel(UUID(owned))
-                await manager.wait_idle()
+                await manager.wait_idle(owned)
                 body = body.model_copy(update={"expected_revision": service.get(body.task_id)["revision"]})
         return service.update(body)
 
@@ -421,7 +427,13 @@ def create_app(
         from agent_harness.permissions.store import PermissionStore
         if PermissionStore(manager.runs_root).waiting(manager._read_history(run_id)) is not None:
             raise HTTPException(409, detail="请先处理父会话中的子任务审批。")
-        return (await asyncio.to_thread(manager.projects.decide, child_id, request.decision)).model_dump(mode="json")
+        async with manager.workspace_action(run_id):
+            operation = asyncio.create_task(asyncio.to_thread(manager.projects.decide, child_id, request.decision))
+            try:
+                return (await asyncio.shield(operation)).model_dump(mode="json")
+            except asyncio.CancelledError:
+                await asyncio.shield(operation)
+                raise
 
     @app.post("/api/runs/{run_id}/subagents/{child_id}/cancel")
     async def cancel_subagent(run_id: UUID, child_id: UUID) -> dict:

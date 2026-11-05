@@ -76,11 +76,11 @@ function lastProject(): string {
 /** 首页主输入区；项目选择、确认绑定与发送各自独立，切换保留任务文字。 */
 export function TaskForm({
   options,
-  busyId,
+  activeRunIds,
   initialProjectId,
 }: {
   options: OptionsResponse; // 当前宿主目录与能力。
-  busyId: string | null; // 全局单槽的实际活动任务。
+  activeRunIds: string[]; // 已建立的活动运行集合；新请求仍可按资源排队。
   initialProjectId?: string; // 项目新建入口明确指定来源，优先于浏览器上次选择。
 }) {
   const draftKey = initialProjectId ? TASK_DRAFT_KEY + ':' + initialProjectId : TASK_DRAFT_KEY; // 不同项目的新会话草稿分别保存。
@@ -214,16 +214,16 @@ export function TaskForm({
           }
         />
       )}
-      {busyId && (
+      {activeRunIds.length > 0 && (
         <Alert
           type="info"
-          title="已有任务正在执行"
+          title={`有 ${activeRunIds.length} 项工作正在执行`}
           description={
             <Button
               type="link"
-              onClick={/* 打开现有任务，不重复发送。 */ () => navigate('/runs/' + busyId)}
+              onClick={/* 打开现有任务，不重复发送。 */ () => navigate('/jobs')}
             >
-              查看正在执行的任务
+              查看后台工作
             </Button>
           }
         />

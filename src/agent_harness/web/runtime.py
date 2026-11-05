@@ -65,7 +65,7 @@ def install_runtime_routes(app, manager) -> None:
         """核验 run_id 为当前活动最新段；归档、历史、取消和收尾阶段拒绝新控制请求。"""
         view = readable(run_id)
         manager.management.require_active(str(view.session_id or view.run_id))
-        item = manager._active
+        item = manager._active.get(run_id)
         if not view.active or item is None or item.cancelling or item.finalizing or item.context is None or item.context.phase == "artifact_collection":
             raise TaskError("runtime_not_running", "运行已经收尾，请查看历史或继续会话。")
         return view
@@ -142,7 +142,7 @@ def install_runtime_routes(app, manager) -> None:
         """停止当前根 run_id 内 command_id 并等待清理；旧 PID 不作为恢复或停止依据。"""
         view = readable(run_id)
         manager.management.require_active(str(view.session_id or view.run_id))
-        item = manager._active
+        item = manager._active.get(run_id)
         if not view.active or item is None or item.context is None:
             raise TaskError("command_not_active", "历史命令只能核对记录，不能按旧 PID 执行停止。")
         for owner, controller in item.context.command_controllers.items():

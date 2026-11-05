@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -116,7 +116,9 @@ test(
   { skip: process.platform !== "win32", timeout: 45000 },
   /* 验证生产宿主协议，只有模型和系统目录选择返回使用离线替身。 */ async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-backend-"));
-    let backend = makeBackend(root, "a".repeat(64));
+    const webConfig = path.join(root, "host.toml"); // 显式使用单槽宿主，验证桌面配置与 Web 共用契约。
+    await writeFile(webConfig, "max_concurrent_runs = 1\nmax_model_requests = 1\nmax_processes = 2\n");
+    let backend = makeBackend(root, "a".repeat(64), ["--web-config", webConfig]);
     let token = "a".repeat(64);
     try {
       await backend.start();
@@ -147,6 +149,9 @@ test(
         "PUT",
       );
       const options = await backend.read<any>("/api/options");
+      assert.equal(options.scheduler.max_concurrent_runs, 1);
+      assert.equal(options.scheduler.model_limit, 1);
+      assert.equal(options.scheduler.process_limit, 2);
       const settings = {
         requested_model: options.config.requested_model,
         tools: options.config.tools,
@@ -236,7 +241,7 @@ test(
       );
       await backend.stop();
       token = randomBytes(32).toString("hex");
-      backend = makeBackend(root, token);
+      backend = makeBackend(root, token, ["--web-config", webConfig]);
       await backend.start();
       const history = await api(
         backend,

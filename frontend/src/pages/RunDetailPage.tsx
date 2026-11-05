@@ -58,7 +58,7 @@ export function RunDetailPage() {
     enabled: !!run.data,
     retry: false,
     refetchInterval: /* 准备、执行与快照占槽时更新继续条件，终态停止轮询。 */ (state) =>
-      state.state.data?.busy_run_id || state.state.data?.blocked_code === 'run_busy' ? 1500 : false,
+      state.state.data?.active_run_ids.length || state.state.data?.blocked_code === 'run_busy' ? 1500 : false,
   });
   const accessError = run.error || conversation.error;
   const deletedError = accessError as ApiError | null;

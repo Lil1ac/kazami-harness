@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -28,14 +28,13 @@ if TYPE_CHECKING:
 
 
 class ConversationService:
-    """在现有单槽和生命周期内组织会话；不改写旧轮事件、测试或补丁。"""
+    """在独立运行生命周期内组织串行会话；不改写旧轮事件、测试或补丁。"""
 
     def __init__(self, manager: 'WebRunManager') -> None:
         """绑定 manager 及其受保护存储；构造不创建目录、复制文件或调用模型。"""
         self.manager = manager  # 唯一执行调度器，负责后台任务、取消和收尾。
         self.store = SessionStore(manager.runs_root)  # 会话线性关系与请求幂等。
-        self.submission_digest: str | None = None  # 内存中尚未落盘请求的载荷摘要，用于并发幂等。
-        self.submission_key: tuple[UUID, UUID] | None = None  # 正在准备的会话/请求，供同进程重复请求共享等待。
+        self.submission_digests: dict[tuple[UUID, UUID], str] = {}  # 每个会话请求独立保留摘要，避免并行准备串线。
 
     def _origin(self, history: 'RunHistory') -> RunOrigin:
         """核对history的固定宿主来源并返回；缺失或登记变化时抛SessionError，无副作用。"""
@@ -117,9 +116,10 @@ class ConversationService:
                 )
                 blocked = SessionError('continuation_unverified', '已登记的后续运行尚无可信记录，请核对准备状态；不会自动重放。')
             turns.append(turn)
-        busy = self.manager.busy_run_id
-        preparing = self.manager._submission is not None and not self.manager._submission.done()
-        if busy == record.run_ids[-1] or (preparing and busy == record.run_ids[-1]):
+        active = self.manager.active_for_session(str(session_id))
+        busy = active.manifest.run_id if active else None
+        preparing = any(key[0] == session_id for key in self.manager._submissions)
+        if busy is not None or preparing:
             blocked = SessionError('run_busy', '已有任务正在准备、运行或保存快照，请等待完成或取消。')
         elif any(item.state == 'preparing' for item in record.requests.values()):
             blocked = SessionError('request_uncertain', '上次追加准备尚未确认，请核对本地状态；不会自动重新执行。')
@@ -131,18 +131,20 @@ class ConversationService:
         management = self.manager.management.view(str(session_id))
         if management.state != "active":
             blocked = SessionError("conversation_inactive", "请先恢复会话，再继续发送或处理计划。")
-        return ConversationView(title=management.title, management=management, source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, busy_run_id=busy, continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
+        return ConversationView(title=management.title, management=management, source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, active_run_ids=[busy] if busy is not None else [], continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
 
-    async def submit(self, parent_id: UUID, request: FollowupRequest):
-        """幂等接纳追加 request；HTTP断开不取消准备，同进程重复请求共享原任务等待。"""
+    async def submit(self, parent_id: UUID, request: FollowupRequest, *, run_id: UUID, job_id: str, memory_policy: dict):
+        """准备已接纳 request；parent_id 为最新轮，run_id/job_id 固定归属，memory_policy 为冻结策略，返回运行视图。"""
         parent = self.manager._read_history(parent_id)
         session_id = parent.manifest.session_id or parent_id
         self.manager.management.require_active(str(session_id))
         digest = payload_digest({'parent_run_id': str(parent_id), **request.model_dump(mode='json', exclude={'request_id'})})
-        if self.submission_key == (session_id, request.request_id) and self.manager._submission is not None and not self.manager._submission.done():
-            if self.submission_digest != digest:
+        key = (session_id, request.request_id)
+        preparation = self.manager._submissions.get(key)
+        if preparation is not None and not preparation.done():
+            if self.submission_digests.get(key) != digest:
                 raise SessionError('request_conflict', '该请求编号已用于不同内容。')
-            return await asyncio.shield(self.manager._submission)
+            return await asyncio.shield(preparation)
         intent = self.store.lookup(session_id, request.request_id, digest)
         if intent is not None:
             if intent.state == 'committed':
@@ -152,32 +154,33 @@ class ConversationService:
                     raise SessionError('request_uncertain', '原请求已接纳但记录尚未完整建立，请核对；不会重复执行。') from None
             if intent.state == 'failed':
                 raise SessionError(intent.error_code or 'request_failed', intent.error_message or '原请求准备失败，请核对后重新提交。')
-            if self.submission_key == (session_id, request.request_id) and self.manager._submission is not None:
-                return await asyncio.shield(self.manager._submission)
+            if preparation is not None:
+                return await asyncio.shield(preparation)
             raise SessionError('request_uncertain', '原追加请求准备状态尚未确认，不会自动重放。')
         if self.manager._closing:
             raise SessionError('service_closing', '本地服务正在关闭。')
-        if self.manager.busy_run_id is not None or (self.manager._submission is not None and not self.manager._submission.done()):
-            raise SessionError('run_busy', '已有任务正在准备或运行，请等待完成或取消。')
-        task = asyncio.create_task(self._start(parent_id, session_id, request, digest), name='harness-followup-prepare')
-        self.manager._submission = task
-        self.submission_key = (session_id, request.request_id)
-        self.submission_digest = digest
+        if self.manager.active_for_session(str(session_id)) is not None or any(item[0] == session_id for item in self.manager._submissions):
+            raise SessionError('run_busy', '当前会话正在准备或运行，请等待完成或取消。')
+        task = asyncio.create_task(self._start(parent_id, session_id, request, digest, run_id, job_id, memory_policy), name='harness-followup-prepare')
+        self.manager._submissions[key] = task
+        self.submission_digests[key] = digest
 
         def observe(task: asyncio.Task) -> None:
             """取回准备异常供断开连接的请求收尾；正常返回值仍由 shield 原样交付。"""
+            self.manager._submissions.pop(key, None)
+            self.submission_digests.pop(key, None)
             if not task.cancelled():
                 task.exception()
         task.add_done_callback(observe)
         return await asyncio.shield(task)
 
-    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str):
-        """持有全局单槽核验父状态、复用会话目录并启动 Runner；失败不修改父证据。"""
+    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str, identifier: UUID, owner: str, memory_policy: dict):
+        """核验 parent_id/session_id 与 request/digest，按 identifier/owner 准备新段并返回视图；memory_policy 固定记忆，失败不改父证据。"""
         async with self.manager._lock:
             if self.manager._closing:
                 raise SessionError('service_closing', '本地服务正在关闭。')
-            if self.manager.busy_run_id is not None:
-                raise SessionError('run_busy', '已有任务正在运行。')
+            if self.manager.active_for_session(str(session_id)) is not None:
+                raise SessionError('run_busy', '当前会话仍在运行。')
             parent = self.manager._read_history(parent_id)
             if self.store.read(session_id).run_ids[-1] != parent_id:
                 raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
@@ -233,8 +236,8 @@ class ConversationService:
                 if section in patch:
                     merged[section] = {**merged[section], **patch.pop(section)}
             merged.update(patch)
-            if self.manager._queued_memory_policy is not None:
-                merged["memory"] = self.manager._queued_memory_policy
+            if memory_policy is not None:
+                merged["memory"] = memory_policy
             try:
                 config = load_config(overrides=merged)
                 if (resume is not None or execution_resume is not None) and config.limits != parent.manifest.config.limits:
@@ -244,7 +247,6 @@ class ConversationService:
                 prompt = request.prompt.strip()
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
-                identifier = self.manager._queued_run_id or uuid4()
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
@@ -290,7 +292,7 @@ class ConversationService:
                 manifest = manifest.model_copy(update={'task': task})
                 validate_auto_repair(manifest)
                 self.store.commit(session_id, request.request_id)
-                return await self.manager._launch(manifest, api_key)
+                return await self.manager._launch(manifest, api_key, owner)
             except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:
                 code = error.code if isinstance(error, (SessionError, SnapshotError, ProjectError)) else 'followup_prepare_failed'
                 message = error.message if isinstance(error, (SessionError, SnapshotError, ProjectError)) else str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else '后续运行准备失败，已有父结果保持不变。'

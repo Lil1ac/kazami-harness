@@ -53,7 +53,7 @@ function conversation(overrides: Partial<ConversationView> = {}): ConversationVi
     can_continue: true,
     blocked_code: null,
     blocked_reason: null,
-    busy_run_id: null,
+    active_run_ids: [],
     turns: [
       {
         run_id: 'run-a',

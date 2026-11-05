@@ -282,6 +282,33 @@ class ProcessRunner:
         command_id 为宿主生成的输出 UUID，None 自动生成；on_spawn 默认不通知，非空时
         在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
         """
+        from agent_harness.execution.scheduling import capacity
+        async with capacity("processes"):
+            return await self._run(argv, cwd, timeout_seconds=timeout_seconds, extra_env=extra_env,
+                                   python_paths=python_paths, python_execution=python_execution,
+                                   command_id=command_id, on_spawn=on_spawn, stdin_bytes=stdin_bytes)
+
+    async def _run(
+        self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
+        extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
+        python_execution: PythonExecution | None = None,
+        command_id: str | None = None, on_spawn: Callable[[int], None] | None = None,
+        stdin_bytes: bytes | None = None,
+    ) -> dict:
+        """执行程序并返回退出码、输出预览、原始引用和清理状态。
+
+        argv 是程序及参数数组，cwd 是已校验目录；timeout_seconds 单位秒，None 时
+        使用 command_timeout_seconds，必须为有限正数。extra_env 只允许宿主提供两项
+        固定验收变量，None 时不补充。python_execution 默认 None，非空时优先加入
+        当轮工作区源码目录，命令 cwd 可为子目录。python_paths 默认 None，只供宿主
+        验收添加 cwd 内的私有依赖，排在项目源码之后；两者均不继承父环境的 Python 注入项。
+        stdin_bytes=None 禁止输入；非空 bytes 最多 256KiB，供 Hook 的结构化事件协议使用。
+        函数会创建输出文件并启动/必要时清理进程。
+        存储故障抛 StorageError；取消附带 harness_process_result 后原样重新抛出，
+        返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
+        command_id 为宿主生成的输出 UUID，None 自动生成；on_spawn 默认不通知，非空时
+        在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
+        """
         timeout = self.limits.command_timeout_seconds if timeout_seconds is None else timeout_seconds
         if stdin_bytes is not None and (not isinstance(stdin_bytes, bytes) or len(stdin_bytes) > 262144):
             raise ValueError("命令标准输入必须为不超过256KiB的字节")

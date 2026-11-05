@@ -2,6 +2,16 @@
 worktrees_root = ".runtime/project-worktrees"
 frontend_dist = "frontend/dist"
 
+# 主 Run 和成果集成作业的总槽位，1 表示串行；取值 1—8，默认 2。
+max_concurrent_runs = 2
+# 父 Run、摘要、子 Agent 与 Teams 共同使用的模型请求槽位，取值 1—32。
+max_model_requests = 2
+# 命令、Hook、公开测试及独立检查共同使用的进程槽位，取值 1—32，清理完成后释放。
+max_processes = 4
+# 共享数据库或端口的项目可登记在同一组；路径相对本配置文件，组名不能以双下划线开头。
+# [serial_resource_groups]
+# database = ["../backend", "../worker"]
+
 # 默认由页面打开真实项目，不自动登记工作区或演示验收器。
 
 # 接入真实项目时取消以下注释，使用已有提交且已配置测试依赖的 Git 根目录。

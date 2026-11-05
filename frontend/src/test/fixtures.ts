@@ -75,7 +75,7 @@ export const options: OptionsResponse = {
   key_configured: true,
   recent_projects: [], // 首次启动等待用户打开真实目录。
   verifiers: [], // 无宿主登记时不提供独立验收选择。
-  busy_run_id: null,
+  active_run_ids: [],
 };
 
 /** 构造独立任务视图；覆盖项只修改顶层，嵌套状态由调用方明确复制。 */

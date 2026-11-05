@@ -80,7 +80,7 @@ class IntegrationService:
         self.store = IntegrationStore(manager.projects)  # 固定成果及写回协议。
         self.cancel_event = threading.Event()  # 当前同步准备/写回在文件边界响应停止。
         self.check_task: asyncio.Task | None = None  # 当前真实验收协程，取消后等待进程树清理。
-        self.active_job: str | None = None  # 当前持有唯一队列槽的集成作业。
+        self.active_job: str | None = None  # 当前占用集成串行通道的作业；独立 Run 可并行。
 
     def source(self, run_id: str, parent_run_id: str | None = None):
         """核对run_id固定成果并返回视图；parent_run_id指定父视图时仅接受其登记的开发子项。"""
@@ -300,6 +300,8 @@ class IntegrationService:
             if job.get("integration_id") == value["id"] and job["status"] == "needs_review":
                 job.update(status="completed" if value["status"] == "applied" else "failed", error="用户已核对写回现场，原作业不重放。")
                 self.manager.jobs.save(job)
+                self.manager.coordinator.resolve(job["id"])
+                self.manager.jobs.kick()
                 if job.get("action_id"):
                     permissions = PermissionStore(self.manager.runs_root)
                     action = permissions.get(job["action_id"])
@@ -319,7 +321,7 @@ class IntegrationService:
         return value
 
     async def enqueue(self, value: dict, operation: str, request_id: str, payload: dict) -> None:
-        """把具体operation加入现有单槽队列；写回和测试的本次许可与作业同事务保存。"""
+        """把具体operation加入宿主持久资源队列；写回和测试的本次许可与作业同事务保存。"""
         if self.manager._closing or self.manager.jobs.closed:
             raise TaskError("service_closing", "服务正在关闭。")
         digest = payload_digest(payload)
@@ -332,6 +334,7 @@ class IntegrationService:
                "project_id": value["target_id"], "project_label": self.preset(value["target_id"]).label,
                "source_path": str(self.preset(value["target_id"]).path), "created_at": now(), "payload": payload,
                "digest": digest, "permission_policy": policy, "error": None, "validation_status": "unverified", "execution_status": None}
+        job["resources"] = self.manager.jobs.scope(job)  # 接纳时冻结来源及目标资源归属。
         with self.store.work.transaction() as db:
             self.manager.management.require_active(value["session_id"], db)
             active = db.execute("SELECT 1 FROM jobs WHERE json_extract(body,'$.session_id')=? AND json_extract(body,'$.status') IN ('queued','preparing','running','needs_review') LIMIT 1", (value["session_id"],)).fetchone()
@@ -403,7 +406,8 @@ class IntegrationService:
                        error=getattr(error, "message", "操作中断，请核对现场。"), finished_at=now())
             if uncertain:
                 job["recovery_kind"] = "files" if job["operation"] == "apply" else "process"
-                self.manager.jobs.paused = True
+                # 未知写回只阻塞该作业资源；其他项目仍可调度。
+                pass
         finally:
             if job.get("action_id"):
                 action = permissions.get(job["action_id"])

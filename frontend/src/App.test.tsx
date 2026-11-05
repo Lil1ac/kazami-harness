@@ -109,7 +109,7 @@ const conversation: ConversationView = {
   can_continue: true,
   blocked_code: null,
   blocked_reason: null,
-  busy_run_id: null,
+  active_run_ids: [],
   turns: [1, 2, 3].map(
     /* 模拟同一会话的三条已接纳要求。 */ (ordinal) => ({
       run_id: 'a-' + ordinal,
@@ -155,7 +155,7 @@ beforeEach(
               ? [other]
               : [summary, other],
         total: filters?.projectId ? 1 : 2,
-        busy_run_id: null,
+        active_run_ids: [],
       }),
     );
     vi.mocked(getRun).mockImplementation(

@@ -167,10 +167,10 @@ class ConversationManager:
             row = db.execute("SELECT 1 FROM jobs WHERE json_extract(body,'$.session_id')=? AND json_extract(body,'$.status') IN ('queued','preparing','running','needs_review') LIMIT 1", (session_id,)).fetchone()
             if row:
                 return "请先在后台工作中完成、停止或核对关联作业。"
-        active = self.manager._active
+        active = self.manager.active_for_session(session_id)
         if active and str(active.manifest.session_id or active.manifest.run_id) == session_id:
             return "对话仍在执行或保存证据，请等待收尾。"
-        if self.manager.conversations.submission_key and str(self.manager.conversations.submission_key[0]) == session_id and self.manager._submission and not self.manager._submission.done():
+        if any(str(key[0]) == session_id and not task.done() for key, task in self.manager._submissions.items()):
             return "对话正在准备追加运行，请稍后整理。"
         try:
             session = self.manager.conversations.store.read(UUID(session_id))

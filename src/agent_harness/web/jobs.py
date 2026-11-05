@@ -18,6 +18,7 @@ from agent_harness.runtime.runner import validate_execution, validate_auto_repai
 from agent_harness.work.planning import continue_planning, planning_from_history
 from agent_harness.execution.python import prepare_python_execution, PythonExecutionError
 from agent_harness.permissions.store import PermissionStore
+from agent_harness.execution.scheduling import resources, host_limits
 
 
 def directory_identity(path: Path) -> list[int]:
@@ -53,11 +54,49 @@ class JobQueue:
         """绑定 manager；构造不恢复执行，已有队列默认暂停等待用户明确恢复。"""
         self.manager = manager  # 复用现有工作区准备、会话和 Runner。
         self.store = manager.management.store  # 会话、任务与队列共用事务，避免删除与接纳竞态。
-        self.worker: asyncio.Task | None = None  # 唯一队列循环句柄。
-        self.paused = any(job["status"] in {"queued", "preparing", "running", "needs_review"} for job in self.list())  # 重启只核对，不自动重放历史动作。
+        self.worker: asyncio.Task | None = None  # 唯一宿主调度循环，实际执行各有独立任务。
+        self.executing: dict[str, asyncio.Task] = {}  # 已认领作业的执行句柄，单项取消不影响其他项目。
+        self.wake = asyncio.Event()  # 新请求、资源释放或人工核对后唤醒调度。
+        self.auto_resume = self.settings()  # 启动时只自动调度已授权且尚未开始的请求。
+        self.paused = not self.auto_resume and any(job["status"] in {"queued", "preparing", "running", "needs_review"} for job in self.list())  # 默认仍需明确恢复。
         self.closed = False  # 正在退出时停止出队。
         self._ready: dict[str, asyncio.Event] = {}  # 新提交首项建立 Run 前的响应同步。
         self.reconcile()
+
+    def settings(self) -> bool:
+        """返回持久的启动后继续队列偏好；没有记录默认 False，不写入或启动工作。"""
+        if not self.store.path.exists():
+            return False
+        with self.store.transaction() as db:
+            row = db.execute("SELECT body FROM scheduler_settings WHERE id='queue'").fetchone()
+        return bool(json.loads(row[0])["resume_on_start"]) if row else False
+
+    def configure(self, resume_on_start: bool) -> dict:
+        """保存 resume_on_start 明确选择并返回调度快照；不解除当前暂停或批准任何旧动作。"""
+        with self.store.transaction() as db:
+            db.execute("INSERT OR REPLACE INTO scheduler_settings VALUES ('queue',?)", (encode({"resume_on_start": resume_on_start}),))
+            self.store.event(db, "scheduler", {"type": "scheduler_settings", "resume_on_start": resume_on_start})
+        self.auto_resume = resume_on_start
+        return self.snapshot()
+
+    def snapshot(self) -> dict:
+        """返回宿主容量、活动作业和启动恢复设置；只观察，不修改租约或恢复未知执行。"""
+        return {"max_concurrent_runs": self.manager.coordinator.maximum,
+                "active_jobs": list(self.manager.coordinator.owned),
+                "resume_on_start": self.auto_resume, "paused": self.paused,
+                "model_limit": self.manager.web_config.max_model_requests,
+                "process_limit": self.manager.web_config.max_processes}
+
+    def scope(self, job: dict) -> dict:
+        """按 job 实际来源计算资源；集成额外占来源仓库和内部串行通道，避免共享集成控制器串线。"""
+        paths = [Path(job["source_path"])]
+        if job.get("kind") == "integration":
+            history = self.manager._read_history(UUID(job["run_id"]))
+            paths.append(history.manifest.origin.registered_path if history.manifest.origin else history.manifest.task.workspace)
+        scope = resources(paths, self.manager.web_config.serial_resource_groups)
+        if job.get("kind") == "integration":
+            scope["groups"].append("__integration_engine__")
+        return scope
 
     def list(self) -> list[dict]:
         """返回按接纳时间排序的作业副本；不启动执行，最多展示最近五百项。"""
@@ -77,7 +116,7 @@ class JobQueue:
 
     def public(self, job: dict, db=None) -> dict:
         """返回 job 可展示字段；排除固定内部提交参数，保留归属、结果和错误。"""
-        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy"}}
+        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy", "resources"}}
         if job.get("waiting_action_id"):
             value["approval_status"] = PermissionStore(self.manager.runs_root).get(job["waiting_action_id"], db)["status"]
         session = job.get("session_id")
@@ -104,18 +143,30 @@ class JobQueue:
             db.execute("INSERT OR REPLACE INTO jobs VALUES (?,?)", (job["id"], encode(job)))
             self.store.event(db, job.get("session_id") or job["id"], {"type": "job_updated", "job": self.public(job, db)})
 
-    def reconcile(self) -> None:
-        """仅在没有其他宿主执行时核对遗留归属；活动锁存在则只暂停本队列，不改他人状态。"""
-        if not any(job["status"] in {"preparing", "running", "needs_review"} for job in self.list()) and not PermissionStore(self.manager.runs_root).has_executing() and not self.manager.integrations.has_orphans():
+    def reconcile(self, pause_on_busy: bool = True) -> None:
+        """无其他宿主时核对遗留归属；pause_on_busy 默认暂停，调度探测传 False 不改用户暂停选择。"""
+        if not any(job["status"] in {"preparing", "running", "needs_review"} for job in self.list()) and not PermissionStore(self.manager.runs_root).has_executing() and not self.manager.integrations.has_orphans() and not self.manager.coordinator.records():
             return
         lease = ExecutionLease(self.manager.runs_root)
         try:
             lease.acquire()
         except TaskError:
-            self.paused = True
+            if pause_on_busy:
+                self.paused = True
             return
         try:
             self._reconcile_unowned()
+            with self.store.transaction() as db:
+                self.manager.coordinator.reconcile(db)
+                for record in self.manager.coordinator.records(db):
+                    exists = db.execute("SELECT 1 FROM jobs WHERE id=?", (record["id"],)).fetchone()
+                    if exists is None and record["status"] == "unknown":
+                        job = {"id": record["id"], "run_id": record.get("run_id") or record["id"], "session_id": record["session_id"],
+                               "status": "needs_review", "title": "中断的本机执行", "project_id": "", "project_label": "本机执行",
+                               "source_path": record["resources"]["paths"][0], "resources": record["resources"], "created_at": now(),
+                               "execution_status": "failed", "validation_status": "unverified", "error": "执行结果无法确认，请先核对进程和工作区。"}
+                        db.execute("INSERT INTO jobs VALUES (?,?)", (job["id"], encode(job)))
+                        self.store.event(db, record["session_id"] or record["id"], {"type": "job_updated", "job": {key: value for key, value in job.items() if key != "resources"}})
             self.manager.integrations.reconcile_orphans()
             PermissionStore(self.manager.runs_root).reconcile()
         finally:
@@ -179,7 +230,7 @@ class JobQueue:
                 if intent.state == 'failed':
                     raise SessionError(intent.error_code or 'request_failed', intent.error_message or '原请求准备失败，请核对。')
                 raise SessionError('request_uncertain', '原请求已登记但作业归属无法核对，不会自动重放。')
-            if self.manager.busy_run_id == request.parent_run_id:
+            if request.parent_run_id in self.manager.active_run_ids:
                 raise TaskError("session_busy", "当前会话仍在执行，请结束后发送。")
             if self.manager.conversations.store.read(UUID(session)).run_ids[-1] != request.parent_run_id:
                 raise TaskError("session_stale_parent", "请从最新一轮继续。")
@@ -234,7 +285,7 @@ class JobQueue:
         if session:
             # Runner 已落盘结束、队列回调尚未执行的短窗口内，先对账旧作业再接纳续轮。
             for previous in self.list():
-                if previous.get('kind') != 'integration' and previous['session_id'] == session and previous['status'] == 'running' and str(self.manager.busy_run_id) != previous['run_id']:
+                if previous.get('kind') != 'integration' and previous['session_id'] == session and previous['status'] == 'running' and UUID(previous['run_id']) not in self.manager.active_run_ids:
                     history = RunStore.read(self.manager.runs_root, previous['run_id'])
                     if history.result is not None:
                         self.finish(previous, history.result)
@@ -243,6 +294,7 @@ class JobQueue:
                "created_at": now(), "payload": payload, "digest": digest, "source_path": source_path, "workspace_identity": identity,
                "memory_policy": config.memory.model_dump() if request.create is not None else {**parent.manifest.config.memory.model_dump(), **(request.followup.config.memory.model_dump(exclude_unset=True) if request.followup.config.memory else {})},
                "project_label": selected.label, "source_policy": source_policy(selected), "error": None, "validation_status": "unverified", "execution_status": None}
+        job["resources"] = self.scope(job)  # 接纳时冻结仓库及共享资源身份，排队期间不可悄然换源。
         with self.store.transaction() as db:
             old = db.execute("SELECT body FROM jobs WHERE id=?", (identifier,)).fetchone()
             if old:
@@ -262,91 +314,143 @@ class JobQueue:
             db.execute("INSERT INTO jobs VALUES (?,?)", (identifier, encode(job)))
             self.store.event(db, session or identifier, {"type": "job_updated", "job": self.public(job, db)})
         self._ready[identifier] = asyncio.Event()
-        idle = self.worker is None or self.worker.done()
         self.kick()
-        if idle and not self.paused and not self.manager.busy_run_id:
+        if not self.paused:
             await self._ready[identifier].wait()
+        self._ready.pop(identifier, None)  # HTTP 已获得首次状态，后续变化通过持久事件和查询观察。
         return self.public(self.get(identifier))
 
     def kick(self) -> None:
-        """需要时启动唯一队列循环；暂停或退出时无操作，返回 None。"""
+        """唤醒或启动唯一调度循环；暂停/关停不出队，已有执行继续负责收尾。"""
+        self.wake.set()
         if not self.closed and not self.paused and (self.worker is None or self.worker.done()):
             self.worker = asyncio.create_task(self.run(), name="harness-job-queue")
+            self.worker.add_done_callback(self.observe_worker)
+
+    def observe_worker(self, task: asyncio.Task) -> None:
+        """读取 task 调度故障并暂停出队、解除 HTTP 等待；存储损坏不继续执行或伪造终态。"""
+        if task.cancelled() or task.exception() is not None:
+            self.paused = True
+            for ready in self._ready.values():
+                ready.set()
+
+    def fail_unstarted(self, job: dict, code: str, message: str) -> None:
+        """将尚未认领 job 以 code/message 标记失败；先撤销原动作许可，避免页面停留在已批准待执行。"""
+        action = ((job.get("payload") or {}).get("followup") or {}).get("action_decision")
+        action_id = job.get("action_id") or (action["action_id"] if action is not None else None)
+        if action_id is not None:
+            PermissionStore(self.manager.runs_root).invalidate(action_id, code)
+        job.update(status="failed", error=message, error_code=code, error_status=409)
+        self.save(job)
 
     async def run(self) -> None:
-        """按接纳顺序串行执行排队请求；存储或清理不明时暂停，返回 None。"""
+        """按接纳顺序选择可执行作业；跳过资源阻塞项，容量和归属在同一事务认领。"""
         while not self.closed and not self.paused:
+            self.wake.clear()
+            if not self.manager.coordinator.owned and any(record["status"] == "active" for record in self.manager.coordinator.records()):
+                self.reconcile(pause_on_busy=False)
             candidates = [job for job in reversed(self.list()) if job["status"] == "queued"]
-            if not candidates:
+            if not candidates and not self.executing:
                 return
-            job = candidates[0]
-            lease = ExecutionLease(self.manager.runs_root)  # 覆盖工作树准备及全部证据收尾。
-            try:
-                while self.manager.busy_run_id and not self.closed:
-                    await asyncio.sleep(.05)
-                if self.closed:
-                    return
-                lease.acquire()
-                self.manager._execution_lease = lease
-                if job.get("session_id"):
-                    self.manager.management.require_active(job["session_id"])
-                if job.get("kind") == "integration":
-                    await self.manager.integrations.run_job(job)
-                    continue
-                if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:
-                    raise TaskError("workspace_changed", "排队期间目录身份发生变化，请重新打开项目。")
-                selected = next((item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == job["project_id"]), None)
-                if selected is None or source_policy(selected) != job["source_policy"]:
-                    raise TaskError("job_source_changed", "排队期间项目解释器或测试设置已变化，请核对后重新提交。")
-                job["status"] = "preparing"
-                self.save(job)
-                self.manager._queued_run_id = UUID(job["run_id"])
-                self.manager._queued_memory_policy = job["memory_policy"]  # 接纳时固定策略，记忆内容在实际执行时读取。
-                payload = JobRequest.model_validate(job["payload"])
-                view = await self.manager.submit(payload.create) if payload.create is not None else await self.manager.conversations.submit(payload.parent_run_id, payload.followup)
-                job.update(status="running", run_id=str(view.run_id), session_id=str(view.session_id or view.run_id), execution_status="running")
-                self.save(job)
-                self._ready.get(job["id"], asyncio.Event()).set()
-                await self.manager.wait_idle()
-                view = self.manager.get_run(view.run_id)
-                if view.interrupted:
-                    job.update(status="needs_review", error="运行未留下可信终态，请确认进程已停止并核对工作区。")
+            for job in candidates:
+                reason, blocked_by = None, None
+                try:
+                    if self.closed or self.paused:
+                        break
+                    scope = job["resources"]
+                    blocker = self.manager.coordinator.blocker(scope, job.get("session_id"))
+                    if blocker is not None:
+                        reason = "相关工作结果待核对" if blocker["status"] == "unknown" else "等待相关项目或共享资源"
+                        blocked_by = blocker["id"]
+                    elif len(self.manager.coordinator.owned) >= self.manager.coordinator.maximum:
+                        reason = "等待运行槽位"
+                    else:
+                        if self.scope(job) != scope:
+                            raise TaskError("job_source_changed", "排队期间仓库或共享资源身份发生变化，请重新提交。")
+                        job["resources"] = scope
+                        self.manager.coordinator.acquire(job["id"], scope, job.get("session_id"), None if job.get("kind") == "integration" else job["run_id"], job)
+                        task = asyncio.create_task(self.run_one(job), name="harness-job-" + job["id"])
+                        self.executing[job["id"]] = task
+                        continue
+                except TaskError as error:
+                    if error.code in {"execution_busy", "resource_busy", "resource_uncertain", "run_capacity"}:
+                        reason = error.message
+                    else:
+                        self.fail_unstarted(job, error.code, error.message)
+                except (OSError, ValueError, StorageError):
+                    self.fail_unstarted(job, "workspace_changed", "执行来源或资源身份无法核对，请重新打开项目。")
+                if job["status"] == "queued" and (job.get("blocked_reason"), job.get("blocked_by")) != (reason, blocked_by):
+                    job.update(blocked_reason=reason, blocked_by=blocked_by)
                     self.save(job)
-                    self.paused = True
-                else:
-                    self.finish(job, view.result)
-                    if view.result.execution_status == "completed" and view.result.cleanup_status in {"complete", "not_needed"}:
-                        from agent_harness.web.runtime import dispatch_next_input
-                        await dispatch_next_input(self.manager, str(view.session_id or view.run_id), str(view.run_id))
-                if view.result.cleanup_status in {"unknown", "incomplete"}:
-                    self.paused = True
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if isinstance(error, TaskError) and error.code == "execution_busy":
-                    self.paused = True  # 另一宿主仍持锁，本队列无权改写其作业归属。
-                    return
-                action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
-                known_unstarted = action is not None and not (self.manager.runs_root / job["run_id"] / "run.json").exists() and getattr(error, "code", "") in {"permission_expired", "permission_stale", "permission_denied", "job_source_changed", "workspace_changed", "planning_workspace_changed"}
-                if known_unstarted:
-                    PermissionStore(self.manager.runs_root).invalidate(action["action_id"], error.code)
-                job.update(status="failed" if known_unstarted else "needs_review", error=getattr(error, "message", "准备或记录未能确认，请核对后重新提交。"), error_code=getattr(error, "code", "job_prepare_failed"), error_status=getattr(error, "status", 409))
-                self.save(job)
-                if not known_unstarted:
-                    self.paused = True
-            finally:
-                self.manager._execution_lease = None
-                lease.release()
-                self.manager._queued_run_id = None
-                self.manager._queued_memory_policy = None
                 self._ready.get(job["id"], asyncio.Event()).set()
+            try:
+                # 外部宿主退出无法在本进程发事件，有限超时用于重新申请操作系统锁。
+                await asyncio.wait_for(self.wake.wait(), timeout=.5)
+            except TimeoutError:
+                pass
+
+    async def run_one(self, job: dict) -> None:
+        """执行已认领 job 并固定结果；只释放本作业资源，未知动作不重放、不暂停其他项目。"""
+        token = host_limits.set(self.manager.coordinator.limits)
+        try:
+            if self.closed:
+                job.update(status="queued", execution_status=None)
+                self.save(job)
+                return
+            if job.get("session_id"):
+                self.manager.management.require_active(job["session_id"])
+            if job.get("kind") == "integration":
+                await self.manager.integrations.run_job(job)
+                return
+            if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:
+                raise TaskError("workspace_changed", "排队期间目录身份发生变化，请重新打开项目。")
+            if self.scope(job) != job["resources"]:
+                raise TaskError("workspace_changed", "排队期间仓库或资源身份发生变化，请重新提交。")
+            selected = next((item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == job["project_id"]), None)
+            if selected is None or source_policy(selected) != job["source_policy"]:
+                raise TaskError("job_source_changed", "排队期间项目解释器或测试设置已变化，请重新提交。")
+            payload = JobRequest.model_validate(job["payload"])
+            options = {"run_id": UUID(job["run_id"]), "job_id": job["id"], "memory_policy": job["memory_policy"]}
+            view = await self.manager.submit(payload.create, **options) if payload.create is not None else await self.manager.conversations.submit(payload.parent_run_id, payload.followup, **options)
+            job.update(status="running", run_id=str(view.run_id), session_id=str(view.session_id or view.run_id), execution_status="running")
+            self.save(job)
+            self._ready.get(job["id"], asyncio.Event()).set()
+            await self.manager.wait_idle(view.run_id)
+            view = self.manager.get_run(view.run_id)
+            if view.interrupted:
+                job.update(status="needs_review", error="运行缺少可信终态，请确认进程已停止并核对工作区。")
+                self.save(job)
+            else:
+                self.finish(job, view.result)
+                if view.result.execution_status == "completed" and view.result.cleanup_status in {"complete", "not_needed"}:
+                    from agent_harness.web.runtime import dispatch_next_input
+                    await dispatch_next_input(self.manager, str(view.session_id or view.run_id), str(view.run_id))
+        except asyncio.CancelledError:
+            job.update(status="needs_review", error="执行中断，请核对进程和工作区。")
+            self.save(job)
+            raise
+        except Exception as error:
+            started = (self.manager.runs_root / job["run_id"] / "run.json").exists()
+            action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
+            if action is not None and not started:
+                PermissionStore(self.manager.runs_root).invalidate(action["action_id"], getattr(error, "code", "job_prepare_failed"))
+            job.update(status="needs_review" if started else "failed", error=getattr(error, "message", "准备或记录未能确认，请核对后重新提交。"), error_code=getattr(error, "code", "job_prepare_failed"), error_status=getattr(error, "status", 409))
+            self.save(job)
+        finally:
+            host_limits.reset(token)
+            self.manager.coordinator.release(job["id"], job["status"] == "needs_review")
+            self.executing.pop(job["id"], None)
+            self._ready.get(job["id"], asyncio.Event()).set()
+            self.kick()
 
     def finish(self, job: dict, result) -> None:
         """用可信 result 固定 job 展示状态；等待用户和检查结果分别记录，返回 None。"""
-        status = "waiting_input" if result.execution_status == "waiting_input" else "cancelled" if result.execution_status == "cancelled" else "completed" if result.execution_status == "completed" else "failed"
+        status = "needs_review" if result.cleanup_status in {"unknown", "incomplete"} else "waiting_input" if result.execution_status == "waiting_input" else "cancelled" if result.execution_status == "cancelled" else "completed" if result.execution_status == "completed" else "failed"
         job.update(status=status, execution_status=result.execution_status, validation_status=result.validation_status,
                    wait_reason=result.stop_reason if status == "waiting_input" else None,
                    waiting_action_id=result.permissions.pending["id"] if result.permissions.pending else None, finished_at=now())
+        if status == "needs_review":
+            job["error"] = "进程清理无法确认，请先核对相关进程和工作区。"
         self.save(job)
 
     async def cancel(self, identifier: str) -> dict:
@@ -361,7 +465,7 @@ class JobQueue:
             raise TaskError("job_preparing", "正在准备执行目录，请稍后停止运行。")
         if job["status"] == "running":
             await self.manager.cancel(UUID(job["run_id"]))
-            await self.manager.wait_idle()
+            await self.manager.wait_idle(job["run_id"])
             return self.public(self.get(identifier))
         if job["status"] == "waiting_input":
             raise TaskError("job_waiting_decision", "请进入会话取消当前问题或拒绝计划，宿主需要保存明确决定。")
@@ -390,6 +494,8 @@ class JobQueue:
                     self.manager.integrations.store.save(value, db)
                 db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(job), identifier))
                 self.store.event(db, job.get("session_id") or identifier, {"type": "job_updated", "job": self.public(job, db)})
+            self._ready.get(identifier, asyncio.Event()).set()
+        self.kick()
         return self.public(job)
 
     def resolve(self, identifier: str) -> dict:
@@ -401,11 +507,11 @@ class JobQueue:
             self.manager.integrations.resolve_interruption(job)
         job.update(status="failed", error="用户已确认进程停止并核对工作区；原请求不重放。", finished_at=now())
         self.save(job)
+        self.manager.coordinator.resolve(identifier)
+        self.kick()
         return self.public(job)
 
     def resume(self) -> None:
-        """用户明确恢复未执行队列；存在待核对作业时拒绝，不恢复旧工具。"""
-        if any(job["status"] == "needs_review" for job in self.list()):
-            raise TaskError("queue_needs_review", "请先核对中断作业的进程和工作区。")
+        """用户明确恢复未执行队列；未知资源继续局部阻塞，不恢复旧工具。"""
         self.paused = False
         self.kick()

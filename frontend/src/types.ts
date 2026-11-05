@@ -456,6 +456,8 @@ export interface JobView {
     | 'cancelled'
     | 'needs_review'; // 真实队列状态。
   error: string | null; // 可处理的阻塞或异常原因。
+  blocked_reason?: string | null; // 排队等待的资源或容量原因。
+  blocked_by?: string | null; // 占用相关资源的作业，未知结果需先核对。
   validation_status: ValidationStatus; // 独立检查结论。
   execution_status: string | null; // null 表示尚未建立 Runner，不能打开不存在的运行。
 }
@@ -671,7 +673,7 @@ export interface OptionsResponse {
   key_configured: boolean; // 进程中是否存在可用模型密钥。
   verifiers: VerifierOption[]; // 已登记验收程序。
   skills?: SkillOption[]; // 宿主技能目录元数据；正文只在所选运行中加载。
-  busy_run_id: string | null; // 唯一运行槽当前占用者。
+  active_run_ids: string[]; // 全部活动主运行，准备阶段由后台作业单独展示。
 }
 
 /** 桌面设置的公开部分；密钥只返回存在标记，会话令牌不进入前端状态。 */
@@ -765,7 +767,7 @@ export interface ConversationView {
   can_continue: boolean; // 当前是否具备基本继续条件。
   blocked_code: string | null; // 阻止原因码。
   blocked_reason: string | null; // 受控中文提示。
-  busy_run_id: string | null; // 当前全局活动运行。
+  active_run_ids: string[]; // 当前会话活动运行集合。
 }
 
 /** 创建会话时固定的来源；编号、类型和路径必须同时匹配当前登记。 */
@@ -808,7 +810,7 @@ export interface ConversationSummary {
 export interface ConversationPage {
   items: ConversationSummary[]; // 当前页每会话一条。
   total: number; // 筛选后的会话总数。
-  busy_run_id: string | null; // 真实全局单槽。
+  active_run_ids: string[]; // 全部活动主运行编号。
 }
 
 /** 会话管理视图；整理项目不授予在另一个目录继续执行的权限。 */
@@ -1024,4 +1026,14 @@ export interface TeamView {
   tasks: TaskSnapshot; // 同源C04清单。
   stage: ProjectReview | null; // 固定汇集差异。
   historical: boolean; // true禁止操作。
+}
+
+/** 当前宿主调度容量及用户明确选择的启动恢复策略。 */
+export interface SchedulerView {
+  max_concurrent_runs: number; // 主运行与集成作业合计上限，宿主控制。
+  active_jobs: string[]; // 已取得资源的作业编号，包含准备和收尾。
+  resume_on_start: boolean; // 只允许重启后重新核验未开始请求，不重放未知动作。
+  paused: boolean; // 当前队列是否暂停出队，已在执行的工作仍正常收尾。
+  model_limit: number; // 所有主运行与后代共享的模型并发上限。
+  process_limit: number; // 命令、Hook 与验收共享的进程上限。
 }

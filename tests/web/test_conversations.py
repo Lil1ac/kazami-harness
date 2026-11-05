@@ -361,7 +361,7 @@ def test_disconnected_followup_preparation_keeps_one_background_run(project_conf
             with pytest.raises(asyncio.CancelledError):
                 await pending
             release.set()
-            created = await asyncio.wait_for(asyncio.shield(app.state.manager._submission), 10)
+            created = await asyncio.wait_for(asyncio.shield(next(iter(app.state.manager._submissions.values()))), 10)
             second = await finished(client, str(created.run_id))
             before = len(model.requests)
             again = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json=body)
@@ -398,5 +398,5 @@ def test_shutdown_handles_failed_followup_preparation(project_config: WebConfig,
             response = await pending
             assert response.status_code == 409
             await asyncio.wait_for(shutdown, 5)
-            assert app.state.manager.busy_run_id is None and len(model.requests) == count
+            assert not app.state.manager.active_run_ids and len(model.requests) == count
     asyncio.run(scenario())

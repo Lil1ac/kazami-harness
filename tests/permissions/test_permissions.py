@@ -260,7 +260,7 @@ def test_cancel_queued_approval_revokes_grant_and_allows_new_task(tmp_path, monk
 
 
 def test_unknown_action_after_storage_failure_is_not_replayed(tmp_path, monkeypatch) -> None:
-    """原动作已认领但缺少回执时，重启标记unknown并暂停队列，不尝试重放。"""
+    """原动作已认领但缺少回执时，重启标记unknown并局部阻塞资源，不尝试重放。"""
     from agent_harness.execution.processes import ProcessRunner
     from agent_harness.storage.runs import StorageError
     app, model, workspace = setup_app(tmp_path, monkeypatch, [reply(call("run_command", argv=[sys.executable, "-c", "from pathlib import Path; Path('unknown.txt').write_text('no')"]))])
@@ -279,7 +279,10 @@ def test_unknown_action_after_storage_failure_is_not_replayed(tmp_path, monkeypa
                     patch.setattr(ProcessRunner, "run", fail_process)
                     second = await finished(client, await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json=body))
                 assert second["interrupted"]
-                assert (await client.get("/api/jobs")).json()["paused"]
+                state = (await client.get("/api/jobs")).json()
+                assert not state["paused"]  # 未知动作只阻塞相关项目，不停掉其他项目。
+                assert any(job["run_id"] == second["run_id"] and job["status"] == "needs_review" for job in state["items"])
+                assert any(record["status"] == "unknown" for record in app.state.manager.coordinator.records())
         restarted, new_model, _ = setup_app(tmp_path, monkeypatch, [])
         async with restarted.router.lifespan_context(restarted):
             store = PermissionStore(tmp_path / "records")
@@ -354,6 +357,28 @@ def test_expired_queued_grant_fails_without_needs_review_or_replay(tmp_path, mon
                 assert not app.state.manager.jobs.paused and not (workspace / "queue-expired.txt").exists()
                 final = await finished(client, await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json={"request_id": str(uuid4()), "prompt": "开始新任务"}))
                 assert final["result"]["execution_status"] == "completed" and len(model.requests) == 2
+    asyncio.run(scenario())
+
+
+def test_changed_queue_resource_revokes_unstarted_grant(tmp_path, monkeypatch) -> None:
+    """排队批准后宿主共享资源规则变化时，原许可失效，不创建 Run、不执行原文件动作。"""
+    app, model, workspace = setup_app(tmp_path, monkeypatch, [reply(call("write_file", path="stale.txt", content="no"))])
+
+    async def scenario():
+        """通过真实审批入队后改变资源组并恢复，返回 None，核对作业失败及许可失效状态。"""
+        async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+            first = await finished(client, await submit_run(client, json={"workspace_id": "files", "prompt": "排队写入", "config": {"permission_mode": "strict"}}))
+            app.state.manager.jobs.paused = True
+            body = decide(first)
+            queued = await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json=body)
+            app.state.manager.web_config.serial_resource_groups = {"database": [workspace]}
+            await client.post("/api/queue/resume")
+            await app.state.manager.jobs.worker
+            job = (await client.get("/api/jobs/" + queued.json()["id"])).json()
+            assert job["status"] == "failed" and job["error_code"] == "job_source_changed"
+            assert PermissionStore(tmp_path / "records").get(body["action_decision"]["action_id"])["status"] == "invalidated"
+            assert not (tmp_path / "records" / job["run_id"]).exists()
+            assert not (workspace / "stale.txt").exists() and len(model.requests) == 1
     asyncio.run(scenario())
 
 

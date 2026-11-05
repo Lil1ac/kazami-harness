@@ -105,10 +105,10 @@ def test_task_tools_real_runner_and_history(tmp_path: Path):
         app, workspace = application(tmp_path, model)
         # 在真正模型调用前从 Runner 宿主读取运行编号，只供离线模型构造证据引用。
         launch = app.state.manager._launch
-        async def traced_launch(manifest, api_key):
+        async def traced_launch(manifest, api_key, *args, **kwargs):
             """记录 manifest 编号后原样启动；api_key 只交给真实 launch，返回 RunView。"""
             model.run_id = str(manifest.run_id)
-            return await launch(manifest, api_key)
+            return await launch(manifest, api_key, *args, **kwargs)
         app.state.manager._launch = traced_launch
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
@@ -136,7 +136,7 @@ def test_task_tools_real_runner_and_history(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_queued_source_policy_change_needs_review(tmp_path: Path):
+def test_queued_source_policy_change_fails_before_execution(tmp_path: Path):
     """排队期间源码/解释器设置变化须重新核对，不能静默使用新策略执行。"""
     async def scenario():
         """在真实活动 Run 后排队第二项，再改变宿主配置，返回 None，保留原请求。"""
@@ -150,7 +150,7 @@ def test_queued_source_policy_change_needs_review(tmp_path: Path):
                 app.state.manager.web_config.workspaces[0].python_paths = []
                 await client.post('/api/jobs/' + first['id'] + '/cancel')
                 result = await wait_job(client, second['id'])
-                assert result['status'] == 'needs_review' and result['error_code'] == 'job_source_changed'
+                assert result['status'] == 'failed' and result['error_code'] == 'job_source_changed'
                 assert not (tmp_path / 'runs' / second['run_id']).exists()
                 assert len(model.requests) == 1
     asyncio.run(scenario())

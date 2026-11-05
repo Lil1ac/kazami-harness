@@ -37,6 +37,10 @@ class WebConfig(DataModel):
     workspaces: list[WebWorkspace] = Field(default_factory=list)  # 普通工作区；可由项目预设替代。
     projects: list[ProjectPreset] = Field(default_factory=list)  # 宿主 Git 项目与固定测试命令。
     verifiers: list[WebVerifier] = Field(default_factory=list)  # 空列表表示不提供独立验收预设。
+    max_concurrent_runs: int = Field(default=2, ge=1, le=8)  # 主 Run 与集成作业合计槽位；1 恢复串行调度。
+    max_model_requests: int = Field(default=2, ge=1, le=32)  # 全部主运行、摘要和子执行共享的模型请求上限。
+    max_processes: int = Field(default=4, ge=1, le=32)  # 全部命令、Hook 和验收共享的进程容量，含清理阶段。
+    serial_resource_groups: dict[str, list[Path]] = Field(default_factory=dict)  # 名称相同的目录共享数据库、端口等外部资源，强制串行。
 
     @model_validator(mode="after")
     def unique_identifiers(self) -> "WebConfig":
@@ -97,9 +101,12 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
         with location.open("rb") as source:
             raw = tomllib.load(source)
         # 允许的顶层字段全部固定，凭据与任意命令不能混入 Web 配置。
-        if set(raw) - {"worktrees_root", "frontend_dist", "workspaces", "verifiers", "projects"}:
+        if set(raw) - {"worktrees_root", "frontend_dist", "workspaces", "verifiers", "projects", "max_concurrent_runs", "max_model_requests", "max_processes", "serial_resource_groups"}:
             raise ConfigurationError("Web 配置包含不支持的字段。")
         base = location.parent
+        groups = raw.get("serial_resource_groups", {})
+        if not isinstance(groups, dict) or any(not isinstance(name, str) or not name.strip() or name.startswith("__") or not isinstance(members, list) or not members for name, members in groups.items()):
+            raise ConfigurationError("串行资源组必须提供非空名称及目录列表，名称不能以双下划线开头。")
         for key in ("workspaces", "verifiers", "projects"):
             entries = raw.get(key, [])
             if not isinstance(entries, list):
@@ -115,6 +122,10 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
             workspaces=raw.get("workspaces", []),
             verifiers=raw.get("verifiers", []),
             projects=raw.get("projects", []),
+            max_concurrent_runs=raw.get("max_concurrent_runs", 2),
+            max_model_requests=raw.get("max_model_requests", 2),
+            max_processes=raw.get("max_processes", 4),
+            serial_resource_groups={name: [_absolute(base, member) for member in members] for name, members in raw.get("serial_resource_groups", {}).items()},
         )
         for workspace in config.workspaces:
             if not workspace.path.is_dir():
@@ -126,5 +137,5 @@ def load_web_config(path: Path | None = None, *, project_dir: Path | None = None
         return config
     except ConfigurationError:
         raise
-    except (OSError, RuntimeError, ValueError, TypeError, ValidationError):
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError, ValidationError):
         raise ConfigurationError("无法读取 Web 配置，请检查文件、字段与目录。") from None

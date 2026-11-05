@@ -31,7 +31,7 @@ export function mergeConfirmedRun(current: ConversationView, view: RunView): Con
     ...current,
     latest_run_id: view.run_id,
     can_continue: false,
-    busy_run_id: view.active ? view.run_id : null,
+    active_run_ids: view.active ? [view.run_id] : [],
     blocked_code: 'run_busy',
     blocked_reason: '正在核对新一轮运行状态。',
     continuation_notice: null,

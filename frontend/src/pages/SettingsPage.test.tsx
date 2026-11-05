@@ -71,7 +71,7 @@ function setup(initialPath = '/settings', configuredOptions: OptionsResponse = o
           <Link to="/runs">前往提交</Link>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/runs" element={<TaskForm options={projectOptions} busyId={null} />} />
+            <Route path="/runs" element={<TaskForm options={projectOptions} activeRunIds={[]} />} />
           </Routes>
         </MemoryRouter>
       </ConfigDraftProvider>

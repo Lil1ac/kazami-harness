@@ -75,6 +75,14 @@ def install_team_routes(app, manager) -> None:
                 job = await manager.jobs.enqueue(JobRequest(request_id=body.request_id, parent_run_id=run_id, followup=request))
             return {**receipt, "team": store.get(session), "job": job}
         async with manager._lock:
+            if body.action == "discard":
+                async with manager.workspace_action(run_id):
+                    operation = asyncio.create_task(decide_team(run_id, body))
+                    try:
+                        return await asyncio.shield(operation)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(operation)
+                        raise
             return await decide_team(run_id, body)
 
     async def decide_team(run_id: UUID, body: TeamAction) -> dict:
@@ -94,7 +102,7 @@ def install_team_routes(app, manager) -> None:
                 return {**json.loads(old[1]), "team": store.get(session)}
             raise TaskError("team_revision_conflict", "团队已变化，请刷新后重新决定。")
         if body.action == "stop" and view.active:
-            active = manager._active
+            active = manager._active.get(run_id)
             controller = active.context.subagent_controller if active and active.context else None
             if controller is None or active.manifest.run_id != run_id or controller.team is None:
                 raise TaskError("team_not_active", "执行正在准备或收尾，请刷新后重试。")

@@ -179,7 +179,7 @@ def test_missing_key_prevents_git_worktree_creation(project_config: WebConfig, m
         async with client_for(project_config) as (client, app):
             response = await submit_run(client, json={"prompt": "修复", "project_id": "backend", "execution_mode": "isolated"})
             assert response.status_code == 400
-            assert app.state.manager.busy_run_id is None
+            assert not app.state.manager.active_run_ids
     asyncio.run(scenario())
     assert git(project_config.projects[0].path, "worktree", "list", "--porcelain") == before
 
@@ -337,7 +337,7 @@ def test_request_disconnect_during_prepare_remains_service_owned(project_config:
                     await request
             finally:
                 release.set()
-            await asyncio.wait_for(asyncio.shield(app.state.manager._submission), 10)
+            await asyncio.wait_for(asyncio.shield(next(iter(app.state.manager._submissions.values()))), 10)
             await asyncio.wait_for(app.state.manager.wait_idle(), 10)
             listed = (await client.get("/api/conversations")).json()
             assert listed["total"] == 1

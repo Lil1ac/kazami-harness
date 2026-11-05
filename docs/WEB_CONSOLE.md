@@ -98,7 +98,7 @@ Web 接入集中在 `src/agent_harness/web/`：
 | `project_catalog.py` | 本机目录、最近项目与可选测试的持久登记 |
 | `folder_picker.py` / `native_dialog.py` | 异步协调本机系统目录窗口、取消与超时 |
 | `schemas.py` | 受限请求与运行视图 |
-| `service.py` | 单槽后台任务、进度、取消、历史与固定产物 |
+| `service.py` | 按 Run 的后台任务、进度、取消、历史与固定产物；资源调度见[协议](SCHEDULING.md) |
 | `conversations.py` | 会话查询、追加条件、历史与工作区继承和幂等调度 |
 | `conversation_index.py` | 从现有记录只读聚合项目会话、保守核验最新轮、筛选与分页 |
 | `api.py` | HTTP/SSE、静态资源和受限产物访问 |
@@ -120,7 +120,7 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 | POST /api/projects/{id}/open | 重新核验已登记目录并更新最近时间，返回项目选项 |
 | PUT /api/projects/{id}/settings | 从项目设置保存解释器；Git 项目还可保存测试命令与秒级超时；保存不执行 |
 | POST /api/runs | 接收prompt、workspace_id/project_id二选一、项目base_ref或普通verifier_id、config；成功202，忙碌409 |
-| GET /api/conversations | 先聚合会话再按project_id、最新轮status筛选及offset/limit分页；返回会话摘要items/total/busy_run_id |
+| GET /api/conversations | 先聚合会话再按project_id、最新轮status筛选及offset/limit分页；返回会话摘要items/total/active_run_ids |
 | GET /api/runs/{id} | 返回统一RunView，不恢复执行 |
 | GET /api/runs/{id}/conversation | 返回所属会话的逐轮要求/回答、最新轮与可继续条件；只读 |
 | POST /api/runs/{id}/followups | request_id、prompt及可选config，成功202；同编号同载荷复用原运行，不重放 |
@@ -164,10 +164,10 @@ uv --cache-dir .uv-cache run python tests/helpers/serve_web_fixture.py
 
 该服务位于8766，仅使用脚本化模型，仍执行真实工具和验收，记录写入.runtime/browser-runs；它不证明真实模型能力。普通serve不启用这个替身。多轮页面的专用离线服务为 `uv --cache-dir .uv-cache run python tests/helpers/serve_conversation_fixture.py`，默认18771；预设files/code分别验证普通文件与Git项目，首轮输入 `first`、追加输入 `second`，记录保存在 `.runtime/conversation-browser/runs`。真实模型从页面运行会使用后端环境密钥并消耗额度，结果按实际记录核对。
 
-当前为本地单用户、单任务运行控制台。CSV/目录清单样例、demo 入口及后续恢复/容器/自优化的阶段安排统一见 [项目概览](../PROJECT.md)。缓存、依赖和本地输出保留原路径，只由 `.vscode/settings.json` 在编辑器文件树隐藏；`.runs/` 与 `.runtime/` 不因整理而删除或迁移。
+当前为本地单用户、受控跨项目并发运行控制台，见[调度协议](SCHEDULING.md)。CSV/目录清单样例、demo 入口及后续恢复/容器/自优化的阶段安排统一见 [项目概览](../PROJECT.md)。缓存、依赖和本地输出保留原路径，只由 `.vscode/settings.json` 在编辑器文件树隐藏；`.runs/` 与 `.runtime/` 不因整理而删除或迁移。
 
 
-文件收集在Runner唯一终态之前完成，使用artifact_collection_started、artifact_registered、artifacts_collected事件；收尾阶段展示“整理交付文件”并继续占用单槽。RunResult.artifact_status为pending/complete/incomplete，artifact_warnings为采集受限的受控说明。命令和文件工具生成的本轮新增、修改文件自动进入产物列表，失败或取消后的实际成果仍保留；既有未修改文件、依赖缓存不列为新产物，删除仅在差异中查看。CLI产物也从该轮固定快照下载，读取不回退当前目录。
+文件收集在Runner唯一终态之前完成，使用artifact_collection_started、artifact_registered、artifacts_collected事件；收尾阶段展示“整理交付文件”并继续占用所属槽位及资源。RunResult.artifact_status为pending/complete/incomplete，artifact_warnings为采集受限的受控说明。命令和文件工具生成的本轮新增、修改文件自动进入产物列表，失败或取消后的实际成果仍保留；既有未修改文件、依赖缓存不列为新产物，删除仅在差异中查看。CLI产物也从该轮固定快照下载，读取不回退当前目录。
 
 ## 7. 已保留的验证证据
 
@@ -664,3 +664,8 @@ CLI、原目录及Git隔离运行统一按本轮开始/结束文件证据登记�
 本轮使用离线模型与固定原生选择结果；API、Runner、Git探测、持久登记、文件写入和历史查询真实执行，未重新人工操作系统目录窗口。专属测试资源保留于D:/Codex/Temp/harness-project-binding-browser-20261030。
 
 证据：[绑定与重启核对](../output/playwright/project-binding-20261030/proof.json)、[桌面首页](../output/playwright/project-binding-20261030/08-final-desktop.png)、[窄屏首页](../output/playwright/project-binding-20261030/09-final-mobile.png)、[创建项目](../output/playwright/project-binding-20261030/01-create-desktop.png)、[重复目录](../output/playwright/project-binding-20261030/06-existing-folder.png)、[项目改名](../output/playwright/project-binding-20261030/07-renamed-settings.png)。可复用离线服务见tests/helpers/serve_project_binding_fixture.py。
+
+
+### 2026-11-05 跨项目后台调度与安全恢复
+
+默认双槽、资源冲突排队、Run 归属控制、单项停止、启动偏好、终态对账及未知资源局部阻塞已接入同一桌面/Web 链路。最终后端全量 943 项通过、11 项平台跳过，收尾专项 11 项通过；前端全量 210 项通过，补充后的后台页面 5 项通过；桌面父子链路 6 项通过，类型检查及构建通过。各批有重叠，不相加。双项目真实模型均通过独立检查，页面与 390px 窄屏核对通过；范围、配置及证据见[调度协议](SCHEDULING.md)。

@@ -102,7 +102,9 @@ async def _request_model(context: "RunContext", client: ModelClient, messages: l
     from agent_harness.runtime.runner import REQUEST_CONTEXT
     token = REQUEST_CONTEXT.set(context)
     try:
-        response = await client.complete(messages, tools)
+        from agent_harness.execution.scheduling import capacity
+        async with capacity("models"):
+            response = await client.complete(messages, tools)
     finally:
         REQUEST_CONTEXT.reset(token)
     _collect_usage(context, response.usage)

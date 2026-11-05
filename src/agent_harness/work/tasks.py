@@ -122,6 +122,8 @@ class WorkStore:
                 CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, digest TEXT, result TEXT);
                 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS execution_claims(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS scheduler_settings(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS runtime_controls(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS permission_actions(id TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS hook_state(id TEXT PRIMARY KEY, body TEXT NOT NULL);

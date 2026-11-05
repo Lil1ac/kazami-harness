@@ -543,16 +543,25 @@ async def run_task(manifest: RunManifest, runs_root: Path, api_key: str, *, exec
     """
     validate_execution(manifest, api_key)
     validate_auto_repair(manifest)  # 无效配置在创建执行锁文件前拒绝。
-    lease = execution_lease or ExecutionLease(runs_root)
+    coordinator = None  # CLI 自行协调资源；Web/桌面已在项目准备前认领，直接复用宿主锁。
+    owner = str(manifest.run_id)
     if execution_lease is None:
-        lease.acquire()
-    elif lease.root != runs_root.resolve() or lease.handle is None:
+        from agent_harness.execution.scheduling import Coordinator, resources
+        coordinator = Coordinator(WorkStore(runs_root), 1, 1, 1)
+        paths = [manifest.task.workspace]
+        if manifest.origin is not None:
+            paths.append(manifest.origin.registered_path)
+        coordinator.acquire(owner, resources(paths, {}), str(manifest.session_id or manifest.run_id), owner)
+    elif execution_lease.root != runs_root.resolve() or execution_lease.handle is None:
         raise StorageError("宿主传入的执行锁不属于当前记录目录。")
+    outcome = None  # 未取得可信终态时保留资源为待核对，不把异常当作无副作用。
     try:
-        return await _run_task(manifest, runs_root, api_key, **options)
+        outcome = await _run_task(manifest, runs_root, api_key, **options)
+        return outcome
     finally:
-        if execution_lease is None:
-            lease.release()
+        if coordinator is not None:
+            coordinator.release(owner, outcome is None or outcome.result.cleanup_status not in {"complete", "not_needed"})
+
 
 
 def exit_code(result: RunResult) -> int:

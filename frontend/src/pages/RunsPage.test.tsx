@@ -33,7 +33,7 @@ beforeEach(
 it('后台项目刷新失败时保留现有表单与草稿，恢复后继续使用原输入节点', async () => {
   // 捕捉网络错误导致整张表单被卸载的问题，同时验证恢复不会创建空白输入。
   vi.mocked(getOptions).mockResolvedValue({ ...options, recent_projects: [] });
-  vi.mocked(getConversations).mockResolvedValue({ items: [], total: 0, busy_run_id: null });
+  vi.mocked(getConversations).mockResolvedValue({ items: [], total: 0, active_run_ids: [] });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -67,7 +67,7 @@ it('后台项目刷新失败时保留现有表单与草稿，恢复后继续使�
 it('全部会话页的刷新操作重新读取当前会话页，而非只读取首页最近列表', async () => {
   // 全局历史与首页最近列表使用不同分页键，刷新必须使当前活动查询失效。
   vi.mocked(getOptions).mockResolvedValue({ ...options, recent_projects: [] });
-  vi.mocked(getConversations).mockResolvedValue({ items: [], total: 0, busy_run_id: null });
+  vi.mocked(getConversations).mockResolvedValue({ items: [], total: 0, active_run_ids: [] });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });

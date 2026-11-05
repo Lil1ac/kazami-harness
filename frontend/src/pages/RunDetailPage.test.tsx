@@ -120,7 +120,7 @@ beforeEach(
       can_continue: true,
       blocked_code: null,
       blocked_reason: null,
-      busy_run_id: null,
+      active_run_ids: [],
       turns: [turn(root)],
     };
     vi.mocked(getRun).mockImplementation(
@@ -283,7 +283,7 @@ it('查看旧轮时停止按钮仍明确取消最新活动运行', async () => {
   record = {
     ...record,
     latest_run_id: second.run_id,
-    busy_run_id: second.run_id,
+    active_run_ids: [second.run_id],
     can_continue: false,
     blocked_code: 'run_busy',
     blocked_reason: '执行中',

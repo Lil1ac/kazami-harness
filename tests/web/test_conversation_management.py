@@ -213,7 +213,7 @@ def test_busy_and_queued_jobs_block_organization(tmp_path: Path, monkeypatch):
     async def scenario():
         """用真实阻塞模型和队列创建竞态边界，不用固定睡眠判断执行状态。"""
         model = NavigationModel()
-        async with service(config_for(tmp_path), model) as (client, manager):
+        async with service(config_for(tmp_path).model_copy(update={"max_concurrent_runs": 1}), model) as (client, manager):
             idle = await start(client, 'alpha', '可续轮')
             running_response = await client.post('/api/jobs', json={'request_id': str(uuid4()), 'create': {'workspace_id': 'beta', 'prompt': 'wait'}})
             running = running_response.json()

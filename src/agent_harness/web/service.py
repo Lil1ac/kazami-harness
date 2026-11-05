@@ -1,6 +1,7 @@
-"""本地 Web 任务管理：单槽调度真实 Runner，读取事实记录，不另造执行状态。"""
+"""本地 Web 任务管理：按 Run 调度真实 Runner，读取事实记录，不另造执行状态。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 from dataclasses import dataclass
 import os
@@ -35,6 +36,7 @@ from agent_harness.web.conversations import ConversationService
 from agent_harness.web.conversation_index import ConversationIndex
 from agent_harness.web.project_catalog import ProjectCatalog
 from agent_harness.web.folder_picker import FolderPicker
+from agent_harness.execution.scheduling import Coordinator, resources, host_limits
 from agent_harness.web.schemas import CreateRunRequest, EventPage, RunView
 
 
@@ -51,13 +53,14 @@ class WebServiceError(Exception):
 
 @dataclass
 class ActiveRun:
-    """唯一活动任务的服务侧控制句柄；结果事实仍归 Runner 与 RunStore 所有。"""
+    """按 Run 独立保存控制句柄；结果事实仍归 Runner 与 RunStore 所有。"""
 
     manifest: RunManifest  # 后台任务完整输入；不包含密钥值。
     cancellation: CancellationState  # 取消来源，在调用 task.cancel 前设置。
     started: asyncio.Future[None]  # on_context 到达后完成，防止任务启动前被取消。
     task: asyncio.Task[None] | None = None  # 后台协程；创建后立即绑定。
     context: RunContext | None = None  # Runner 回调交出的实时进度，启动前为空。
+    owner: str = ""  # 持久资源租约所属作业编号。
     cancelling: bool = False  # 首次请求取消后保持 True，不重复打断进程清理。
     finalizing: bool = False  # Runner 已退出、正在固化 diff，此时不能再次取消收尾。
     startup_failed: bool = False  # 首个上下文尚未建立时运行异常。
@@ -223,7 +226,7 @@ def _unfinished_result(history: RunHistory) -> RunResult:
 
 
 class WebRunManager:
-    """管理本地单个执行槽、受限提交、取消和只读历史，不因页面断开而取消。"""
+    """管理本地多个独立运行、受限提交、取消和只读历史，不因页面断开而取消。"""
 
     def __init__(
         self,
@@ -241,7 +244,6 @@ class WebRunManager:
         构造不创建运行或调用模型，返回 None；路径解析失败由服务启动层处理。
         """
         self.web_config = web_config  # 宿主工作区和验收器白名单。
-        self._queued_memory_policy = None  # 队列接纳时固定的宿主记忆策略，直接提交为空。
         self.run_config = run_config.model_copy(deep=True)  # 页面只能读取，不原地修改默认配置。
         self.runs_root = runs_root.resolve()  # 独立运行记录根目录。
         self.catalog = ProjectCatalog(self.runs_root, web_config)  # 明确打开目录的持久登记，首轮与续轮共用。
@@ -249,9 +251,10 @@ class WebRunManager:
         self._model_client = model_client  # 离线注入；默认无客户端，共用 Runner 创建逻辑。
         self._transport = transport  # 可选 HTTP 测试传输，不在配置或响应序列化。
         self._key_provider = key_provider  # 桌面凭据来自 Windows 凭据库，不进入运行配置。
-        self._lock = asyncio.Lock()  # 提交和关停争用同一槽，避免同时创建两个任务。
-        self._submission: asyncio.Task[RunView] | None = None  # 服务持有准备任务；页面断开不遗失 Git 归属。
-        self._active: ActiveRun | None = None  # 只有仍执行的任务持有槽位。
+        self._lock = asyncio.Lock()  # 串行化短暂的准备与管理操作，不覆盖运行期。
+        self._submissions: dict[tuple[UUID, UUID], asyncio.Task] = {}  # 会话/请求对应的准备，断线后继续并幂等等待。
+        self._active: dict[UUID, ActiveRun] = {}  # 每个主 Run 独立的生命周期与取消句柄。
+        self._workspace_actions: set[asyncio.Task] = set()  # 人工文件操作请求，关停时等待其线程及资源释放。
         self._warnings: dict[UUID, list[str]] = {}  # 服务异常安全提示，不写伪造 run_finished。
         self._history_cache: dict[UUID, tuple[tuple[object, ...], RunHistory, int]] = {}  # 最近8条/32MiB记录；活动任务可单独保留。
         self.projects = ProjectManager(self.runs_root, web_config.worktrees_root)  # 独立 Git 归属与审阅事实。
@@ -263,18 +266,41 @@ class WebRunManager:
         self.conversations = ConversationService(self)  # 会话读取、幂等追加和文件快照复用本调度器。
         from agent_harness.web.conversation_management import ConversationManager
         self.management = ConversationManager(self)  # 可变标题、归属及生命周期，与不可变运行事实分开。
-        self._queued_run_id: UUID | None = None  # 出队时预分配的稳定 Run 编号，仅队列写入。
-        self._execution_lease = None  # 队列从项目准备到证据收尾一直持有的操作系统锁。
+        self.coordinator = Coordinator(self.management.store, web_config.max_concurrent_runs, web_config.max_model_requests, web_config.max_processes)  # 全入口共用资源与宿主锁。
         from agent_harness.web.integrations import IntegrationService
         self.integrations = IntegrationService(self)  # 人工成果集成复用队列，不创建模型运行或执行后端。
         from agent_harness.web.jobs import JobQueue
-        self.jobs = JobQueue(self)  # 同一管理器的唯一串行队列，重启默认暂停。
+        self.jobs = JobQueue(self)  # 同一宿主的持久资源队列，启动恢复由明确偏好控制。
 
     @property
-    def busy_run_id(self) -> UUID | None:
-        """返回仍执行的运行编号；没有任务或任务已收尾时返回 None，无副作用。"""
-        item = self._active
-        return item.manifest.run_id if item is not None and item.task is not None and not item.task.done() else None
+    def active_run_ids(self) -> list[UUID]:
+        """返回全部尚未收尾的主运行编号列表；不包含只有作业而尚无 Run 的准备阶段。"""
+        return [identifier for identifier, item in self._active.items() if item.task is not None and not item.task.done()]
+
+    def active_for_session(self, session: str) -> ActiveRun | None:
+        """按 session 会话身份定位活动句柄；不存在返回 None，不借用其他项目的执行者。"""
+        return next((item for item in self._active.values() if str(item.manifest.session_id or item.manifest.run_id) == session), None)
+
+    @asynccontextmanager
+    async def workspace_action(self, run_id: UUID):
+        """为 run_id 的人工工作树操作占用来源资源；退出释放，进程外的文件动作必须自行等待线程收尾。"""
+        if self._closing:
+            raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
+        history = self._read_history(run_id)
+        source = history.manifest.origin.registered_path if history.manifest.origin else history.manifest.task.workspace
+        owner = str(uuid4())
+        scope = resources([source], self.web_config.serial_resource_groups)
+        self.coordinator.acquire(owner, scope, str(history.manifest.session_id or run_id), str(run_id), recover_run=False)
+        task = asyncio.current_task()  # 将持有该租约的请求纳入宿主关停，避免线程仍在修改文件时退出。
+        self._workspace_actions.add(task)
+        try:
+            yield
+        finally:
+            try:
+                self.coordinator.release(owner)
+                self.jobs.kick()
+            finally:
+                self._workspace_actions.discard(task)
 
     def options(self) -> dict:
         """返回可公开的配置、预设和槽位；密钥只报告是否存在，不返回环境值。"""
@@ -296,7 +322,8 @@ class WebRunManager:
                 {"id": item.id, "label": item.label, "description": item.description}
                 for item in self.web_config.verifiers
             ],
-            "busy_run_id": self.busy_run_id,
+            "active_run_ids": self.active_run_ids,
+            "scheduler": self.jobs.snapshot(),
             "queue_pending": sum(job["status"] == "queued" for job in self.jobs.list()),
             "queue_paused": self.jobs.paused,
         }
@@ -322,25 +349,27 @@ class WebRunManager:
             option["error"] = error.message
         return option
 
-    async def submit(self, request: CreateRunRequest) -> RunView:
-        """服务持有 request 的准备协程并 shield 等待；请求断开不取消创建，忙时立即返回409。"""
+    async def submit(self, request: CreateRunRequest, *, run_id: UUID, job_id: str, memory_policy: dict) -> RunView:
+        """准备已认领资源的 request 并返回 RunView；run_id/job_id 是队列固定归属，memory_policy 是接纳时策略。
+
+        页面断开不取消准备；准备失败由原作业保存错误和释放资源，不创建旁路请求。
+        """
         if self._closing:
             raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
-        if self.busy_run_id is not None or (self._submission is not None and not self._submission.done()):
-            raise WebServiceError(409, "run_busy", "已有任务正在准备或运行，请等待完成或取消。")
-        self.conversations.submission_key = None
-        preparation = asyncio.create_task(self._start_request(request), name="harness-project-prepare")
-        self._submission = preparation
+        preparation = asyncio.create_task(self._start_request(request, run_id, job_id, memory_policy), name=f"harness-prepare-{run_id}")
+        key = (run_id, run_id)
+        self._submissions[key] = preparation
 
         def observe_completion(task: asyncio.Task[RunView]) -> None:
-            """读取后台准备异常以避免请求断开后的未取回告警；正常响应仍由 await 原样返回。"""
+            """回收 task 异常及准备索引；连接断开不取消归属明确的后台准备。"""
+            self._submissions.pop(key, None)
             if not task.cancelled():
                 task.exception()
         preparation.add_done_callback(observe_completion)
         return await asyncio.shield(preparation)
 
-    async def _start_request(self, request: CreateRunRequest) -> RunView:
-        """预检 request 后占单槽启动 Runner；项目工作树和快照收尾均属于同一槽。
+    async def _start_request(self, request: CreateRunRequest, identifier: UUID, owner: str, memory_policy: dict) -> RunView:
+        """预检 request 后在已认领资源内准备 identifier；owner 绑定作业，memory_policy 固定本轮记忆。
 
         密钥、任务与产物路径在 Git 创建前检查；202 仅在 Runner 落盘建立上下文后返回。
         Git 同步操作在线程执行，调用方取消也等待准备结束，防止工作树无人登记。
@@ -348,8 +377,6 @@ class WebRunManager:
         async with self._lock:
             if self._closing:
                 raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
-            if self.busy_run_id is not None:
-                raise WebServiceError(409, "run_busy", "已有任务正在运行，请等待完成或取消。")
             project_presets, workspace_presets, _ = self.catalog.snapshot()
             workspace = next((item for item in workspace_presets if item.id == request.workspace_id), None)
             preset = next((item for item in project_presets if item.id == request.project_id), None)
@@ -363,7 +390,7 @@ class WebRunManager:
                 if verifier is None:
                     raise WebServiceError(400, "unknown_verifier", "请选择已登记的验收器。")
                 verifier_path = verifier.path
-            identifier = self._queued_run_id or uuid4()
+            source = preset.path if preset is not None else workspace.path
             prepared: ProjectReview | None = None  # 已创建但尚未交给 Runner，预检失败时可安全清理。
             try:
                 merged = self.run_config.model_dump(mode="python")
@@ -372,8 +399,8 @@ class WebRunManager:
                     if section in patch:
                         merged[section] = {**merged[section], **patch.pop(section)}
                 merged.update(patch)
-                if self._queued_memory_policy is not None:
-                    merged["memory"] = self._queued_memory_policy
+                if memory_policy is not None:
+                    merged["memory"] = memory_policy
                 config = load_config(overrides=merged)
                 source = preset.path if preset is not None else workspace.path
                 task = prepare_task(
@@ -432,7 +459,7 @@ class WebRunManager:
                     raise WebServiceError(400, error.code, error.message) from None
                 message = str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else "项目测试工作目录或导入路径无效。"
                 raise WebServiceError(400, "invalid_run", message) from None
-            return await self._launch(manifest, api_key)
+            return await self._launch(manifest, api_key, owner)
 
     @staticmethod
     def project_verifier(preset: ProjectPreset, root: Path) -> VerifierSpec | None:
@@ -443,14 +470,18 @@ class WebRunManager:
             cwd=root, timeout_seconds=preset.test_timeout_seconds,
         ) if preset.test_argv else None
 
-    async def _launch(self, manifest: RunManifest, api_key: str) -> RunView:
-        """在已持有单槽锁时启动 manifest 并等待记录建立，返回初始视图；不另建执行循环。
+    async def _launch(self, manifest: RunManifest, api_key: str, owner: str) -> RunView:
+        """为已认领的 owner 启动 manifest 并等待记录建立，返回初始视图；不另建执行循环。
 
         api_key 只传 Runner；本方法由首次提交和追加共同使用。启动记录失败时返回受控错误，
         会话中已提交的请求不会因重试再次执行。
         """
         item = ActiveRun(manifest, CancellationState(), asyncio.get_running_loop().create_future())
-        self._active = item
+        item.owner = owner
+        self._active[manifest.run_id] = item
+        job = self.jobs.get(owner)
+        job.update(status="running", session_id=str(manifest.session_id or manifest.run_id), execution_status="running")
+        self.jobs.save(job)
         item.task = asyncio.create_task(self._execute(item, api_key), name=f"harness-web-{manifest.run_id}")
         await asyncio.wait({item.started, item.task}, return_when=asyncio.FIRST_COMPLETED)
         if item.context is None:
@@ -472,6 +503,7 @@ class WebRunManager:
                 item.cancellation.shutdown_requested = True
                 item.cancelling = True
                 raise asyncio.CancelledError
+        limit_token = host_limits.set(self.coordinator.limits)
         try:
             await run_task(
                 item.manifest,
@@ -483,7 +515,7 @@ class WebRunManager:
                 on_context=on_context,
                 file_changes=self.local_changes if item.manifest.origin is None or item.manifest.origin.execution_mode == 'local' else None,
                 project_manager=self.projects,
-                execution_lease=self._execution_lease,
+                execution_lease=self.coordinator.lease,
             )
         except asyncio.CancelledError:
             item.startup_failed = item.context is None
@@ -504,8 +536,8 @@ class WebRunManager:
                         await asyncio.to_thread(self.projects.abandon_turn, item.manifest.run_id)
                 except (ProjectError, OSError):
                     self._warnings.setdefault(item.manifest.run_id, []).append("未启动任务的工作树清理未完成，请检查项目审阅记录。")
-            if self._active is item:
-                self._active = None
+            self._active.pop(item.manifest.run_id, None)
+            host_limits.reset(limit_token)
             # 超预算快照只为活动订阅保留；任务结束后立即释放这个特例。
             cached = self._history_cache.get(item.manifest.run_id)
             if cached is not None and cached[2] > 32 * 1024 * 1024:
@@ -515,7 +547,7 @@ class WebRunManager:
         """按三份记录文件的签名缓存 identifier 历史；返回可信快照，读取失败仍抛 StorageError。
 
         每次检查文件设备、标识、纳秒修改时间和字节数，追加事件/终态/摘要替换会使缓存失效。
-        缓存最近8个运行且记录合计不超过32MiB；唯一活动任务可超过此字节预算独占缓存。
+        缓存最近8个运行且历史记录合计不超过32MiB；活动运行保留各自的当前快照。
         多个 SSE 订阅共享未变化的快照，不缓存读取错误。预算按记录原始字节估算。
         """
         directory = self.runs_root / str(identifier)
@@ -539,15 +571,15 @@ class WebRunManager:
         self._history_cache.pop(identifier, None)
         record_bytes = sum(part[3] for part in signature if isinstance(part, tuple))
         byte_budget = 32 * 1024 * 1024
-        active_id = self.busy_run_id
-        if record_bytes > byte_budget and identifier != active_id:
+        active_ids = set(self.active_run_ids)
+        if record_bytes > byte_budget and identifier not in active_ids:
             return history
         self._history_cache[identifier] = (key, history, record_bytes)
         while (
             len(self._history_cache) > 8
             or sum(entry[2] for entry in self._history_cache.values()) > byte_budget
         ):
-            removable = next((key for key in self._history_cache if key != active_id), None)
+            removable = next((key for key in self._history_cache if key not in active_ids), None)
             if removable is None:
                 break
             self._history_cache.pop(removable)
@@ -568,8 +600,8 @@ class WebRunManager:
             if not (self.runs_root / str(identifier)).exists():
                 raise WebServiceError(404, "run_not_found", "运行记录不存在。") from None
             raise WebServiceError(503, "run_unreadable", "运行记录无法读取，请检查本地文件。") from None
-        item = self._active
-        active = item is not None and item.manifest.run_id == identifier and self.busy_run_id == identifier
+        item = self._active.get(identifier)
+        active = identifier in self.active_run_ids
         if history.result is not None:
             result = history.result.model_copy(deep=True)
         elif active and item.context is not None:
@@ -671,7 +703,7 @@ class WebRunManager:
         detail = self.get_subagent(run_id, child_id, 0, 1, 0)
         if detail["subagent"]["status"] != "running":
             return {"subagent": detail["subagent"]}
-        item = self._active
+        item = self._active.get(run_id)
         controller = item.context.subagent_controller if item is not None and item.context is not None else None
         if controller is None or item.context.manifest.run_id != run_id:
             raise WebServiceError(409, "subagent_not_active", "子研究已停止或正在收尾，请刷新记录。")
@@ -693,44 +725,37 @@ class WebRunManager:
     async def cancel(self, run_id: UUID | str) -> RunView:
         """幂等请求取消指定活动任务；终态/历史任务仅返回视图，不重新执行或追加事件。"""
         view = self.get_run(run_id)
-        item = self._active
+        item = self._active.get(view.run_id)
         if view.active and item is not None and item.task is not None and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
             item.cancellation.api_requested = True
             item.cancelling = True
             item.task.cancel()
         return self.get_run(view.run_id)
 
-    async def wait_idle(self) -> None:
-        """等待当前后台任务完成并返回 None；shield 防调用方断开将取消传播到任务。"""
-        item = self._active
-        if item is not None and item.task is not None:
-            await asyncio.shield(item.task)
+    async def wait_idle(self, run_id: UUID | str | None = None) -> None:
+        """等待 run_id 指定运行；None 等待当前全部运行快照，shield 防止调用方取消传播。"""
+        items = [self._active.get(UUID(str(run_id)))] if run_id is not None else list(self._active.values())
+        await asyncio.gather(*(asyncio.shield(item.task) for item in items if item is not None and item.task is not None))
 
     async def shutdown(self) -> None:
-        """停止接纳新任务，最多取消一次活动任务并等待 Runner 清理落盘；返回 None。"""
+        """停止接纳和出队，取消所有活动 Run 与集成作业，等待准备、子进程及证据收尾。"""
         self._closing = True
-        self.jobs.closed = True  # 先禁止下一项出队，再等待当前运行收尾。
+        self.jobs.closed = True
         if self.integrations.active_job:
             self.integrations.cancel(self.integrations.active_job)
-        preparation = self._submission
-        if preparation is not None and not preparation.done():
-            try:
-                await asyncio.shield(preparation)
-            except (WebServiceError, SessionError):
-                pass
+        await asyncio.gather(*(asyncio.shield(task) for task in list(self._submissions.values())), return_exceptions=True)
         async with self._lock:
-            item = self._active
-            if item is not None and item.task is not None and not item.task.done() and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
-                item.cancellation.shutdown_requested = True
-                item.cancelling = True
-                item.task.cancel()
-        if item is not None and item.task is not None:
-            await asyncio.shield(item.task)
-        recoveries = [task for task in self._recovery_tasks.values() if not task.done()]
-        if recoveries:
-            await asyncio.gather(*(asyncio.shield(task) for task in recoveries), return_exceptions=True)
+            for item in list(self._active.values()):
+                if item.task is not None and not item.task.done() and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
+                    item.cancellation.shutdown_requested = True
+                    item.cancelling = True
+                    item.task.cancel()
+        await self.wait_idle()
+        await asyncio.gather(*(asyncio.shield(task) for task in list(self._workspace_actions)), return_exceptions=True)
+        await asyncio.gather(*(asyncio.shield(task) for task in self._recovery_tasks.values() if not task.done()), return_exceptions=True)
         if self.jobs.worker is not None:
             await asyncio.shield(self.jobs.worker)
+        await asyncio.gather(*(asyncio.shield(task) for task in list(self.jobs.executing.values())), return_exceptions=True)
 
     def artifact_path(self, run_id: UUID | str, location: str, path: str, parent_run_id: UUID | None = None) -> Path:
         """仅解析已登记产物 path；location 为 run/workspace，越界、链接或未登记抛 404。
@@ -840,7 +865,8 @@ class WebRunManager:
     async def _recover_review(self, run_id: UUID) -> ProjectReview:
         """为停止的 run_id 补捕获一次快照，返回 ready/error 事实；缺元数据时抛503，不恢复模型。"""
         try:
-            return await asyncio.to_thread(self.projects.capture, run_id)
+            async with self.workspace_action(run_id):
+                return await asyncio.to_thread(self.projects.capture, run_id)
         except ProjectError:
             review = self._project_review(run_id)
             if review is None:
@@ -852,7 +878,7 @@ class WebRunManager:
         async with self._lock:
             review = await self.get_review(run_id)
             view = self.get_run(run_id)
-            if self._active is not None and self._active.manifest.session_id == view.session_id:
+            if self.active_for_session(str(view.session_id)) is not None:
                 raise WebServiceError(409, "run_active", "会话正在执行或保存证据，不能处理共享工作树。")
             if any(job.get("kind") == "integration" and job.get("session_id") == str(view.session_id) and job["status"] in {"queued", "preparing", "running", "needs_review"} for job in self.jobs.list()):
                 raise WebServiceError(409, "integration_busy", "成果集成仍在执行或待核对，请先处理后台作业。")
@@ -861,7 +887,13 @@ class WebRunManager:
             if decision == "discard" and (view.interrupted or view.result.cleanup_status not in {"not_needed", "complete"}):
                 raise WebServiceError(409, "project_cleanup_unconfirmed", "无法确认任务进程已清理，请保留工作树并先处理本地进程。")
             try:
-                return await asyncio.to_thread(self.projects.decide, view.run_id, decision)
+                async with self.workspace_action(view.run_id):
+                    operation = asyncio.create_task(asyncio.to_thread(self.projects.decide, view.run_id, decision))
+                    try:
+                        return await asyncio.shield(operation)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(operation)
+                        raise
             except ProjectError as error:
                 raise WebServiceError(409, error.code, error.message) from None
 

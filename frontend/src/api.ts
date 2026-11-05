@@ -1,3 +1,4 @@
+import type { SchedulerView } from './types';
 import type {
   TeamView, TeamState,
   IntegrationView,
@@ -315,7 +316,7 @@ export function cancelSubagent(
 }
 
 /** 返回后台清单与暂停状态，供后台中心刷新。 */
-export function getJobs(): Promise<{ items: JobView[]; paused: boolean }> {
+export function getJobs(): Promise<{ items: JobView[]; paused: boolean; scheduler: SchedulerView }> {
   return request('/api/jobs');
 }
 
@@ -324,7 +325,7 @@ export function jobAction(id: string, action: 'cancel' | 'resolve'): Promise<Job
   return request(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
 }
 
-/** 明确恢复重启后保留的队列，待核对项存在时后端拒绝。 */
+/** 明确恢复重启后保留的队列，结果待核对的资源继续局部阻塞。 */
 export function resumeQueue(): Promise<{ paused: boolean }> {
   return request('/api/queue/resume', { method: 'POST' });
 }
@@ -608,5 +609,13 @@ export function teamAction(runId: string, body: {
 }): Promise<{ team: TeamState; job?: JobView | null }> {
   return request(`/api/runs/${runId}/team/actions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+
+/** 持久保存启动后继续未开始请求的明确选择；不恢复当前暂停，不批准旧动作。 */
+export function configureQueue(resumeOnStart: boolean): Promise<SchedulerView> {
+  return request('/api/queue/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resume_on_start: resumeOnStart }),
   });
 }

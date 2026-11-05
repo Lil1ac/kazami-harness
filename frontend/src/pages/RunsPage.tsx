@@ -64,7 +64,7 @@ export function RunsPage() {
             <TaskForm
               key={projectId || 'new'}
               options={options.data}
-              busyId={recent.data ? recent.data.busy_run_id : options.data.busy_run_id}
+              activeRunIds={recent.data ? recent.data.active_run_ids : options.data.active_run_ids}
               initialProjectId={projectId}
             />
           ) : !options.error ? (

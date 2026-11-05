@@ -39,11 +39,11 @@ class MemoryModel:
         return reply(call("write_file", path="result.json", content=json.dumps({"field": "legacy_name" if known else "need_user_decision"}), overwrite=True))
 
 
-def application(tmp_path: Path, model, config: RunConfig | None = None):
-    """创建两个互相隔离的普通项目，注入 model，返回应用和目录配置；config=None 使用默认。"""
+def application(tmp_path: Path, model, config: RunConfig | None = None, *, max_concurrent_runs: int = 2):
+    """创建两个互相隔离的普通项目，注入 model，返回应用和目录配置；config=None 使用默认，max_concurrent_runs 限制测试宿主主运行槽位。"""
     for name in ("one", "two"):
         (tmp_path / name).mkdir(exist_ok=True)
-    web = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id=name, label=name, path=tmp_path / name) for name in ("one", "two")])
+    web = WebConfig(max_concurrent_runs=max_concurrent_runs, project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id=name, label=name, path=tmp_path / name) for name in ("one", "two")])
     app = create_app(web, config or RunConfig(tools=["read_file", "write_file"]), tmp_path / "runs", model_client=model)
 
     def key(config):
@@ -150,7 +150,7 @@ def test_queue_freezes_policy_but_reads_current_memory_at_dequeue(tmp_path):
     async def scenario():
         """先阻塞首项，再写知识并接纳第二项，取消首项后让第二项真实执行，返回 None。"""
         model = ScriptModel([], gated=True)
-        app, _ = application(tmp_path, model)
+        app, _ = application(tmp_path, model, max_concurrent_runs=1)  # 本例需制造真实排队，跨项目并发由调度专项验收。
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             first = (await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "one", "prompt": "占用执行槽"}})).json()
             await model.entered.wait()

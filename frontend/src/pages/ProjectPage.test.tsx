@@ -18,7 +18,7 @@ vi.mock('../api', async (importOriginal) => ({
   renameProject: vi.fn(),
   createRun: vi.fn(),
   getConversations: vi.fn(
-    /* 导航与配置均不创建执行记录。 */ async () => ({ items: [], total: 0, busy_run_id: null }),
+    /* 导航与配置均不创建执行记录。 */ async () => ({ items: [], total: 0, active_run_ids: [] }),
   ),
 }));
 

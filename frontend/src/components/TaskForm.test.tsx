@@ -48,7 +48,7 @@ function setup(extra: Partial<OptionsResponse> = {}, remember = true, busy: stri
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <ConfigDraftProvider>
-          <TaskForm options={configured} busyId={busy} />
+          <TaskForm options={configured} activeRunIds={busy ? [busy] : []} />
         </ConfigDraftProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -147,8 +147,9 @@ it('选择已有项目保留草稿并重置隔离执行与自动修复授权', a
     recent_projects: [{ ...gitProject, test_argv: ['python', '-m', 'pytest'] }, other],
   });
   fireEvent.click(screen.getByText(/高级设置/));
-  await user.click(screen.getByLabelText('执行目录'));
-  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
+  // 旧项目的执行方式只是前置状态；保留下面切换项目和提交的完整用户交互。
+  fireEvent.mouseDown(screen.getByLabelText('执行目录'));
+  fireEvent.click(await screen.findByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
   // 预置旧项目的授权与文字，核心切换和发送仍使用完整用户交互；避免把前置输入耗时混进本例。
   fireEvent.click(screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' }));
   fireEvent.change(screen.getByLabelText('任务描述'), { target: { value: '保留切换前的要求' } });
@@ -313,7 +314,7 @@ it('技能收在高级设置，明确选择与清空仍随实际任务请求提�
   expect(vi.mocked(createRun).mock.calls[1][0].config.skills).toEqual([]);
 });
 
-it('项目不可用、任务忙碌和缺少凭据时禁止发送，仍可编辑要求', async () => {
+it('项目不可用时即使有其他运行也禁止发送，仍可编辑要求', async () => {
   // 页面不把不可用的项目状态当成已经启动。
   const user = setup(
     { recent_projects: [{ ...gitProject, available: false, error: '仓库没有提交' }] },

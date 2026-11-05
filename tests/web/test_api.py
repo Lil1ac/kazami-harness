@@ -163,7 +163,7 @@ def test_submit_finishes_in_background_and_persists_unverified(web_config: WebCo
             during = (await client.get(f"/api/runs/{identifier}")).json()
             assert during["active"] is True
             assert during["result"]["execution_status"] == "running"
-            assert (await client.get("/api/options")).json()["busy_run_id"] == identifier
+            assert (await client.get("/api/options")).json()["active_run_ids"] == [identifier]
             model.release.set()
             view = await finished(client, identifier)
             assert view["result"]["execution_status"] == "completed"
@@ -173,7 +173,7 @@ def test_submit_finishes_in_background_and_persists_unverified(web_config: WebCo
             assert history.result.model_dump(mode="json") == view["result"]
             assert [event.type for event in history.events].count("run_finished") == 1
             assert model.calls == 1
-            assert (await client.get("/api/options")).json()["busy_run_id"] is None
+            assert (await client.get("/api/options")).json()["active_run_ids"] == []
 
     asyncio.run(scenario())
 
@@ -585,7 +585,7 @@ def test_historical_unfinished_run_is_interrupted_without_fabricated_terminal(we
             assert frames[-1]["event"] == "stream_end"
             assert frames[-1]["data"] == {"last_seq": 2, "interrupted": True}
             assert (await client.post(f"/api/runs/{identifier}/cancel")).status_code == 200
-            assert (await client.get("/api/options")).json()["busy_run_id"] is None
+            assert (await client.get("/api/options")).json()["active_run_ids"] == []
         history = RunStore.read(web_config.project_dir / "records", str(identifier))
         assert len(history.events) == 2
         assert history.result is None

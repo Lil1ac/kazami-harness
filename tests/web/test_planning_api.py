@@ -127,7 +127,7 @@ def test_agent_enters_planning_waits_restarts_and_executes_only_approved_version
                 errors = [item["payload"]["result"]["error"]["code"] for item in events
                           if item["type"] == "tool_result" and not item["payload"]["result"]["ok"]]
                 assert errors == ["planning_read_only"] * 3 + ["skipped_user_input"]
-                assert (await client.get("/api/options")).json()["busy_run_id"] is None
+                assert (await client.get("/api/options")).json()["active_run_ids"] == []
                 assert len(first_model.requests) == 2
                 original = saved_files(config, first["run_id"])
         model = ScriptModel([reply(call("submit_plan", **PLAN)),

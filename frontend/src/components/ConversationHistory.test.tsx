@@ -31,7 +31,7 @@ it('项目列表默认不出现复选框，主动多选后可选，退出清空�
       },
     ],
     total: 1,
-    busy_run_id: null,
+    active_run_ids: [],
   });
   const user = userEvent.setup();
   render(

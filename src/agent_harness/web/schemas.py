@@ -130,7 +130,7 @@ class ConversationPage(DataModel):
 
     items: list[ConversationSummary]  # 当前页会话，按更新时间倒序。
     total: int = Field(ge=0)  # 筛选后的会话总数。
-    busy_run_id: UUID | None  # 全局单任务实际活动编号。
+    active_run_ids: list[UUID]  # 全部实际活动主运行，不包含尚未建立 Run 的准备作业。
 
 
 # 会话读取不启动任何任务，can_continue仅为初步条件，提交时重新核验代码。
@@ -144,7 +144,7 @@ class ConversationView(DataModel):
     can_continue: bool  # 无活动任务且最新轮拥有可核对来源时为True。
     blocked_code: str | None = None  # 当前不可继续的稳定原因。
     blocked_reason: str | None = None  # 页面可读说明。
-    busy_run_id: UUID | None = None  # 全局单槽中的实际活动任务。
+    active_run_ids: list[UUID] = Field(default_factory=list)  # 当前会话活动运行；其他项目不阻止本会话排队。
     continuation_notice: str | None = None  # 中断接续提示；允许发送时展示，不作为阻断原因。
 
 
@@ -208,3 +208,9 @@ class ProjectSettingsRequest(DataModel):
     python_executable: str | None = Field(default=None, max_length=4096)  # None/空白按 PATH；非空为项目解释器路径。
     test_command: str = Field(default="", max_length=4096)  # 空字符串清空测试；仅分词，不经 Shell。
     test_timeout_seconds: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)  # 项目测试超时，单位秒。
+
+
+class QueueSettings(DataModel):
+    """后台调度的用户持久偏好；容量与串行资源规则仍由宿主控制。"""
+
+    resume_on_start: bool  # True 允许启动后重新核验并调度未开始请求；不授权未知动作重放。

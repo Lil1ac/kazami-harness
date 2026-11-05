@@ -9,7 +9,7 @@ async def _view(client, response):
     if response.status_code != 202:
         return response
     job = response.json()
-    if job["status"] == "needs_review":
+    if job["status"] == "needs_review" or (job["status"] == "failed" and job.get("error_code")):
         return httpx.Response(job.get("error_status", 409), json={"error": {"code": job.get("error_code", "job_needs_review"), "message": job["error"]}}, request=response.request)
     if job["status"] in {"queued", "preparing"}:
         return response

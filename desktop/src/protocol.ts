@@ -1,10 +1,11 @@
-/** 后台只允许请求这五种原生能力；页面不能向主进程传入任意命令或文件 API。 */
+/** 后台只允许请求固定原生能力；页面不能向主进程传入任意命令或文件 API。 */
 export type NativeMethod =
   | "folder.choose"
   | "credential.write"
   | "file.download"
   | "file.reveal"
-  | "external.open";
+  | "external.open"
+  | "notification.show";
 
 /** Python 经过业务校验后发给 Electron 的单个原生请求。 */
 export interface NativeRequest {
@@ -25,6 +26,7 @@ export function nativeRequest(value: unknown): NativeRequest {
     "file.download",
     "file.reveal",
     "external.open",
+    "notification.show",
   ];
   if (!value || typeof value !== "object")
     throw new Error("后台原生请求格式无效");

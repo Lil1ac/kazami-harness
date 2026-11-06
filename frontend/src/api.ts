@@ -29,6 +29,52 @@ import type {
   CommandExecution,
 } from './runtimeTypes';
 import type { HookCatalog } from './hookTypes';
+import type { AutomationDefinition, AutomationFire, AutomationGrant, AutomationList, AutomationNotification, AutomationReview, AutomationRule, AutomationSchedule } from './automationTypes';
+
+/** 读取持久规则和调度状态，不恢复执行。 */
+export function getAutomations(): Promise<AutomationList> {
+  return request('/api/automations');
+}
+
+/** 新建definition或以rule当前版本完整替换，保存后保持暂停。 */
+export function saveAutomation(definition: AutomationDefinition, rule?: AutomationRule): Promise<AutomationRule> {
+  return request('/api/automations' + (rule ? '/' + rule.id : ''), { method: rule ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rule ? { revision: rule.revision, definition } : definition) });
+}
+
+/** 对rule执行明确action；requestId由本次按钮动作生成，重试复用该编号。 */
+export function automationAction(rule: AutomationRule, action: 'enable' | 'pause' | 'revoke' | 'stop' | 'run', requestId: string): Promise<AutomationRule> {
+  return request(`/api/automations/${rule.id}/actions/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: rule.revision, request_id: requestId }) });
+}
+
+/** 预览schedule未来时间，不保存规则。 */
+export function previewAutomation(schedule: AutomationSchedule): Promise<{ items: string[] }> {
+  return request('/api/automations/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(schedule) });
+}
+
+/** 读取ruleId真实触发及作业历史。 */
+export function getAutomationHistory(ruleId: string): Promise<{ items: AutomationFire[] }> {
+  return request(`/api/automations/${ruleId}/history`);
+}
+
+/** 读取ruleId当前授权审核内容和指纹，不授予权限。 */
+export function getAutomationReview(ruleId: string): Promise<AutomationReview> {
+  return request(`/api/automations/${ruleId}/review`);
+}
+
+/** 为ruleId保存grant精确持续许可，宿主关闭时由后端拒绝。 */
+export function grantAutomation(ruleId: string, grant: AutomationGrant): Promise<AutomationRule> {
+  return request(`/api/automations/${ruleId}/grant`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(grant) });
+}
+
+/** 读取持久收件箱；刷新不重复弹出原生通知。 */
+export function getAutomationNotifications(): Promise<{ items: AutomationNotification[] }> {
+  return request('/api/automation-notifications');
+}
+
+/** 将id通知明确标为已读，重复操作幂等。 */
+export function readAutomationNotification(id: string): Promise<AutomationNotification> {
+  return request(`/api/automation-notifications/${id}/read`, { method: 'POST' });
+}
 
 /** 读取已登记 projectId 的规则；返回当前定义，不执行脚本。 */
 export function getHooks(projectId: string): Promise<HookCatalog> {

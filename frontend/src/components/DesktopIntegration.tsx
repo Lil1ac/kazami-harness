@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { message } from 'antd';
-import { desktopAction, errorMessage, getOptions } from '../api';
+import { useNavigate } from 'react-router';
+import { desktopAction, errorMessage, getOptions, readAutomationNotification } from '../api';
 
 /** 桌面窗口统一承接附件与外链点击；网页模式沿用浏览器行为，不创建第二套页面。 */
 export function DesktopIntegration() {
+  const navigate = useNavigate(); // 通知仅定位原作业，不重新投递任务。
   const options = useQuery({
     queryKey: ['options'],
     queryFn: /* 与主工作台共享能力查询，页面加载不会执行原生操作。 */ ({ signal }) =>
@@ -12,6 +14,19 @@ export function DesktopIntegration() {
   });
   const enabled = Boolean(options.data?.desktop); // 只由受信宿主返回的能力启用原生操作。
   const [feedback, contextHolder] = message.useMessage();
+  useEffect(
+    /* 桌面点击进入原待处理项，标记通知已读；Web不安装原生监听。 */ () => {
+      return window.agentHarnessDesktop?.onAutomationNotification?.((value) => {
+        void readAutomationNotification(value.id).then(
+          /* 重复故障可能已合并到较新作业；标记已读与定位使用同一份宿主快照。 */ (item) =>
+            navigate(item.job_id ? '/jobs/' + item.job_id : '/automations'),
+          /* 通知已删除或服务离线仍可打开弹窗原先关联的结果。 */ () =>
+            navigate(value.jobId ? '/jobs/' + value.jobId : '/automations'),
+        );
+      });
+    },
+    [navigate],
+  );
 
   useEffect(
     /* 后台中断时保留会话页面并显示固定提示，不自动重复提交任务。 */ () => {

@@ -248,7 +248,7 @@ class ConversationService:
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
-                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
+                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, automation=parent.manifest.automation, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 import os
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)

@@ -68,12 +68,14 @@ def create_app(
     if desktop is not None:
         manager.folder_picker = desktop
         desktop.manager = manager
+        manager.automations.native = desktop.native
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """在 app 生命周期内维护后台任务，退出时等待取消清理；yield None 不产生额外资源。"""
         try:
             manager.jobs.kick()
+            manager.automations.start()
             yield
         finally:
             await manager.shutdown()
@@ -81,6 +83,8 @@ def create_app(
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
     install_memory_routes(app, manager)
+    from agent_harness.web.automations import install_automation_routes
+    install_automation_routes(app, manager)
     from agent_harness.web.runtime import install_runtime_routes
     install_runtime_routes(app, manager)
     from agent_harness.web.hooks import install_hook_routes
@@ -107,7 +111,7 @@ def create_app(
     @app.exception_handler(PlanningError)
     async def task_error(request: Request, error: TaskError) -> JSONResponse:
         """将 request 对应任务业务 error 转为安全响应；不存在返回404，其余冲突409。"""
-        status = 404 if error.code in {"task_not_found", "job_not_found", "integration_not_found", "command_not_found", "runtime_input_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
+        status = 404 if error.code in {"task_not_found", "job_not_found", "integration_not_found", "command_not_found", "runtime_input_not_found", "automation_not_found", "notification_not_found"} else 400 if error.code in {"unknown_workspace", "unknown_project", "unknown_verifier", "workspace_copy_not_supported", "job_invalid"} else 409
         return _error(status, error.code, error.message)
 
     @app.exception_handler(ConfigurationError)
@@ -648,6 +652,7 @@ def create_app(
     @app.get("/jobs")
     @app.get("/jobs/{job_id}")
     @app.get("/settings")
+    @app.get("/automations")
     @app.get("/projects/{project_id}")
     async def frontend_page() -> Response:
         """返回前端路由统一 index；尚未构建时给出本地构建步骤，不影响 API 使用。"""

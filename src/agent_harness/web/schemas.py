@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from agent_harness.schemas import PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
+from agent_harness.schemas import AutomationOrigin, PythonExecution, ContextView, DataModel, HumanDecision, JsonValue, RunConfig, RunEvent, RunResult, ToolName
 from agent_harness.projects import ProjectReview, ProjectWorkspace
 from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
@@ -155,6 +155,7 @@ class ReviewDecision(DataModel):
 
 # 活动与历史运行共用同一视图，interrupted 表示缺少可信终态，绝不伪造失败结论。
 class RunView(DataModel):
+    automation: AutomationOrigin | None = None  # 自动化来源；历史与人工接续显示同一规则/触发。
     run_id: UUID  # 与落盘登记一致的运行编号。
     prompt: str  # 原任务描述。
     workspace: str  # 模型工具、命令和验收实际使用的绝对目录。

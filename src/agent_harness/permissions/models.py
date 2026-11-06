@@ -23,6 +23,7 @@ class PermissionPolicy(PermissionModel):
     write: Decision = "allow"  # 文件创建与编辑上限，规划阶段仍可进一步拒绝。
     command: Decision = "ask"  # 本机命令默认逐项审批；显式 allow 仅由宿主可信配置设置。
     verification: Decision = "ask"  # 项目测试与独立验收默认审批，不能借自动检查绕过限制。
+    automation_grants: bool = False  # 宿主显式开启后才接受规则级持续授权；deny及严格模式仍不可绕过。
     read_roots: list[str] = Field(default_factory=lambda: ["."], max_length=32)  # 工作区内可读相对目录；空列表禁止项目读取。
     write_roots: list[str] = Field(default_factory=lambda: ["."], max_length=32)  # 工作区内可写相对目录；不能扩大到工作区外。
     approval_ttl_seconds: int = Field(default=1800, ge=1, le=86400)  # 从请求创建起计的有效秒数，包含人工等待与排队。

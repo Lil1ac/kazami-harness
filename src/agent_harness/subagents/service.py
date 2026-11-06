@@ -405,7 +405,7 @@ class SubagentController:
                 raise SubagentError(getattr(error, "code", "subagent_workspace_failed"), getattr(error, "message", "无法准备隔离开发环境。")) from None
         manifest = RunManifest(run_id=child_id, session_id=parent.manifest.session_id or parent.manifest.run_id,
                                task=parent.manifest.task.model_copy(update={"prompt": prompt, "verifier": None, "workspace": workspace, "python_execution": execution}),
-                               config=config, origin=parent.manifest.origin, planning=planning.model_copy(deep=True),
+                               config=config, origin=parent.manifest.origin, automation=parent.manifest.automation, planning=planning.model_copy(deep=True),
                                delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=arguments.role, task_id=arguments.task_id, write_scope=scope,
                                    team_id=team_assignment["team_id"] if team_assignment else None, team_member_id=team_assignment["member_id"] if team_assignment else None))
         record = SubagentRecord(run_id=manifest.run_id, title=arguments.title.strip(), objective=arguments.objective,
@@ -555,7 +555,7 @@ class SubagentController:
                 owned["delegation_scope"] = scope
                 projects._write_json(projects._metadata_dir(identifier) / "ownership.json", owned)
             manifest = RunManifest(run_id=identifier, session_id=parent.manifest.session_id or parent.manifest.run_id,
-                task=old.task, config=config, origin=old.origin, planning=parent.manifest.planning.model_copy(deep=True),
+                task=old.task, config=config, origin=old.origin, automation=parent.manifest.automation, planning=parent.manifest.planning.model_copy(deep=True),
                 permission_resume=child_resume,
                 delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=record.role, task_id=record.task_id,
                     write_scope=scope, previous_parent_id=record.log_parent_id, previous_run_id=record.run_id,

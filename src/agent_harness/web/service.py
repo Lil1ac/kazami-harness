@@ -271,6 +271,8 @@ class WebRunManager:
         self.integrations = IntegrationService(self)  # 人工成果集成复用队列，不创建模型运行或执行后端。
         from agent_harness.web.jobs import JobQueue
         self.jobs = JobQueue(self)  # 同一宿主的持久资源队列，启动恢复由明确偏好控制。
+        from agent_harness.automations.service import AutomationService
+        self.automations = AutomationService(self)  # 只增加规则触发入口，实际执行继续复用jobs。
 
     @property
     def active_run_ids(self) -> list[UUID]:
@@ -459,6 +461,10 @@ class WebRunManager:
                     raise WebServiceError(400, error.code, error.message) from None
                 message = str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else "项目测试工作目录或导入路径无效。"
                 raise WebServiceError(400, "invalid_run", message) from None
+            job = self.jobs.get(owner)
+            if job.get("automation"):
+                from agent_harness.schemas import AutomationOrigin
+                manifest = manifest.model_copy(update={"automation": AutomationOrigin.model_validate(job["automation"])})
             return await self._launch(manifest, api_key, owner)
 
     @staticmethod
@@ -503,6 +509,11 @@ class WebRunManager:
                 item.cancellation.shutdown_requested = True
                 item.cancelling = True
                 raise asyncio.CancelledError
+            if item.manifest.automation is not None:
+                job = self.jobs.get(item.owner)
+                if job.get("automation_stop_requested"):
+                    item.cancelling = True
+                    raise asyncio.CancelledError
         limit_token = host_limits.set(self.coordinator.limits)
         try:
             await run_task(
@@ -616,6 +627,7 @@ class WebRunManager:
             context_view = None
             warnings.append("上下文记录格式无效，请检查原始事件；此处显示为未记录。")
         return RunView(
+            automation=history.manifest.automation,
             run_id=identifier,
             prompt=history.manifest.task.prompt,
             workspace=str(history.manifest.task.workspace),
@@ -740,6 +752,7 @@ class WebRunManager:
     async def shutdown(self) -> None:
         """停止接纳和出队，取消所有活动 Run 与集成作业，等待准备、子进程及证据收尾。"""
         self._closing = True
+        await self.automations.close()
         self.jobs.closed = True
         if self.integrations.active_job:
             self.integrations.cancel(self.integrations.active_job)

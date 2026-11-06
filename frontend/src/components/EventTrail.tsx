@@ -17,6 +17,7 @@ const eventLabels: Record<string, string> = {
   hook_dequeued: '生命周期事件已处理',
   permissions_prepared: '固定执行权限',
   permission_requested: '等待动作审批',
+  automation_authorized: '自动化精确授权已核验',
   permission_resuming: '按批准接续原动作',
   tool_requested: '接纳工具请求',
   subagent_snapshot: '子 Agent 进度',

@@ -116,7 +116,7 @@ class JobQueue:
 
     def public(self, job: dict, db=None) -> dict:
         """返回 job 可展示字段；排除固定内部提交参数，保留归属、结果和错误。"""
-        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy", "resources"}}
+        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy", "resources", "automation_stop_requested"}}
         if job.get("waiting_action_id"):
             value["approval_status"] = PermissionStore(self.manager.runs_root).get(job["waiting_action_id"], db)["status"]
         session = job.get("session_id")
@@ -191,8 +191,11 @@ class JobQueue:
             job.update(status="needs_review", error="上次执行中断，请先确认进程已停止并核对工作区。")
             self.save(job)
 
-    async def enqueue(self, request: JobRequest) -> dict:
-        """持久接纳 request 并返回作业；空闲时等待首次准备，忙碌时立即返回排队状态。"""
+    async def enqueue(self, request: JobRequest, *, automation: dict | None = None, wait_started: bool = True) -> dict:
+        """持久接纳request并返回作业；automation仅宿主注入，wait_started=False不等待准备。
+
+        自动化触发和新作业在同一事务关联；HTTP请求不能提供automation内部来源字段。
+        """
         if self.closed or self.manager._closing:
             raise TaskError("service_closing", "服务正在关闭。")
         if (request.create is None) == (request.followup is None) or (request.followup is not None and request.parent_run_id is None) or (request.create is not None and request.parent_run_id is not None):
@@ -295,6 +298,10 @@ class JobQueue:
                "memory_policy": config.memory.model_dump() if request.create is not None else {**parent.manifest.config.memory.model_dump(), **(request.followup.config.memory.model_dump(exclude_unset=True) if request.followup.config.memory else {})},
                "project_label": selected.label, "source_policy": source_policy(selected), "error": None, "validation_status": "unverified", "execution_status": None}
         job["resources"] = self.scope(job)  # 接纳时冻结仓库及共享资源身份，排队期间不可悄然换源。
+        if automation is not None:
+            job["automation"] = automation
+        elif request.followup is not None and parent.manifest.automation is not None:
+            job["automation"] = parent.manifest.automation.model_dump()
         with self.store.transaction() as db:
             old = db.execute("SELECT body FROM jobs WHERE id=?", (identifier,)).fetchone()
             if old:
@@ -311,11 +318,13 @@ class JobQueue:
                 raise TaskError("session_job_pending", "会话已有待处理作业，请先处理或取消。")
             if request.followup is not None and request.followup.action_decision is not None:
                 PermissionStore(self.manager.runs_root).decide(request.followup.action_decision, str(request.parent_run_id), identifier, db)
+            if automation is not None:
+                self.manager.automations.bind_job(db, job, automation)
             db.execute("INSERT INTO jobs VALUES (?,?)", (identifier, encode(job)))
             self.store.event(db, session or identifier, {"type": "job_updated", "job": self.public(job, db)})
         self._ready[identifier] = asyncio.Event()
         self.kick()
-        if not self.paused:
+        if not self.paused and wait_started:
             await self._ready[identifier].wait()
         self._ready.pop(identifier, None)  # HTTP 已获得首次状态，后续变化通过持久事件和查询观察。
         return self.public(self.get(identifier))
@@ -402,6 +411,8 @@ class JobQueue:
             if job.get("kind") == "integration":
                 await self.manager.integrations.run_job(job)
                 return
+            if job.get("automation") and job["payload"].get("create") is not None:
+                self.manager.automations.validate_start(job["automation"])
             if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:
                 raise TaskError("workspace_changed", "排队期间目录身份发生变化，请重新打开项目。")
             if self.scope(job) != job["resources"]:

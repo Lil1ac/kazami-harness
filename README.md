@@ -162,6 +162,8 @@ npm.cmd --prefix frontend run build
 
 ## 任务清单与后台工作
 
+侧栏“自动化”可保存时间或本机普通运行事件规则，先预览、试跑，再明确启用。每次执行使用独立会话，Git默认工作树；遇到未授权动作仍等待人工处理。宿主可明确开启`permission_policy.automation_grants`，再从页面审核精确命令、固定验收及已审核Hook的持续许可；默认关闭。漏跑、重叠、启停和结果通知见[本机自动化](docs/AUTOMATIONS.md)。电脑及宿主需保持运行。
+
 批准计划后自动生成持久工作项，Agent 通过 task_create/get/list/update 管理依赖、进度和完成证据。会话内可查看、编辑待处理项、取消或重新打开；后台工作页查看排队、运行和待核对作业。默认两个独立项目并发，同仓库与重叠目录仍串行；退出保留未执行队列，重启按明确选择恢复。历史记录不自动重放工具；后台页面提供资源等待原因、单项停止和启动恢复设置，详见[调度与恢复](docs/SCHEDULING.md)及[任务协议](docs/TASKS.md)。
 
 长命令可通过 `run_command(background=true)` 返回句柄，使用 `read_command`、`wait_command` 和 `stop_command` 管理；同一目录有活动命令时不继续写文件。页面执行中可发送本轮补充或排队下一轮，支持安全暂停和明确恢复；恢复沿用原预算，未知进程结果先核对。桌面/Web 可查看父子命令、增量输出和处理状态；详见[长任务协议](docs/LONG_RUNNING.md)。

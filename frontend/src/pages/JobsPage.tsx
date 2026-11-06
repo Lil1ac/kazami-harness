@@ -184,6 +184,7 @@ export function JobsPage() {
                           </span>
                         </div>
                         {job.error && <p role="status">{job.error}</p>}
+                        {job.automation && <Link to="/automations">来自自动化 · 查看规则</Link>}
                         {job.status === 'queued' && job.blocked_reason && (
                           <p role="status">
                             {job.blocked_reason}

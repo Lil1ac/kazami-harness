@@ -549,6 +549,15 @@ class ExecutionResume(RunBudget):
     workspace_identity: list[int]  # 安全停止时的设备与目录标识，替换目录后禁止恢复。
 
 
+class AutomationOrigin(DataModel):
+    """宿主写入的自动化来源；HTTP运行请求不能构造，用于追踪及逐动作撤销核验。"""
+
+    rule_id: str  # 稳定规则编号。
+    revision: int  # 接纳时的定义版本，规则编辑后旧版本不能启动或执行新动作。
+    fire_id: str  # 唯一触发记录，同一触发最多接纳一个作业。
+    grant_generation: int  # 授权代次；撤销或重新授权后旧运行不继承新许可。
+
+
 class RunManifest(DataModel):
     """运行开始时固定的任务、来源、配置、计划与当前用户决定；不保存密钥。"""
     # 数据格式版本用于读取兼容；runtime_version 另外标识生成记录的程序版本。
@@ -568,6 +577,7 @@ class RunManifest(DataModel):
     delegation: DelegationOrigin | None = None  # 非空表示父运行内的委派子执行，不是会话续轮。
     permission_resume: PermissionResume | None = None  # 宿主绑定的原动作与累计预算；页面不得直接构造。
     execution_resume: ExecutionResume | None = None  # 仅安全暂停恢复时由宿主固定，不能与动作批准混用。
+    automation: AutomationOrigin | None = None  # 自动化首轮和人工接续保留同一来源，普通运行为空。
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。

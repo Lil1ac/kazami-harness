@@ -216,7 +216,7 @@ def test_development_scope_inherits_review_without_loading_root_only_paths(tmp_p
     def context(workspace, delegation=None, parent=None):
         """构造 workspace/角色/父关系的最小只读上下文，返回命名空间，不运行模型或工具。"""
         return SimpleNamespace(runs_root=tmp_path / "records", result=SimpleNamespace(hooks={}), budget_parent=parent,
-            manifest=SimpleNamespace(run_id=uuid4(), task=SimpleNamespace(workspace=workspace), config=RunConfig(hooks=policy), delegation=delegation))
+                manifest=SimpleNamespace(run_id=uuid4(), task=SimpleNamespace(workspace=workspace), config=RunConfig(hooks=policy), delegation=delegation, automation=None))
 
     parent = HookController(context(parent_path), None)
     child = HookController(context(child_path, SimpleNamespace(role="develop"), SimpleNamespace(hooks=parent)), None)

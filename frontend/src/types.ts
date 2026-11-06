@@ -1,5 +1,13 @@
 /** Python 数据模型的浏览器表示；字段名与后端持久化及 HTTP 契约保持一致。 */
 export type ToolName = 'read_file' | 'search_files' | 'write_file' | 'edit_file' | 'run_command';
+
+/** 宿主固定的自动化执行来源，页面不能在普通任务请求中构造。 */
+export interface AutomationOrigin {
+  rule_id: string; // 稳定规则编号。
+  revision: number; // 接纳定义版本。
+  fire_id: string; // 唯一触发编号。
+  grant_generation: number; // 绑定的授权代次。
+}
 export type ExecutionStatus =
   | 'created'
   | 'running'
@@ -17,6 +25,7 @@ export type PermissionMode = 'research' | 'workspace_edit' | 'strict';
 
 /** 宿主固定权限上限；页面不能提交或修改。 */
 export interface PermissionPolicy {
+  automation_grants: boolean; // 宿主显式允许规则级持续授权，默认关闭。
   read: 'allow' | 'deny' | 'ask'; // 项目读取上限。
   write: 'allow' | 'deny' | 'ask'; // 项目文件写入上限。
   command: 'allow' | 'deny' | 'ask'; // 本机命令上限。
@@ -432,6 +441,7 @@ export interface TaskSnapshot {
 
 /** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
 export interface JobView {
+  automation?: AutomationOrigin; // 宿主自动化来源，普通作业省略。
   kind?: 'integration'; // 成果作业复用队列；普通模型运行不设置此字段。
   integration_id?: string; // 原集成记录，关联来源会话而不伪造新Run。
   result_integration_id?: string; // 撤销准备产生的反向候选编号。
@@ -560,6 +570,7 @@ export interface PythonExecution {
 
 /** API 统一任务视图；运行快照不随当前项目配置改变。 */
 export interface RunView {
+  automation?: AutomationOrigin | null; // 首轮及人工接续的规则/触发来源，普通运行为空。
   run_id: string; // 可用于详情路由及订阅的 UUID。
   prompt: string; // 原始任务描述。
   workspace: string; // 工具、命令和验收实际使用的绝对目录。

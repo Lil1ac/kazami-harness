@@ -210,6 +210,7 @@ function SessionWorkspace({
         </Link>
         <div className="session-heading">
           <h1 title={title}>{title}</h1>
+            {latest?.automation && <Link to="/automations">来自自动化 · 查看规则与触发历史</Link>}
           <p>
             {conversation.management.assigned_project?.label || '未分组'}
             <span>·</span>

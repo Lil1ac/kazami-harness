@@ -1,0 +1,106 @@
+.automations-page {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.automation-heading,
+.automation-rule-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.automation-heading h1,
+.automation-rule-title h2 {
+  margin: 0;
+}
+.automation-heading {
+  margin-bottom: 24px;
+}
+.automation-rules {
+  margin-top: 20px;
+}
+.automation-rule {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border-color, #d8dce2);
+}
+.automation-rule h2,
+.automation-inbox h2 {
+  font-size: 18px;
+}
+.automation-task {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
+}
+.automation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.automation-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 12px;
+}
+.automation-form label:not(.ant-checkbox-wrapper) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.automation-form .automation-inline {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+}
+.automation-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.automation-form pre {
+  max-height: 280px;
+  overflow: auto;
+}
+.automation-form small {
+  color: var(--text-secondary, #68707d);
+  line-height: 1.6;
+}
+.automation-times {
+  margin: 0;
+  padding-left: 20px;
+}
+.automation-history {
+  margin-top: 20px;
+  border-top: 1px solid var(--border-color, #d8dce2);
+}
+.automation-history article,
+.automation-inbox article {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-color, #d8dce2);
+  overflow-wrap: anywhere;
+}
+.automation-history article > div,
+.automation-inbox article > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.automation-history a + a {
+  margin-left: 16px;
+}
+.automation-inbox {
+  margin-top: 36px;
+}
+.automation-inbox .is-read {
+  opacity: 0.65;
+}
+@media (max-width: 560px) {
+  .automation-form-row {
+    grid-template-columns: 1fr;
+  }
+  .automation-heading {
+    align-items: flex-start;
+  }
+}

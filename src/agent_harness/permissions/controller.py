@@ -147,6 +147,12 @@ class PermissionController:
         inputs = self.inputs(name, arguments) if name in {"write_file", "edit_file", "run_command", "verification"} else {}
         policy = self.fingerprint()
         self.context.result.permissions = self.snapshot()
+        if self.manifest.automation is not None:
+            from agent_harness.automations.authorization import check_automation
+            if check_automation(self, name, arguments, inputs, hook) and decision == "ask":
+                decision = "allow"  # 仅匹配精确规则许可；deny已在上方拒绝，规划及严格模式仍生效。
+                self.context.emit("automation_authorized", {"origin": self.manifest.automation.model_dump(), "name": name,
+                    "arguments_sha256": payload_digest(arguments), "inputs": inputs, "policy_fingerprint": policy})
         if self.approved is not None:
             original = self.approved
             if original["name"] != name or original["arguments"] != arguments or original["inputs"] != inputs or original["policy_fingerprint"] != policy:

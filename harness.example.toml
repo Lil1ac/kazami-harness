@@ -17,6 +17,8 @@ read = "allow"
 write = "allow"
 command = "ask"
 verification = "ask"
+# 宿主明确允许后，自动化页面才能保存版本绑定的精确命令/验收/Hook持续授权；默认关闭。
+automation_grants = false
 read_roots = ["."]
 write_roots = ["."]
 approval_ttl_seconds = 1800 # 包含等待和排队的有效秒数，默认30分钟。

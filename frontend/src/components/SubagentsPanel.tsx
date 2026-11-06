@@ -17,6 +17,7 @@ import { ContextPanel } from './ContextPanel';
 import type { SubagentRecord } from '../types';
 import './SubagentsPanel.css';
 import { IntegrationPanel } from './IntegrationPanel';
+import { ReviewPatch } from './ReviewSurface';
 import { ArtifactPanel } from './ArtifactPanel';
 
 const statusLabels: Record<SubagentRecord['status'], string> = {
@@ -154,7 +155,7 @@ function SubagentDetails({
             <Button danger loading={discarding} onClick={/* 丢弃仅由用户明确确认，保留固定成果。 */ () => Modal.confirm({ title: '丢弃此子任务工作树？', content: '工作目录将删除，已保存的报告、补丁和采纳记录保留。', onOk: discardWorkspace })}>丢弃子工作树</Button>
           )}
           {data?.project?.status === 'discarded' && <p>子工作树已丢弃，以下为固定历史证据。</p>}
-          {patch.data && <details><summary>子成果差异 · {record.changed_paths.length} 个文件</summary><pre aria-label="子成果补丁">{patch.data.content}</pre><a href={patchUrl(record.run_id, parentId)} download>下载完整子补丁</a>{patch.data.truncated && <p>预览已截断，完整成果通过集成审阅逐文件查看。</p>}</details>}
+          {patch.data && <details><summary>子成果差异 · {record.changed_paths.length} 个文件</summary><ReviewPatch content={patch.data.content} label="子成果补丁" /><a href={patchUrl(record.run_id, parentId)} download>下载完整子补丁</a>{patch.data.truncated && <p>预览已截断，完整成果通过集成审阅逐文件查看。</p>}</details>}
           {!active && record.status === 'completed' && record.snapshot_status === 'ready' && !record.scope_violations.length && (
             record.team_id ? <p className="muted">从团队汇集成果统一审阅采纳。</p> : <IntegrationPanel runId={record.run_id} parentRunId={parentId} sourceTest="unverified" siblings={siblings} />
           )}

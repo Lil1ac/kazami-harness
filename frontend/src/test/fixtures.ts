@@ -32,7 +32,7 @@ export function makeJob(run: RunView = makeRun()): JobView {
 export const config: RunConfig = {
   hooks: { rules: [], project_enabled: true, max_calls: 64, max_seconds: 120, max_context_bytes: 8192 }, // 宿主扩展策略。
   permission_mode: 'workspace_edit', // 工作区文件自动编辑，本机命令仍需宿主审批。
-  permission_policy: { read: 'allow', write: 'allow', command: 'ask', verification: 'ask', read_roots: ['.'], write_roots: ['.'], approval_ttl_seconds: 1800 },
+  permission_policy: { automation_grants: false, read: 'allow', write: 'allow', command: 'ask', verification: 'ask', read_roots: ['.'], write_roots: ['.'], approval_ttl_seconds: 1800 },
   memory: { use: true, capture: true, max_input_bytes: 16384, max_entries: 6 }, // 与宿主默认一致。
   planning_policy: 'auto', // 默认由Agent判断；强制规划由宿主TOML配置。
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。

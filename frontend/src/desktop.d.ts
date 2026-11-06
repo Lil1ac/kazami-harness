@@ -4,6 +4,8 @@ interface AgentHarnessDesktopBridge {
   quit(): void;
   /** 订阅固定的服务中断提示；callback 仅接收中文文案，返回取消订阅函数。 */
   onServiceError(callback: (message: string) => void): () => void;
+  /** 订阅可信自动化通知点击；参数仅含通知/作业编号，返回解除订阅函数。 */
+  onAutomationNotification?(callback: (value: { id: string; jobId: string | null }) => void): () => void;
 }
 
 interface Window {

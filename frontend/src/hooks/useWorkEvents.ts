@@ -18,6 +18,11 @@ export function useWorkEvents(enabled = true): void {
         void cache.invalidateQueries({ queryKey: ['tasks'] });
         void cache.invalidateQueries({ queryKey: ['jobs'] });
         void cache.invalidateQueries({ queryKey: ['job'] });
+        if (type.startsWith('automation')) {
+          void cache.invalidateQueries({ queryKey: ['automations'] });
+          void cache.invalidateQueries({ queryKey: ['automation-history'] });
+          void cache.invalidateQueries({ queryKey: ['automation-notifications'] });
+        }
         if (type !== 'tasks_updated') {
           void cache.invalidateQueries({ queryKey: ['conversations'] });
           void cache.invalidateQueries({ queryKey: ['conversation'] });

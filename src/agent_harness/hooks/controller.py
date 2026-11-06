@@ -36,6 +36,9 @@ class HookController:
         self.policy = context.manifest.config.hooks  # 宿主不可被网页运行覆盖的扩展策略。
         self.agent_scope = context.manifest.delegation.role if context.manifest.delegation is not None else None  # 根段保留全量供审阅和显式继承；子段只解析适用规则。
         self.definitions = discover(context.manifest.task.workspace, self.policy, self.store, agent_scope=self.agent_scope) if self.agent_scope in {None, "develop"} else []  # 只读子项不读取或执行脚本。
+        if context.manifest.automation is not None and self.agent_scope is None:
+            from agent_harness.automations.authorization import inherit_hook_trust
+            inherit_hook_trust(context, executor.permissions, self.definitions)
         self.origin = None  # 当前工具操作的来源，非工具事件时为 None。
         self.logical_run = str(context.manifest.run_id)  # 审批/暂停接续时复用此前逻辑归属。
         self.resume_operation = None  # 已批准 Hook 指向的原工具操作，普通工具为空。

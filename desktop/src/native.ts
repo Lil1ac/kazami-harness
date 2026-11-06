@@ -1,4 +1,4 @@
-import { dialog, safeStorage, shell, BrowserWindow } from "electron";
+import { dialog, safeStorage, shell, BrowserWindow, Notification } from "electron";
 import path from "node:path";
 import {
   atomicWrite,
@@ -25,6 +25,7 @@ export function externalUrl(url: string): string {
 export class NativeService {
   private readonly credentialFile: string; // 仅保存 safeStorage 密文，不进入公开配置和运行记录。
   private credentialWrite: Promise<void> = Promise.resolve(); // 串行保存，避免并发替换同一密文文件。
+  private readonly notifications = new Map<string, Notification>(); // 保持活动弹窗引用，关闭后释放，防止原生对象提前回收。
 
   /** 固定 dataDirectory 与当前窗口读取器 window；构造不创建对话框或读取密钥。 */
   constructor(
@@ -75,6 +76,26 @@ export class NativeService {
   async handle(request: NativeRequest): Promise<unknown> {
     const parameters = request.parameters;
     switch (request.method) {
+      case "notification.show": {
+        const id = textParameter(parameters, "id", 36);
+        const jobId = parameters.job_id == null ? null : textParameter(parameters, "job_id", 36);
+        if (!/^[0-9a-f-]{36}$/.test(id) || (jobId !== null && !/^[0-9a-f-]{36}$/.test(jobId)))
+          throw new Error("通知引用无效");
+        if (!Notification.isSupported()) return { supported: false };
+        const notice = new Notification({ title: textParameter(parameters, "title", 100), body: textParameter(parameters, "body", 500) });
+        this.notifications.set(id, notice);
+        notice.on("click", /* 点击仅传固定记录编号，渲染层不能从通知执行任意链接。 */ () => {
+          const window = this.window();
+          window?.show();
+          window?.focus();
+          window?.webContents.send("desktop:automation-notification", { id, jobId });
+        });
+        notice.on("close", /* 仅清理本次引用，较新同编号弹窗不受影响。 */ () => {
+          if (this.notifications.get(id) === notice) this.notifications.delete(id);
+        });
+        notice.show();
+        return { supported: true };
+      }
       case "folder.choose": {
         const window = this.window();
         if (!window) throw new Error("桌面窗口尚未就绪");

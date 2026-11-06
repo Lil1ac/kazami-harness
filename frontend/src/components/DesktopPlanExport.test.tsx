@@ -8,6 +8,7 @@ import { options } from '../test/fixtures';
 import type { PlanningState } from '../types';
 import { DesktopIntegration } from './DesktopIntegration';
 import { PlanningPanel } from './PlanningPanel';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../api', async (original) => ({
   ...(await original<typeof import('../api')>()),
@@ -56,13 +57,15 @@ it('计划导出链接由桌面统一下载器接管，并且不发送用户批�
   vi.mocked(desktopAction).mockResolvedValue({ path: 'D:/Downloads/plan-v1.md' });
   render(
     <QueryClientProvider client={cache}>
-      <DesktopIntegration />
-      <PlanningPanel
-        runId="00000000-0000-4000-8000-000000000001"
-        state={state}
-        disabled={false}
-        onDecision={onDecision}
-      />
+      <MemoryRouter>
+        <DesktopIntegration />
+        <PlanningPanel
+          runId="00000000-0000-4000-8000-000000000001"
+          state={state}
+          disabled={false}
+          onDecision={onDecision}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   await user.click(screen.getByRole('link', { name: '导出计划 v1 为 Markdown' }));

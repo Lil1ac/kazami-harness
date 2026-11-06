@@ -94,4 +94,4 @@ Git 资源探测显式使用空标准输入和受限子进程环境，避免继�
 - [Cursor Cloud Agents](https://cursor.com/docs/cloud-agent)：环境与生命周期分离。
 - [LangGraph 故障容错](https://docs.langchain.com/oss/python/langgraph/fault-tolerance)：幂等、副作用及未知回执边界。
 
-下一阶段可在此基础上独立规划 C16 触发规则、无人值守授权和通知；当前仍没有定时、外部事件、操作系统沙箱或分布式调度。
+2026-11-06在此基础上按获批Plan接入[C16本机自动化](AUTOMATIONS.md)，复用本调度器处理时间/普通运行事件、精确授权和必要通知。外部事件、操作系统沙箱和分布式调度仍未提供。

@@ -219,6 +219,10 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
         )}
       </div>
       <nav className="workspace-nav-links sidebar-settings" aria-label="设置">
+        <NavLink to="/automations" onClick={onNavigate}>
+          <ThunderboltOutlined />
+          <span>自动化</span>
+        </NavLink>
         <ThemeToggle />
         <NavLink to="/settings" onClick={onNavigate}>
           <SettingOutlined />

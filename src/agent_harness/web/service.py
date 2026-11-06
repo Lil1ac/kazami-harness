@@ -246,6 +246,9 @@ class WebRunManager:
         self.web_config = web_config  # 宿主工作区和验收器白名单。
         self.run_config = run_config.model_copy(deep=True)  # 页面只能读取，不原地修改默认配置。
         self.runs_root = runs_root.resolve()  # 独立运行记录根目录。
+        from agent_harness.mcp.store import McpStore
+        self.mcp = McpStore(self.runs_root)  # 连接目录读取不启动任何服务。
+        self.mcp_credential_provider = None  # 桌面安装异步原生读取器；CLI/Web 使用环境引用。
         self.catalog = ProjectCatalog(self.runs_root, web_config)  # 明确打开目录的持久登记，首轮与续轮共用。
         self.folder_picker = FolderPicker()  # 独立原生选择器，读取页面不创建窗口。
         self._model_client = model_client  # 离线注入；默认无客户端，共用 Runner 创建逻辑。
@@ -319,6 +322,7 @@ class WebRunManager:
             "folder_picker_available": self.folder_picker.available,
             "config": self.run_config,
             "skills": SkillCatalog(self.run_config.skill_roots).discover(),
+            "mcp_tools": self.mcp.options(),
             "key_configured": bool(self.api_key(self.run_config)),
             "verifiers": [
                 {"id": item.id, "label": item.label, "description": item.description}
@@ -526,6 +530,7 @@ class WebRunManager:
                 on_context=on_context,
                 file_changes=self.local_changes if item.manifest.origin is None or item.manifest.origin.execution_mode == 'local' else None,
                 project_manager=self.projects,
+                mcp_credential_provider=self.mcp_credential_provider,
                 execution_lease=self.coordinator.lease,
             )
         except asyncio.CancelledError:

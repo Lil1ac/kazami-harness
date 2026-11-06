@@ -25,6 +25,7 @@ export type PermissionMode = 'research' | 'workspace_edit' | 'strict';
 
 /** 宿主固定权限上限；页面不能提交或修改。 */
 export interface PermissionPolicy {
+  external?: 'allow' | 'deny' | 'ask'; // MCP 宿主上限，实际审批仍以服务端判定为准。
   automation_grants: boolean; // 宿主显式允许规则级持续授权，默认关闭。
   read: 'allow' | 'deny' | 'ask'; // 项目读取上限。
   write: 'allow' | 'deny' | 'ask'; // 项目文件写入上限。
@@ -46,6 +47,10 @@ export interface PermissionAction {
   name: string; // 文件工具、命令或宿主验收。
   arguments: Record<string, unknown>; // 原动作参数，只展示、不从前端重新提交执行。
   inputs: {
+    server_label?: string; // 外部调用固定服务名称。
+    tool?: string; // 外部原工具名。
+    connection_fingerprint?: string; // 本次批准的连接及定义指纹。
+    definition?: Record<string, unknown>; // 已冻结的参数及结果 Schema。
     target?: string;
     cwd?: string;
     executable?: string;
@@ -245,6 +250,7 @@ export interface ContextView {
 
 /** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
 export interface RunConfig {
+  mcp_tools?: import('./mcpTypes').McpToolSelection[]; // 本轮选中的外部工具及版本。
   hooks: { rules: import('./hookTypes').HookRule[]; project_enabled: boolean; max_calls: number; max_seconds: number; max_context_bytes: number }; // 宿主扩展策略，只读。
   permission_policy: PermissionPolicy; // 当前宿主权限上限，只读。
   permission_mode: PermissionMode; // 当前会话权限模式。
@@ -677,6 +683,7 @@ export interface LocalProjectOption {
 
 /** 启动能力选项；密钥仅返回是否配置，不返回值。 */
 export interface OptionsResponse {
+  mcp_tools?: import('./mcpTypes').McpToolOption[]; // 当前宿主已审核启用的动态工具目录。
   desktop?: DesktopSettings; // 原生桌面宿主能力；独立浏览器服务不提供。
   recent_projects: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
   folder_picker_available?: boolean; // 本机原生文件夹选择器是否受支持。
@@ -703,6 +710,7 @@ export interface DesktopRunSettings {
 
 /** 本浏览器下一次提交的配置；不修改服务器全局设置。 */
 export interface ConfigOverrides {
+  mcp_tools?: import('./mcpTypes').McpToolSelection[]; // 缺省继承；[] 关闭所有外部工具。
   permission_mode?: PermissionMode; // 仅覆盖下一轮会话模式，不接受宿主策略。
   memory?: Pick<MemoryPolicy, 'use' | 'capture'>; // 下一 Run 的两个选择，不允许修改内部记忆预算。
   auto_repair?: boolean; // 本轮明确开启/关闭自动修复；缺省继承宿主或前轮。

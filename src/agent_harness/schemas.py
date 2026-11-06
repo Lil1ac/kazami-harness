@@ -229,6 +229,8 @@ class ContextView(DataModel):
 
 
 # 这里只声明允许识别的名称；当前真正实现和可分发的工具由工具注册层决定。
+from agent_harness.mcp.models import McpToolSelection
+
 ToolName = Literal["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
 
@@ -246,6 +248,7 @@ class MemoryPolicy(MemorySelection):
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
 class RunConfig(DataModel):
+    mcp_tools: list[McpToolSelection] = Field(default_factory=list, max_length=16)  # 本轮明确选择的外部工具及定义指纹；空列表不连接服务。
     hooks: HookPolicy = Field(default_factory=HookPolicy)  # 宿主规则及扩展开销上限，页面不能覆盖。
     permission_policy: PermissionPolicy = Field(default_factory=PermissionPolicy)  # 宿主权限上限，网页不能覆盖。
     permission_mode: PermissionMode = "workspace_edit"  # 会话研究、工作区编辑或严格审批模式。
@@ -281,6 +284,8 @@ class RunConfig(DataModel):
             raise ValueError("模型窗口必须大于输出预留与安全余量之和")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("工具名称不能重复")
+        if len(self.mcp_tools) != len({item.name for item in self.mcp_tools}):
+            raise ValueError("外部工具不能重复选择")
         if len(self.skills) != len(set(self.skills)):
             raise ValueError("技能名称不能重复")
         for name in self.skills:

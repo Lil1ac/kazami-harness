@@ -67,6 +67,13 @@ class DesktopHost:
         await self.native.request("credential.write", {"secret": value})
         self._key = value
 
+    async def mcp_credential(self, identifier: str) -> str:
+        """读取 identifier 分区的系统加密凭据；返回内存明文，未配置为空，不回传页面。"""
+        value = await self.native.request("mcp.credential.read", {"key": identifier})
+        if not isinstance(value, str):
+            raise ConfigurationError("外部凭据读取失败。")
+        return value
+
     async def choose(self) -> Path | None:
         """请求 Electron 选择已有目录；取消返回 None，并发打开抛409，不阻塞其他请求。"""
         if self._picker_active:

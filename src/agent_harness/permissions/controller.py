@@ -48,6 +48,7 @@ class PermissionController:
         self.policy = self.manifest.config.permission_policy  # 宿主上限，不从网页批准载荷读取。
         self.store = PermissionStore(context.runs_root)  # 与作业共用事务事实源。
         self.approved: dict | None = None  # 仅接续原动作时临时绑定，消费后立即清空。
+        self.external = None  # Agent 绑定本轮 MCP 控制器；未绑定时所有外部名称拒绝。
         self.workspace = self.manifest.task.workspace.resolve()  # 实际工作树或原目录。
         self.read_roots = roots(self.workspace, self.policy.read_roots)  # 已解析并确认不越界的可读目录。
         self.write_roots = roots(self.workspace, self.policy.write_roots)  # 与读取范围独立，不能由动作批准扩展。
@@ -65,6 +66,8 @@ class PermissionController:
         """返回实时权限的独立快照；保留本轮待审批对象，计算规划阶段变化后的有效判定。"""
         self.state.policy_fingerprint = self.fingerprint()
         self.state.effective = {name: self.decision(name) for name in ("read_file", "write_file", "edit_file", "run_command", "verification")}
+        if self.external is not None:
+            self.state.effective.update({name: self.decision(name) for name in self.external.entries})
         return self.state.model_copy(deep=True)
 
     def fingerprint(self) -> str:
@@ -77,10 +80,22 @@ class PermissionController:
             "phase": state.phase, "plan": None if plan is None else [plan.version, plan.status],
             "python": self.manifest.task.python_execution.model_dump(mode="json") if self.manifest.task.python_execution else None,
             "verifier": self.manifest.task.verifier.model_dump(mode="json") if self.manifest.task.verifier else None,
-            "hooks": self.manifest.config.hooks.model_dump(mode="json")})
+            "hooks": self.manifest.config.hooks.model_dump(mode="json"),
+            "mcp_tools": [item.model_dump() for item in self.manifest.config.mcp_tools]})
 
     def decision(self, name: str) -> str:
         """返回工具 name 的有效判定；实时规划和子只读约束在实际入口再次检查。"""
+        if name.startswith("mcp_"):
+            if self.external is None or name not in self.external.entries or self.manifest.automation is not None:
+                return "deny"
+            research = self.external.research(name)
+            planning = (self.planning.state if self.planning is not None else self.manifest.planning).phase == "planning"
+            readonly = self.manifest.config.permission_mode == "research" or self.manifest.delegation is not None and self.manifest.delegation.role != "develop"
+            if (planning or readonly) and not research or research and self.policy.read == "deny":
+                return "deny"
+            if self.manifest.delegation is not None and self.manifest.delegation.role != "develop" and (self.policy.external != "allow" or self.manifest.config.permission_mode == "strict"):
+                return "deny"  # 只读子执行没有动作接续检查点；仅宿主已放行的研究工具可继承，不能制造孤立审批。
+            return "deny" if self.policy.external == "deny" else "ask" if self.manifest.config.permission_mode == "strict" else self.policy.external
         if name in {"read_file", "search_files", "write_file", "edit_file", "run_command"} and name not in self.manifest.config.tools:
             return "deny"
         if name == "verification" and self.manifest.task.verifier is None:
@@ -94,6 +109,10 @@ class PermissionController:
 
     def inputs(self, name: str, arguments: dict) -> dict:
         """固定 name/arguments 的目标身份并返回核验字段；文件版本或路径不合法时拒绝且无副作用。"""
+        if name.startswith("mcp_"):
+            if self.external is None:
+                raise TaskError("permission_denied", "本轮未开放外部工具。")
+            return self.external.inputs(name)
         boundary = Workspace(self.workspace, self.context.runs_root)
         result = {}
         token = FILE_SCOPE.set(None)  # 这里独立核验写权限，不误用当前只读上下文的目录范围。
@@ -144,7 +163,7 @@ class PermissionController:
         decision = self.decision(name)
         if decision == "deny":
             raise TaskError("permission_denied", "宿主、会话或规划权限禁止此操作。")
-        inputs = self.inputs(name, arguments) if name in {"write_file", "edit_file", "run_command", "verification"} else {}
+        inputs = self.inputs(name, arguments) if name.startswith("mcp_") or name in {"write_file", "edit_file", "run_command", "verification"} else {}
         policy = self.fingerprint()
         self.context.result.permissions = self.snapshot()
         if self.manifest.automation is not None:

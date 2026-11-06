@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, errorMessage, getJob, getRun, getPermissions } from '../api';
 import { useConfigDraft } from '../config';
+import type { McpToolSelection } from '../mcpTypes';
 import type {
   ActionDecision,
   PermissionMode,
@@ -116,6 +117,8 @@ export function useConversationSend(
     [conversation.latest_run_id],
   );
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
+  const [mcpChoice, setMcpChoice] = useState<{ parentId: string; tools: McpToolSelection[] } | null>(null); // 明确覆盖只属于当前最新轮。
+  const mcpTools = mcpChoice?.parentId === conversation.latest_run_id ? mcpChoice.tools : run?.config.mcp_tools;
   const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
   const [memoryChoice, setMemoryChoice] = useState<{
     parentId: string;
@@ -239,6 +242,7 @@ export function useConversationSend(
     if (inFlight.current || !canSend) return;
     const {
       skills: _previousTaskSkills,
+      mcp_tools: _previousMcpTools,
       auto_repair: _previousRepairChoice,
       memory: _previousMemoryChoice,
       ...overrides
@@ -256,6 +260,7 @@ export function useConversationSend(
           memory,
           ...(autoRepair !== undefined ? { auto_repair: autoRepair } : {}),
           ...(skills !== undefined ? { skills } : {}),
+          ...(mcpTools !== undefined ? { mcp_tools: mcpTools } : {}),
         }),
       },
     };
@@ -350,6 +355,8 @@ export function useConversationSend(
     text,
     setText,
     skills: skills || [],
+    mcpTools: mcpTools || [],
+    setMcpTools: /* 只修改下一条普通消息，审批重试使用原冻结请求。 */ (tools: McpToolSelection[]) => setMcpChoice({ parentId: conversation.latest_run_id, tools }),
     autoRepair: Boolean(autoRepair),
     setAutoRepair: /* 只设置下一条新要求，不能覆盖已经发出的请求。 */ (enabled: boolean) =>
       setRepairChoice({ parentId: conversation.latest_run_id, enabled }),

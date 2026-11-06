@@ -80,6 +80,8 @@ uv --cache-dir .uv-cache run harness serve --config harness.example.toml
 
 ## 任务技能
 
+“运行配置 → 外部工具连接”支持审核并连接 stdio/Streamable HTTP MCP 服务；新任务与下一轮可选择固定版本工具，具体调用默认逐次审批，详情保留来源和结果。桌面凭据按连接加密存储，独立 Web/CLI 使用环境变量引用。配置、权限、故障边界与验收见 [MCP 工具接入](docs/MCP.md)。
+
 新任务可手动选择宿主登记的 SKILL.md，后续消息默认沿用，也可更换或清空。详情“上下文”保存本轮完整技能正文和指纹，正文计入输入预算并受压缩保护。示例配置已登记 examples/skills，默认不选择；CLI 可在配置中填写 skills = ["code-delivery"]。登记方法及当前边界见 [任务技能](docs/SKILLS.md)。
 
 ## CLI 常用命令

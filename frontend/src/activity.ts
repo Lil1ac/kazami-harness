@@ -94,7 +94,7 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
       const detail = path || command || query; // 文件、命令或搜索词帮助用户判断实际动作。
       const step: ActivityStep = {
         id,
-        label: `${toolLabels[name] || name}${detail ? ` · ${detail}` : ''}`,
+        label: `${typeof payload.title === 'string' ? payload.title : toolLabels[name] || name}${detail ? ` · ${detail}` : ''}`,
         state: 'running',
         arguments: args,
         result: null,

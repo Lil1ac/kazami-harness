@@ -268,6 +268,7 @@ function SessionWorkspace({
           conversation={conversation}
           events={events.timeline}
           skills={options.data?.skills || []}
+          mcpTools={options.data?.mcp_tools || []}
           onInspect={inspect}
           onConfirmed={confirmed}
           onStop={

@@ -19,6 +19,15 @@ async function check(): Promise<void> {
     assert.ok(!(await readFile(path.join(directory, 'credential.enc'))).includes(secret));
     await native.writeCredential('');
     assert.equal(await native.readCredential(), '');
+    await native.writeCredential('connection-a-secret', 'docs-a');
+    await native.writeCredential('connection-b-secret', 'docs-b');
+    assert.equal(await native.readCredential('docs-a'), 'connection-a-secret');
+    assert.equal(await native.readCredential('docs-b'), 'connection-b-secret');
+    assert.ok(!(await readFile(path.join(directory, 'mcp-credentials/docs-a.enc'))).includes('connection-a-secret'));
+    await native.writeCredential('', 'docs-a');
+    assert.equal(await native.readCredential('docs-a'), '');
+    assert.equal(await native.readCredential('docs-b'), 'connection-b-secret');
+    await native.writeCredential('', 'docs-b');
     console.log('真实 Electron 系统加密保存、重读、清除通过');
     app.exit(0);
   } catch {

@@ -304,7 +304,7 @@ export class ApiError extends Error {
 }
 
 /** 请求同源 API 并返回 JSON；signal 用于页面离开时停止读取，不取消后台任务。 */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, { ...init, cache: 'no-store' }); // API状态可变，恢复后不能沿用浏览器缓存的410。

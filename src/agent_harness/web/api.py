@@ -89,6 +89,10 @@ def create_app(
     install_runtime_routes(app, manager)
     from agent_harness.web.hooks import install_hook_routes
     install_hook_routes(app, manager)
+    from agent_harness.web.mcp import install_mcp_routes
+    if desktop is not None:
+        manager.mcp_credential_provider = desktop.mcp_credential
+    install_mcp_routes(app, manager, desktop)
 
     @app.exception_handler(ConversationError)
     async def conversation_error(request: Request, error: ConversationError) -> JSONResponse:

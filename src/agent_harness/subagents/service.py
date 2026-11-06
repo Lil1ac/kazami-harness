@@ -354,11 +354,13 @@ class SubagentController:
 
         profile = PROFILES[arguments.role]
         allowed = profile.tools.intersection(self.executor._enabled_names())
+        allowed = allowed.union(name for name in self.executor._enabled_names() if name.startswith("mcp_") and self.executor.mcp is not None and self.executor.mcp.research(name))  # 只继承父已选且人工审核的研究工具。
         if team_assignment is not None:
             from agent_harness.teams.models import MEMBER_TOOLS
             allowed = allowed.union(MEMBER_TOOLS)
         config = parent.manifest.config.model_copy(deep=True)
         config.tools = [tool for tool in config.tools if tool in allowed]
+        config.mcp_tools = [item for item in config.mcp_tools if item.name in allowed]
         config.skills = list(arguments.skill_names)
         config.memory.capture, config.auto_repair = False, False
         config.limits = limits.model_copy(update={"max_model_turns": turns, "max_tool_calls": calls, "run_timeout_seconds": seconds})
@@ -525,10 +527,12 @@ class SubagentController:
             if developing:
                 config.permission_policy.write_roots = scope
             allowed = PROFILES[record.role].tools.intersection(self.executor._enabled_names())
+            allowed = allowed.union(name for name in self.executor._enabled_names() if name.startswith("mcp_") and self.executor.mcp is not None and self.executor.mcp.research(name))  # 接续也重新取父级研究能力交集。
             if record.team_id is not None:
                 from agent_harness.teams.models import MEMBER_TOOLS
                 allowed = allowed.union(MEMBER_TOOLS)
             config.tools = [name for name in config.tools if name in allowed]
+            config.mcp_tools = [item for item in config.mcp_tools if item.name in allowed]
             state = history.result.permissions
             spent_turns = state.spent_model_turns + history.result.model_turns
             spent_calls = state.spent_tool_calls + history.result.tool_calls

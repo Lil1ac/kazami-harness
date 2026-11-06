@@ -18,6 +18,8 @@ import { useRunPlanning } from '../hooks/useRunPlanning';
 import { MarkdownMessage } from './MarkdownMessage';
 import { TurnActivity } from './TurnActivity';
 import { SkillSelector } from './SkillSelector';
+import { McpSelector } from './McpSelector';
+import type { McpToolOption } from '../mcpTypes';
 import { PlanningPanel } from './PlanningPanel';
 import { PermissionPanel, PermissionSelect } from './PermissionPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
@@ -26,6 +28,7 @@ import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
+  mcpTools?: McpToolOption[]; // 仅供下一轮选择，不覆盖当轮历史。
   run?: RunView; // 最新快照暂缺时保留消息与编辑，确认旧请求之外禁止新提交。
   conversation: ConversationView; // 当前会话的有序消息与继续条件。
   events: RunEvent[]; // 最新轮共享订阅，不为每条消息创建SSE。
@@ -164,6 +167,7 @@ export function ConversationPanel({
   onStop,
   stopping = false,
   skills = [],
+  mcpTools = [],
 }: ConversationPanelProps) {
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
   const runtime = useRuntimeControl(run?.run_id, Boolean(run?.active));
@@ -401,6 +405,7 @@ export function ConversationPanel({
               <summary>
                 下一轮设置 · {send.skills.length ? send.skills.join('、') : '未选择'}
               </summary>
+              <McpSelector options={mcpTools} selected={send.mcpTools} onChange={send.setMcpTools} disabled={Boolean(send.pending)} />
               <SkillSelector
                 label="下一轮技能"
                 options={skills}

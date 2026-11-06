@@ -1,0 +1,41 @@
+/* 沿用设置页的分区与留白，不额外增加状态面板；窄屏允许长端点和 Schema 换行。 */
+.mcp-settings {
+  margin-top: 32px;
+}
+.mcp-connection {
+  padding: 20px 0;
+  border-top: 1px solid var(--border, #e5e7eb);
+  min-width: 0;
+}
+.mcp-connection h3 {
+  margin: 0;
+}
+.mcp-connection p,
+.mcp-connection code {
+  overflow-wrap: anywhere;
+}
+.mcp-settings pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.mcp-connection details {
+  margin-top: 10px;
+}
+.mcp-selector .skill-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mcp-evidence a {
+  overflow-wrap: anywhere;
+}
+.mcp-evidence pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

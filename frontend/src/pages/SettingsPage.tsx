@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Checkbox, Form, Input, InputNumber, Skeleton } from 'antd';
 import { CheckOutlined, UndoOutlined } from '@ant-design/icons';
 import { useState } from 'react';
+import { McpSettings } from '../components/McpSettings';
 import { errorMessage, getOptions, saveDesktopSettings } from '../api';
 import { DesktopCredentials } from '../components/DesktopCredentials';
 import { HookSettings } from '../components/HooksPanel';
@@ -246,6 +247,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
         </aside>
       </div>
       <HookSettings projects={options.recent_projects} />
+      <McpSettings />
     </div>
   );
 }

@@ -12,10 +12,12 @@ from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
 from agent_harness.schemas import MemorySelection
 from agent_harness.permissions.models import ActionDecision, PermissionMode
+from agent_harness.mcp.models import McpToolSelection
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
 class RunConfigPatch(DataModel):
+    mcp_tools: list[McpToolSelection] | None = Field(default=None, max_length=16)  # None 继承，[] 明确撤去所有外部工具。
     permission_mode: PermissionMode | None = None  # None继承；只能选择会话模式，不能修改宿主规则。
     memory: MemorySelection | None = None  # None 继承，只开放使用和候选选择，不允许页面修改宿主限额。
     auto_repair: bool | None = None  # None继承；显式开启要求宿主公开项目测试，首版最多两次修复。

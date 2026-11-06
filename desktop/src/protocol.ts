@@ -2,6 +2,8 @@
 export type NativeMethod =
   | "folder.choose"
   | "credential.write"
+  | "mcp.credential.read"
+  | "mcp.credential.write"
   | "file.download"
   | "file.reveal"
   | "external.open"
@@ -23,6 +25,8 @@ export function nativeRequest(value: unknown): NativeRequest {
   const methods: string[] = [
     "folder.choose",
     "credential.write",
+    "mcp.credential.read",
+    "mcp.credential.write",
     "file.download",
     "file.reveal",
     "external.open",

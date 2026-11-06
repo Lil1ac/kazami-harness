@@ -35,6 +35,8 @@ def collect_evidence(events: list[RunEvent], *, role: str = "explore") -> list[S
     路径、指纹和截断事实由宿主回执提取，不采信模型填写；命令成功不代替项目独立验收。
     """
     allowed = DEVELOP_TOOLS if role == "develop" else READONLY_TOOLS
+    # 外部研究证据只采信宿主本轮快照，不能把模型自报的 mcp_ 名称当成授权。
+    allowed = allowed.union(item["name"] for event in events if event.type == "mcp_prepared" for item in event.payload.get("tools", []) if item.get("research"))
     evidence = []
     for event in events:
         if event.type != "tool_result" or event.payload.get("name") not in allowed:
@@ -46,7 +48,7 @@ def collect_evidence(events: list[RunEvent], *, role: str = "explore") -> list[S
         if event.payload["name"] == "read_command" or (event.payload["name"] == "run_command" and data.get("accepted")):
             continue  # 启动句柄或输出观察不证明进程成功；wait_command 的实际结束回执才可引用。
         evidence.append(SubagentEvidence(run_id=event.run_id, tool_call_id=event.payload["call_id"], tool=event.payload["name"],
-                                         path=data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] in {"read_file", "edit_file"} else None,
+                                         path=(data.get("sources") or [None])[0] if event.payload["name"].startswith("mcp_") else data.get("path", data.get("directory")), sha256=data.get("sha256") if event.payload["name"] in {"read_file", "edit_file"} else None,
                                          truncated=bool(result.get("truncated"))))
     return evidence
 

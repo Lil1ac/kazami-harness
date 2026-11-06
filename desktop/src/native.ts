@@ -24,6 +24,7 @@ export function externalUrl(url: string): string {
 /** Electron 主进程的原生能力；所有文件引用均来自后台已经核对的运行证据。 */
 export class NativeService {
   private readonly credentialFile: string; // 仅保存 safeStorage 密文，不进入公开配置和运行记录。
+  private readonly mcpCredentialDirectory: string; // 每个连接独立密文，不与模型密钥混用。
   private credentialWrite: Promise<void> = Promise.resolve(); // 串行保存，避免并发替换同一密文文件。
   private readonly notifications = new Map<string, Notification>(); // 保持活动弹窗引用，关闭后释放，防止原生对象提前回收。
 
@@ -33,35 +34,45 @@ export class NativeService {
     private readonly window: () => BrowserWindow | undefined,
   ) {
     this.credentialFile = path.join(dataDirectory, "credential.enc");
+    this.mcpCredentialDirectory = path.join(dataDirectory, "mcp-credentials");
   }
 
-  /** 解密当前用户保存的密钥；未配置返回空字符串，系统加密不可用时明确失败，不退回明文。 */
-  async readCredential(): Promise<string> {
-    const encrypted = await readOptional(this.credentialFile);
+  /** 将可选 key 转为固定密文路径；undefined 使用模型密钥，其他值须为 MCP 标识，不允许路径穿越。 */
+  private credentialPath(key?: string): string {
+    if (key === undefined) return this.credentialFile;
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(key)) throw new Error("外部凭据标识无效");
+    return path.join(this.mcpCredentialDirectory, key + ".enc");
+  }
+
+  /** 解密可选 key 分区；undefined 读取模型密钥，其他值为连接标识。未配置返回空字符串，加密不可用抛错。 */
+  async readCredential(key?: string): Promise<string> {
+    const file = this.credentialPath(key); // key 缺省读取模型，非空读取独立外部连接。
+    const encrypted = await readOptional(file);
     if (!encrypted) return "";
     if (!(await safeStorage.isAsyncEncryptionAvailable()))
       throw new Error("本机凭据加密服务不可用");
     const result = await safeStorage.decryptStringAsync(encrypted);
     if (result.shouldReEncrypt)
       await atomicWrite(
-        this.credentialFile,
+        file,
         await safeStorage.encryptStringAsync(result.result),
       );
     return result.result;
   }
 
-  /** 保存或清除 secret；密钥只以系统加密后的字节落盘，失败时保留原密文。 */
-  async writeCredential(secret: string): Promise<void> {
+  /** 保存 secret 到可选 key 分区；undefined 为模型，空 secret 清除该分区。仅写密文，失败保留原值。 */
+  async writeCredential(secret: string, key?: string): Promise<void> {
+    const file = this.credentialPath(key); // 空 secret 清除此分区，其他分区保持。
     const operation = this.credentialWrite.then(
       /* 同一时刻只允许一个密文保存或删除操作。 */ async () => {
         if (!secret) {
-          await removeOptional(this.credentialFile);
+          await removeOptional(file);
           return;
         }
         if (!(await safeStorage.isAsyncEncryptionAvailable()))
           throw new Error("本机凭据加密服务不可用");
         await atomicWrite(
-          this.credentialFile,
+          file,
           await safeStorage.encryptStringAsync(secret),
         );
       },
@@ -107,6 +118,11 @@ export class NativeService {
       }
       case "credential.write":
         await this.writeCredential(textParameter(parameters, "secret", 2560));
+        return null;
+      case "mcp.credential.read":
+        return await this.readCredential(textParameter(parameters, "key", 32));
+      case "mcp.credential.write":
+        await this.writeCredential(textParameter(parameters, "secret", 2560), textParameter(parameters, "key", 32));
         return null;
       case "file.download":
         return await downloadFile(

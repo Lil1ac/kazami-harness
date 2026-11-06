@@ -15,6 +15,9 @@ dependencies = [
     "pyyaml>=6,<7",
     "apscheduler>=3.11,<4",
     "tzdata>=2026.1",
+    "mcp>=2.3,<3",
+    "jsonschema>=4.23,<5",
+    "httpx2[socks]>=2.16,<3",
 ]
 
 [project.scripts]

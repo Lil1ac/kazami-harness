@@ -74,6 +74,7 @@ class RunContext:
     command_workspaces: dict[str, str] = field(default_factory=dict)  # 根段共享的实际目录占用，活动命令期间禁止其他写入。
     command_controllers: dict[str, object] = field(default_factory=dict)  # 根段聚合父子命令控制器，用于观察及统一停止。
     hooks: object | None = None  # 当前 Agent 的生命周期扩展调度器；无工具执行器时为空。
+    mcp_credential_provider: object | None = None  # 异步桌面秘密读取器；仅内存使用，不写入清单或事件。
 
     @property
     def runs_root(self) -> Path:
@@ -290,6 +291,7 @@ async def _run_task(
     on_context: Callable[[RunContext], None] | None = None,
     file_changes: LocalChangeStore | None = None,
     project_manager: ProjectManager | None = None,
+    mcp_credential_provider=None,
 ) -> RunOutcome:
     """执行模型任务及可选独立验收，返回已保存的结果、目录和事件数。
 
@@ -300,6 +302,7 @@ async def _run_task(
     接收方只能读取该可变上下文供进度查询，不能修改状态或另行写入运行事件。
     file_changes=None时使用默认有界快照；宿主可传入带保护目录的原目录证据存储。
     project_manager仅供Git隔离运行，非隔离时不使用；结束快照与项目审阅复用。
+    mcp_credential_provider=None 时外部认证仅用环境引用；非空为异步桌面私有读取器，不进入快照。
     总秒级预算覆盖模型、工具与验收；之后固定交付证据再保存唯一终态，采集异常独立提示。
     函数会调用外部服务、执行工具并写文件；StorageError 立即传播，不伪造落盘成功。
     """
@@ -354,6 +357,7 @@ async def _run_task(
     budget = manifest.execution_resume or (resume if resume and resume.decision == "approve" else None)
     deadline = started_at + max(0, manifest.config.limits.run_timeout_seconds - (budget.spent_seconds if budget else 0))
     context = RunContext(manifest, store, result, deadline, started_at=started_at)
+    context.mcp_credential_provider = mcp_credential_provider  # 只驻留内存；子执行通过根预算上下文读取。
     from agent_harness.runtime.control import RuntimeControl
     context.runtime_control = RuntimeControl(context)
     planning = PlanningController(manifest.planning, root, context.emit)

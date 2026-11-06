@@ -7,6 +7,8 @@ tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"]
 skill_roots = ["examples/skills"]
 # CLI 可在自定义配置中填写技能名；空列表表示不加载。
 skills = []
+# 外部工具默认不选择；CLI 可填写同一运行根已审核目录返回的 name/fingerprint 对，详见 docs/MCP.md。
+mcp_tools = []
 
 # 会话模式：默认允许工作区文件编辑；命令及验收逐项审批。仅研究使用 research，严格审批使用 strict。
 permission_mode = "workspace_edit"
@@ -17,6 +19,7 @@ read = "allow"
 write = "allow"
 command = "ask"
 verification = "ask"
+external = "ask" # MCP 默认逐次参数审批；deny 禁止连接和调用，allow 仍受研究/子权限与版本约束。
 # 宿主明确允许后，自动化页面才能保存版本绑定的精确命令/验收/Hook持续授权；默认关闭。
 automation_grants = false
 read_roots = ["."]

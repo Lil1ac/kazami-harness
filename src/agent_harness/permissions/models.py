@@ -20,6 +20,7 @@ class PermissionPolicy(PermissionModel):
     """宿主定义的权限上限；页面只能选择模式，不能覆盖本实例。"""
 
     read: Decision = "allow"  # 项目文件读取上限，首版不支持读取审批。
+    external: Decision = "ask"  # MCP 调用默认逐项审批；连接信任和研究标记不解除此上限。
     write: Decision = "allow"  # 文件创建与编辑上限，规划阶段仍可进一步拒绝。
     command: Decision = "ask"  # 本机命令默认逐项审批；显式 allow 仅由宿主可信配置设置。
     verification: Decision = "ask"  # 项目测试与独立验收默认审批，不能借自动检查绕过限制。

@@ -7,6 +7,7 @@ import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
 import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
 import { SkillSelector } from './SkillSelector';
+import { McpSelector } from './McpSelector';
 import { ProjectSelector } from './ProjectSelector';
 import { ModeSelect } from './ModeSelect';
 import { PermissionSelect } from './PermissionPanel';
@@ -307,6 +308,7 @@ export function TaskForm({
             {config.skills?.length ? ' · ' + config.skills.length + ' 个技能' : ''}
           </summary>
           <div className="task-advanced-body">
+            <McpSelector options={options.mcp_tools || []} selected={config.mcp_tools || []} onChange={/* 选择绑定当前定义，不增加连接信任。 */ mcp_tools => setDraft({ ...draft, mcp_tools })} disabled={confirmingSubmission} />
             {selected?.kind === 'project' && (
               <p className="project-revision">
                 <BranchesOutlined /> {selected.branch || 'Git 项目'}

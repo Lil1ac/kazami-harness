@@ -19,6 +19,7 @@ import { TeamPanel } from './TeamPanel';
 import { SubagentsPanel } from './SubagentsPanel';
 import { PermissionPanel } from './PermissionPanel';
 import { RunHooks } from './HooksPanel';
+import { McpEvidence } from './McpEvidence';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -115,6 +116,7 @@ function InspectorPanels({
                     run.source_kind === 'project'
                   }
                 />
+                {Boolean(run.config.mcp_tools?.length) && <McpEvidence runId={run.run_id} active={run.active && !historical} />}
                 <div className="result-usage">
                   <span>已知用量</span>
                   <UsageDisplay run={run} />

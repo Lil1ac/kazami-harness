@@ -73,7 +73,7 @@ class ToolExecutor:
         self.tasks: TaskController | None = None  # 当前会话工作项及宿主校验入口。
         self.memory: MemoryController | None = None  # 当前项目固定读取集，模型只能提出候选。
         self.memory_phase = "execution"  # 宿主在模型请求前更新，验收修复阶段为 verification。
-        self.readonly = None if readonly is None else READONLY_TOOLS.intersection(readonly)  # 子权限与父可用工具取交集，不能由模型参数提升。
+        self.readonly = None if readonly is None else frozenset(name for name in readonly if name in READONLY_TOOLS or name in {item.name for item in config.mcp_tools})  # 外部研究权限还由本轮控制器核验。
         self.delegation_tools: frozenset[str] | None = None  # 开发子项的宿主工具上限，None为根执行。
         self.project_manager = None  # Runner绑定统一工作树与成果管理器，子执行不自行选择路径。
         self.subagents: SubagentController | None = None  # 仅根Agent绑定；子执行没有委派或管理权限。
@@ -85,6 +85,7 @@ class ToolExecutor:
         self.hooks = None  # Agent 初始化后绑定的生命周期调度器；工具单测及无配置场景不运行脚本。
         self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
         self.commands = None  # Runner 绑定的统一命令生命周期，独立工具测试为空。
+        self.mcp = None  # Agent 绑定的固定 MCP 目录，未选择工具时不连接服务。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -116,6 +117,8 @@ class ToolExecutor:
     def _enabled_names(self) -> list[str]:
         """返回实际工具名；启用压缩时自动提供只读read_context，额外定义参与输入计量。"""
         names = list(self.config.tools)
+        if self.mcp is not None:
+            names.extend(self.mcp.entries)
         if self.handoff:
             return []
         if self.readonly is not None:
@@ -146,8 +149,40 @@ class ToolExecutor:
     @property
     def definitions(self) -> list[dict]:
         """只生成本次配置启用的工具声明，参数 Schema 来自同一校验类。"""
-        return [{"type": "function", "function": {"name": name, "description": _TOOL_SPECS[name][1], "parameters": _TOOL_SPECS[name][0].model_json_schema()}}
-                for name in self._enabled_names() if name in _TOOL_SPECS]
+        enabled = self._enabled_names()
+        builtin = [{"type": "function", "function": {"name": name, "description": _TOOL_SPECS[name][1], "parameters": _TOOL_SPECS[name][0].model_json_schema()}}
+                   for name in enabled if name in _TOOL_SPECS]
+        return builtin + ([item for item in self.mcp.definitions if item["function"]["name"] in enabled] if self.mcp else [])
+
+    def external_title(self, name: str) -> str | None:
+        """返回本轮外部 name 的服务/工具名称；内置或未开放工具返回 None，不回查当前目录。"""
+        item = self.mcp.entries.get(name) if self.mcp is not None else None
+        return f"{item['record']['config']['label']} / {item['tool']['name']}" if item else None
+
+    async def _execute_mcp(self, name: str, arguments_json: str, *, hooked: bool) -> dict:
+        """校验本轮外部 name/arguments_json 后统一审批及 Hook；返回回执，未获准前不连接服务。"""
+        if self.mcp is None or name not in self._enabled_names() or self.permissions is None:
+            return _error("unknown_tool", "该外部工具未在本轮开放。")
+        arguments = self.mcp.validate(name, arguments_json)
+        if self.permissions.decision(name) == "deny":
+            return _error("permission_denied", "宿主、研究、子执行或自动化权限禁止此外部工具。")
+        if not self.mcp.research(name) and (self.commands is not None and self.commands.workspace in self.commands.gates or self.subagents is not None and self.subagents.active):
+            return _error("workspace_command_active", "请先收拢活动命令和子执行，再使用可能修改现场的外部工具。")
+        if self.hooks is not None and self.hooks.definitions and not hooked:
+            async def original_operation():
+                """重新校验同一外部调用；返回回执，不沿用 Hook 前的授权决定。"""
+                return await self._execute_mcp(name, arguments_json, hooked=True)
+            return await self.hooks.tool(name, arguments_json, original_operation)
+        pending = self.permissions.check(name, arguments, self.call_id, hook_operation=self.hooks.origin if self.hooks else None)
+        if pending:
+            return {"ok": False, "data": {"action_id": pending["id"]}, "error": {"code": "approval_required", "message": "外部工具尚未调用，等待本次参数批准。"}, "truncated": False}
+        if self.team is not None:
+            self.team.check_member()
+        if self.before_execute:
+            self.before_execute()
+        if self.hooks:
+            self.hooks.started()
+        return await self.mcp.execute(name, arguments)
 
     def _observe(self, result: dict) -> dict:
         """聚合已返回的产物与最坏清理状态，后续正常结果不能覆盖清理问题。"""
@@ -214,6 +249,8 @@ class ToolExecutor:
         self.cancelled_result = None
         if self.handoff:
             return _error("handoff_tools_disabled", "收尾交接阶段只允许总结已有证据，不执行任何新工具。")
+        if name.startswith("mcp_"):
+            return await self._execute_mcp(name, arguments_json, hooked=hooked)
         if self.commands is not None and self.commands.workspace in self.commands.gates and name in {"write_file", "edit_file", "run_command", "delegate_readonly", "delegate_develop", "team_dispatch", "enter_plan_mode", "submit_plan"}:
             return _error("workspace_command_active", "当前工作区有活动命令，请先等待或停止，再修改、检查、委派或切换计划。")
         if self.readonly is not None and name not in self.readonly:

@@ -291,7 +291,7 @@ async def _run_agent(
                 executor.call_id = call.call_id
                 def resume_started() -> None:
                     """原动作完成全部核验后记录真实开始；返回None，不重复消费工具额度。"""
-                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json, "action_id": action["id"]})
+                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json, "action_id": action["id"], "title": executor.external_title(call.name) if isinstance(executor, ToolExecutor) else None})
                 executor.before_execute = resume_started
                 try:
                     result = await executor.execute(call.name, call.arguments_json)
@@ -484,7 +484,7 @@ async def _run_agent(
                 def tool_started() -> None:
                     """当前call在参数和权限检查通过后记录实际开始；更新取消时的执行状态。"""
                     nonlocal started
-                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json})
+                    context.emit("tool_started", {"call_id": call.call_id, "name": call.name, "arguments_json": call.arguments_json, "title": executor.external_title(call.name) if isinstance(executor, ToolExecutor) else None})
                     started = True
                 if isinstance(executor, ToolExecutor):
                     executor.call_id = call.call_id
@@ -502,7 +502,7 @@ async def _run_agent(
                     context.result.final_answer = "原工具已执行，Hook 后处理等待批准；后续操作已停止。" if (result.get("data") or {}).get("tool_executed") else "有待执行动作需要你批准，当前动作及同批后续操作尚未执行。"
                     raise AgentStopped("waiting_input", "action_approval")
                 hook_error = (result.get("error") or {}).get("code")
-                if hook_error in HALT_HOOK_ERRORS:
+                if hook_error in HALT_HOOK_ERRORS or hook_error in {"mcp_result_unknown", "mcp_definition_changed", "mcp_selection_stale"}:
                     for remaining in batch[index + 1:]:
                         _record_tool(context, remaining, _skipped("skipped_hook_failure"), messages)
                     context.result.final_answer = result["error"]["message"]
@@ -589,6 +589,14 @@ async def run_agent(context, client, executor, *, on_completion=None, inherited_
         context.emit("permissions_prepared", {"state": context.result.permissions.model_dump(mode="json")})
     try:
         if isinstance(executor, ToolExecutor):
+            from agent_harness.mcp.controller import McpController
+            executor.mcp = McpController(context)
+            executor.permissions.external = executor.mcp
+            if executor.mcp.entries:
+                context.emit("mcp_prepared", {"tools": [{"name": name, "config": item["record"]["config"],
+                    "fingerprint": item["record"]["fingerprint"], "definition": item["tool"],
+                    "research": executor.mcp.research(name), "local_identity": item["local_identity"]}
+                    for name, item in executor.mcp.entries.items()]})
             executor.hooks = HookController(context, executor)
             context.hooks = executor.hooks
             context.emit("hooks_prepared", {"hooks": executor.hooks.snapshot})

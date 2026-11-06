@@ -101,13 +101,17 @@ function ActionContent({ action }: { action: PermissionAction }) {
             ? '工作目录'
             : action.name.startsWith('integration_')
               ? '执行工作区'
-              : '目标文件'}
+              : action.name.startsWith('mcp_') ? '外部服务' : '目标文件'}
         </span>
         <code className="permission-path">
           {action.inputs.target || action.inputs.cwd || action.workspace}
         </code>
       </div>
-      {command ? (
+      {action.name.startsWith('mcp_') ? <>
+        <p><strong>{action.inputs.server_label}</strong> / {action.inputs.tool}</p>
+        <pre aria-label="外部工具参数">{JSON.stringify(args, null, 2)}</pre>
+        <details><summary>固定工具定义与连接指纹</summary><pre>{JSON.stringify(action.inputs.definition, null, 2)}</pre><code>{action.inputs.connection_fingerprint}</code></details>
+      </> : command ? (
         <>
           <pre className="permission-command" aria-label="命令参数">
             {readableCommand(args.argv)}
@@ -250,7 +254,7 @@ export function PermissionPanel({
       {pending && (
         <article className="permission-request" aria-label="动作审批">
           <ReviewHeading
-            title={toolLabels[pending.name] || pending.name}
+            title={pending.name.startsWith('mcp_') ? '外部工具调用' : toolLabels[pending.name] || pending.name}
             status={
               historical
                 ? '当轮快照：待批准'

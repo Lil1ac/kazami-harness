@@ -589,6 +589,7 @@ export interface RunView {
   created_at: string; // 带时区的创建时间。
   result: RunResult; // 持久化结果或安全构造的当前快照。
   phase: string; // 当前执行阶段。
+  lifecycle?: import('./lifecycle').LifecycleStageTrace[]; // 每个阶段最近的已持久化诊断。
   event_count: number; // 已保存事件总数。
   last_seq: number; // 最近已保存事件序号。
   active: boolean; // 后台任务仍存活，验收期间也为 true。

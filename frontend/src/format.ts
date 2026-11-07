@@ -53,6 +53,8 @@ export function phaseLabel(phase: string): string {
         verification_permission_denied: '验收未获授权',
         interaction_cancelled: '已取消等待',
         user_paused: '已暂停',
+        subagent_paused: '子 Agent 已暂停',
+        team_attention_required: '等待处理团队任务',
         running: '正在执行',
       } as Record<string, string>
     )[phase] ?? phase

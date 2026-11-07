@@ -14,7 +14,7 @@ from agent_harness.providers.base import ModelError
 from agent_harness.schemas import DataModel, DelegationOrigin, RunManifest, RunResult, SubagentRecord
 from agent_harness.storage.runs import RunHistory, RunStore, StorageError
 from agent_harness.subagents.profiles import PROFILES
-from agent_harness.subagents.reports import finalize_report, ReportDraft, collect_evidence
+from agent_harness.subagents.reports import finalize_report
 from agent_harness.hooks.controller import HookPending
 from agent_harness.work.tasks import TaskError
 
@@ -625,36 +625,8 @@ class SubagentController:
             if record.team_id is not None:
                 from agent_harness.teams.controller import TeamController
                 executor.team = TeamController(child, self, record.team_member_id, executor=executor)
-            report_retry = False  # 一段开发子执行最多一次报告纠正，仍消耗原父子模型与活动时间额度。
-
-            async def validate_delivery() -> str | None:
-                """核对当前实际答复及固定工具证据；仅开发格式错误且尚有预算时返回一次纠正提示，否则None收尾。"""
-                nonlocal report_retry
-                if child.hooks is not None:
-                    await child.hooks.drain()
-                    hook_feedback = await child.hooks.stop()
-                    if hook_feedback is not None:
-                        return hook_feedback
-                if record.role != "develop" or report_retry or child.available("model_turns") <= 0:
-                    return None
-                events = self.report_events(child)
-                checked = result.model_copy(deep=True, update={"execution_status": "completed", "stop_reason": None})
-                finalize_report(checked, events, role=record.role)
-                if checked.execution_status != "failed":
-                    return None
-                report_retry = True
-                executor.report_only = True
-                child.emit("subagent_report_retry", {"reason": checked.stop_reason, "attempt": 1})
-                sources = collect_evidence(events, role=record.role)
-                return ("宿主报告纠正：上一条报告未通过校验（" + str(checked.stop_reason) + "）。"
-                        "只允许一次纠正，不重新执行或请求工具，不增加预算。只重写交接JSON，不改变已执行事实。仅引用下列当前段或已核验接续段的唯一成功调用编号。"
-                        "必须提供summary、findings、limitations、pending、complete；不添加role/file/before/after等自定义字段。"
-                        "findings可为空；未完成时complete=false并说明限制。必要修复仅引用下列真实成功调用编号。"
-                        "JSON Schema：" + json.dumps(ReportDraft.model_json_schema(), ensure_ascii=False)
-                        + "；实际证据入口：" + json.dumps([item.model_dump(mode="json") for item in sources[:24]], ensure_ascii=False))
-
             async with asyncio.timeout_at(child.deadline):
-                await run_agent(child, self.client, executor, inherited_context=inputs, on_completion=validate_delivery)
+                await run_agent(child, self.client, executor, inherited_context=inputs)
             result.execution_status = "completed"
         except AgentStopped as error:
             result.execution_status, result.stop_reason = error.status, error.reason

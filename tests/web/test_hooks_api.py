@@ -45,12 +45,19 @@ def test_hook_approval_resumes_original_stage(tmp_path, monkeypatch, event):
                 await trust(client)
                 first = await finished(client, await submit_run(client, json={"prompt": "first", "workspace_id": "files"}))
                 assert first["result"]["stop_reason"] == "action_approval", first
+                waits = [component for phase in first["lifecycle"] for component in phase["components"]
+                         if component["outcome"] == "wait"]
+                assert waits and waits[-1]["reason"] == "action_approval"
                 assert not (workspace / "hook-count").exists()
                 if event in {"PostToolUse", "Stop"}:
                     assert (workspace / "result.txt").read_text() == "first"
                     (workspace / "result.txt").write_text("kept", encoding="utf-8")
                 second = await finished(client, await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json=decide(first)))
                 assert second["result"]["execution_status"] == "completed", second
+                startup = next(phase for phase in second["lifecycle"] if phase["stage"] == "start")
+                resume = next(component for component in startup["components"] if component["name"] == "permission.resume")
+                assert resume["source"] == "agent_harness.runtime.resume"
+                assert resume["outcome"] == ("finish" if event == "Stop" else "proceed")
                 assert (workspace / "hook-count").read_text() == "1"
                 assert (workspace / "result.txt").read_text() == ("kept" if event in {"PostToolUse", "Stop"} else "first")
                 assert len(model.requests) == 2

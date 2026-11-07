@@ -208,17 +208,26 @@ class ContextBuilder:
                 raise ValueError("planning context requires host system prefix")
             task_instructions = self.tasks.instructions() if self.tasks is not None else ""
             frozen_messages[0]["content"] = self._planning_base + self.planning.instructions() + task_instructions
-        frozen_tools = deepcopy(tools)
-        encoded = json.dumps({"messages": frozen_messages, "tools": frozen_tools}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return self._measure(frozen_messages, deepcopy(tools), model_turn, purpose, raw_input_bytes)
+
+    def freeze_projection(self, projection: ModelInput, model_turn: int, *, allow_tools: bool) -> ModelInput:
+        """重新冻结并计量最终 projection；交接时 allow_tools=False，返回无工具的实际请求。"""
+        return self._measure(deepcopy(projection.messages), deepcopy(projection.tools) if allow_tools else [],
+                             model_turn, "execution", projection.check.raw_input_bytes)
+
+    def _measure(self, messages: list[dict], tools: list[dict], model_turn: int,
+                 purpose: str, raw_input_bytes: int | None) -> ModelInput:
+        """计量已独占的消息和工具，返回发送副本；轮号、用途和压缩前字节用于诊断。"""
+        encoded = json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         policy = self._config.context
         token_limit = None if policy.model_context_tokens is None else (
             policy.model_context_tokens - self._config.limits.model_max_output_tokens - policy.token_safety_margin
         )
-        estimated = math.ceil((len(encoded) * self.token_ratio + len(frozen_messages) * 8) * 1.15)
+        estimated = math.ceil((len(encoded) * self.token_ratio + len(messages) * 8) * 1.15)
         check = ContextCheck(
             model_turn=model_turn, input_bytes=len(encoded), max_input_bytes=policy.max_input_bytes,
-            message_count=len(frozen_messages), raw_input_bytes=raw_input_bytes,
+            message_count=len(messages), raw_input_bytes=raw_input_bytes,
             estimated_input_tokens=estimated, max_input_tokens=token_limit, purpose=purpose,
             allowed=len(encoded) <= policy.max_input_bytes and (token_limit is None or estimated <= token_limit),
         )
-        return ModelInput(frozen_messages, frozen_tools, check)
+        return ModelInput(messages, tools, check)

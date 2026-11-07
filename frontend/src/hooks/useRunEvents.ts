@@ -3,6 +3,8 @@ import { errorMessage, getEvents } from '../api';
 import { hasEventGap, mergeEvents, parseRunEvent } from '../events';
 import type { RunEvent } from '../types';
 import { projectTranscript } from '../transcript';
+import { lifecycleTrace, mergeLifecycle } from '../lifecycle';
+import type { LifecycleStageTrace } from '../lifecycle';
 
 /** 单任务订阅状态；断线时仍保留已读取事件。 */
 export type ConnectionState = 'loading' | 'live' | 'reconnecting' | 'closed' | 'error';
@@ -11,6 +13,7 @@ export type ConnectionState = 'loading' | 'live' | 'reconnecting' | 'closed' | '
 export function useRunEvents(runId: string, active: boolean, onSettled: () => void) {
   const [events, setEvents] = useState<RunEvent[]>([]); // 有界事件窗口，默认 400 条。
   const [timeline, setTimeline] = useState<RunEvent[]>([]); // 累计内容块独立于原始事件窗口，长文本不被裁剪。
+  const [lifecycle, setLifecycle] = useState<LifecycleStageTrace[]>([]); // 每阶段最新轨迹独立于 400 条事件窗口。
   const loadedRun = useRef(''); // 终态刷新不清空同轮已读内容，避免消息闪烁。
   const [connection, setConnection] = useState<ConnectionState>('loading'); // 当前订阅可见状态。
   const [error, setError] = useState<string | null>(null); // 受控读取错误。
@@ -33,6 +36,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
       if (loadedRun.current !== runId) {
         setEvents([]);
         setTimeline([]);
+        setLifecycle([]);
         loadedRun.current = runId;
       }
       setConnection('loading');
@@ -42,6 +46,14 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
       /** 检查 effect 是否仍代表当前任务；返回 false 时丢弃异步结果。 */
       function valid(): boolean {
         return !disposed && generation.current === current;
+      }
+
+      /** 从连续 rows 合并阶段诊断，保留窗口外的最近记录，无返回值。 */
+      function rememberLifecycle(rows: RunEvent[]): void {
+        const traces = rows.map(lifecycleTrace).filter(
+          /* 非生命周期事件不进入单独快照。 */ (entry): entry is LifecycleStageTrace => entry !== null,
+        );
+        if (traces.length) setLifecycle(/* 更新时保留其他阶段。 */ (previous) => mergeLifecycle(previous, traces));
       }
 
       /** 从连续游标向后读完当前历史；返回后才允许重建实时连接。 */
@@ -64,6 +76,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
                 mergeEvents(previous, rows, runId, windowLimit.current),
             );
             cursor = rows[rows.length - 1].seq;
+            rememberLifecycle(rows);
             setTimeline(
               /* 历史先累积完整块，再连接实时流。 */ (previous) =>
                 projectTranscript(previous, rows, runId),
@@ -123,6 +136,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
               }
               if (event.seq <= cursor) return;
               cursor = event.seq;
+              rememberLifecycle([event]);
               setTimeline(
                 /* 工具与文字共享持久化顺序，重连不重复追加。 */ (previous) =>
                   projectTranscript(previous, [event], runId),
@@ -204,6 +218,7 @@ export function useRunEvents(runId: string, active: boolean, onSettled: () => vo
   return {
     events,
     timeline,
+    lifecycle: loadedRun.current === runId ? lifecycle : [],
     connection,
     error,
     loadingOlder,

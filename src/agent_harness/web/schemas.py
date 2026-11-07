@@ -13,6 +13,7 @@ from agent_harness.execution.local import LocalChangeView
 from agent_harness.schemas import MemorySelection
 from agent_harness.permissions.models import ActionDecision, PermissionMode
 from agent_harness.mcp.models import McpToolSelection
+from agent_harness.runtime.pipeline import Stage
 
 
 # 页面仅覆盖模型、工具、预算和上下文策略；系统提示词与凭据来源由宿主配置固定。
@@ -155,6 +156,23 @@ class ReviewDecision(DataModel):
     decision: Literal["keep", "discard"]  # 保留工作树或移除本任务工作树。
 
 
+class LifecycleComponentView(DataModel):
+    """显示单个实际进入的宿主组件及其控制结果。"""
+
+    name: str  # 稳定注册标识。
+    source: str  # 执行该组件的宿主 Python 模块。
+    outcome: Literal["proceed", "replan", "wait", "finish", "abort", "interrupted"]  # 实际返回或中断。
+    reason: str | None = None  # 有稳定等待或终止原因时展示。
+
+
+class LifecycleStageView(DataModel):
+    """记录某次生命周期阶段实际执行的组件，支持实时覆盖历史快照。"""
+
+    stage: Stage = Field(strict=False)  # 从事件的字符串校验为内核阶段枚举。
+    seq: int = Field(gt=0)  # 对应事件序号；同一阶段只保留最新一条。
+    components: list[LifecycleComponentView]  # 按进入顺序排列，跳过的组件不列入。
+
+
 # 活动与历史运行共用同一视图，interrupted 表示缺少可信终态，绝不伪造失败结论。
 class RunView(DataModel):
     automation: AutomationOrigin | None = None  # 自动化来源；历史与人工接续显示同一规则/触发。
@@ -170,6 +188,7 @@ class RunView(DataModel):
     created_at: datetime  # 运行创建 UTC 时间。
     result: RunResult  # 当前内存快照或日志恢复的可信结果。
     phase: str  # 最近提交的真实执行阶段。
+    lifecycle: list[LifecycleStageView] = Field(default_factory=list)  # 各生命周期阶段最后一次已提交轨迹。
     event_count: int = Field(ge=0)  # 已落盘有效事件数。
     last_seq: int = Field(ge=0)  # 最后一条有效事件的序号。
     active: bool  # 服务当前仍持有的后台执行任务。

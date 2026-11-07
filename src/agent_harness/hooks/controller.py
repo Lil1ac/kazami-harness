@@ -19,6 +19,9 @@ HALT_HOOK_ERRORS = frozenset({"hook_failed", "hook_required_unavailable", "hook_
 class HookPending(Exception):
     """携带已持久接纳的 Hook 审批；原操作由 origin 检查点恢复。"""
 
+    status = "waiting_input"  # 生命周期诊断使用与宿主相同的等待状态。
+    reason = "action_approval"  # 继续使用既有审批入口和前端交互。
+
     def __init__(self, action: dict):
         """保存固定 action；返回 None，不执行脚本或消费批准。"""
         self.action = action  # 与现有权限卡片相同的不可变动作。

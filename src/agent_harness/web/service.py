@@ -37,7 +37,7 @@ from agent_harness.web.conversation_index import ConversationIndex
 from agent_harness.web.project_catalog import ProjectCatalog
 from agent_harness.web.folder_picker import FolderPicker
 from agent_harness.execution.scheduling import Coordinator, resources, host_limits
-from agent_harness.web.schemas import CreateRunRequest, EventPage, RunView
+from agent_harness.web.schemas import CreateRunRequest, EventPage, LifecycleStageView, RunView
 
 
 class WebServiceError(Exception):
@@ -93,9 +93,19 @@ def _phase(events: list[RunEvent]) -> str:
             current = "subagent_execution"
         if event.type == "run_finished":
             reason = event.payload.get("result", {}).get("stop_reason")
-            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled", "action_approval", "permission_rejected", "permission_cancelled", "verification_permission_denied", "user_paused"}:
+            if reason in {"planning_complete", "plan_rejected", "user_question", "plan_approval", "interaction_cancelled", "action_approval", "permission_rejected", "permission_cancelled", "verification_permission_denied", "user_paused", "subagent_paused", "team_attention_required"}:
                 current = reason
     return current
+
+
+def _lifecycle_view(events: list[RunEvent]) -> list[LifecycleStageView]:
+    """从有序 events 返回每个阶段最近的诊断；按事件时间排序，不受分页窗口影响。"""
+    latest: dict[str, RunEvent] = {}
+    for event in events:
+        if event.type == "pipeline_stage":
+            latest[str(event.payload.get("stage", ""))] = event
+    return [LifecycleStageView.model_validate({**event.payload, "seq": event.seq})
+            for event in sorted(latest.values(), key=lambda event: event.seq)]
 
 
 def _context_view(events: list[RunEvent]) -> ContextView | None:
@@ -631,6 +641,11 @@ class WebRunManager:
         except ValidationError:
             context_view = None
             warnings.append("上下文记录格式无效，请检查原始事件；此处显示为未记录。")
+        try:
+            lifecycle = _lifecycle_view(history.events)
+        except ValidationError:
+            lifecycle = []
+            warnings.append("生命周期诊断格式无效，请检查原始事件。")
         return RunView(
             automation=history.manifest.automation,
             run_id=identifier,
@@ -644,6 +659,7 @@ class WebRunManager:
             local_changes=self.local_changes.summary(identifier) if history.manifest.origin is None or history.manifest.origin.execution_mode == 'local' else None,
             created_at=history.manifest.created_at,
             result=result,
+            lifecycle=lifecycle,
             phase=(("workspace_snapshot" if item.manifest.origin is not None and item.manifest.origin.kind == "workspace" else "project_snapshot") if item.finalizing else item.context.phase) if active and item.context is not None else _phase(history.events),
             event_count=len(history.events),
             last_seq=history.events[-1].seq if history.events else 0,

@@ -4,9 +4,12 @@ import type { ConnectionState } from '../hooks/useRunEvents';
 import { duration, pretty } from '../format';
 import { formatContextBytes, instructionStatusLabels } from '../context';
 import { toolFailureMessage } from '../activity';
+import { lifecycleOutcomes, lifecycleStages, lifecycleTrace } from '../lifecycle';
 import type { RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
+  pipeline_stage: '生命周期阶段',
+  pipeline_feedback: '生命周期反馈',
   hooks_prepared: '固定 Hooks 定义',
   hooks_restored: '接续 Hooks 阶段与开销',
   hook_record: 'Hook 执行状态',
@@ -24,6 +27,8 @@ const eventLabels: Record<string, string> = {
   team_snapshot: '更新团队状态',
   team_messages_delivered: '交付团队消息',
   subagent_report_retry: '纠正子 Agent 交接报告',
+  subagent_reports_delivered: '交付子 Agent 报告',
+  subagent_resume_reports: '交付接续报告',
   subagent_handoff: '收到子报告，重新决定后续动作',
   budget_handoff_started: '预算收尾交接',
   run_created: '任务已登记',
@@ -74,6 +79,11 @@ const connectionLabels: Record<ConnectionState, string> = {
 /** 根据已知事件生成简短摘要；不尝试将工具内容当 HTML 或 Markdown 执行。 */
 function eventSummary(event: RunEvent): string {
   const payload = event.payload;
+  const lifecycle = lifecycleTrace(event);
+  if (lifecycle) {
+    const last = lifecycle.components.at(-1)!;
+    return `${lifecycleStages[lifecycle.stage]} · ${last.name} · ${lifecycleOutcomes[last.outcome]}`;
+  }
   if (event.type === 'hook_record') {
     const hook = payload.hook as { key: string; event: string; status: string };
     const labels: Record<string, string> = { running: '执行中', waiting: '等待批准', completed: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过' }; // 保持脚本状态独立于原工具。

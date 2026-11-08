@@ -5,7 +5,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
-import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
+import type { LocalProjectOption, OptionsResponse, CreateRunRequest, ModelProvider, ModelSelection } from '../types';
+import { modelLabel, modelProviderName } from '../modelSelection';
 import { SkillSelector } from './SkillSelector';
 import { McpSelector } from './McpSelector';
 import { ProjectSelector } from './ProjectSelector';
@@ -95,6 +96,14 @@ export function TaskForm({
   const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 自动也允许Agent主动进入规划。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
+  const [selectedModel, setSelectedModel] = useState<ModelSelection | null>(null); // 未显式选择时使用设置默认值。
+  const model = selectedModel ?? config;
+  const modelProviders = options.model_providers;
+  const modelConnection = modelProviders[model.provider];
+  const modelReady = modelConnection?.enabled && (modelConnection.auth === 'none' || modelConnection.key_configured);
+  const modelChoices: ModelSelection[] = [config, ...(Object.keys(modelProviders) as ModelProvider[])
+    .filter((provider) => provider !== config.provider)
+    .map((provider) => ({ provider, requested_model: modelProviders[provider].default_model }))];
   const navigate = useNavigate();
   const cache = useQueryClient();
   const pendingSubmission = useRef<PendingNewSubmission | null>(readPendingSubmission(draftKey)); // 网络未知时固定原载荷及编号。
@@ -181,7 +190,12 @@ export function TaskForm({
   }
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
-    if (!selected) return;
+    if (!selected || !modelReady) return;
+    const versions: Record<string, string> = {};
+    for (const choice of [model, ...Object.values(config.role_models)]) {
+      const version = choice && modelProviders[choice.provider]?.version;
+      if (choice && version) versions[choice.provider] = version;
+    }
     mutation.mutate({
       prompt: values.prompt.trim(),
       ...(mode === 'plan' ? { mode } : {}),
@@ -192,7 +206,13 @@ export function TaskForm({
             base_ref: createWorktree ? values.base_ref?.trim() || 'HEAD' : 'HEAD',
           }
         : { workspace_id: selected.id, verifier_id: values.verifier_id || null }),
-      config: { ...draft, auto_repair: repairAvailable && autoRepair },
+      config: {
+        ...draft,
+        provider: model.provider,
+        requested_model: model.requested_model,
+        auto_repair: repairAvailable && autoRepair,
+      },
+      ...(Object.keys(versions).length ? { model_versions: versions } : {}),
     });
   }
   const error = mutation.error;
@@ -201,14 +221,15 @@ export function TaskForm({
       <div className="task-start-heading">
         <h1 id="new-task-heading">新建对话</h1>
       </div>
-      {!options.key_configured && (
+      {!modelReady && (
         <Alert
           type="warning"
           showIcon
-          title={options.desktop ? '请先配置模型密钥' : '请先配置 ' + options.config.api_key_env}
+          title={!modelConnection?.enabled ? '所选服务商已停用或移除' :
+            options.desktop ? '请先配置模型密钥' : '请先配置 ' + (modelConnection.api_key_env || '宿主模型密钥')}
           description={
             options.desktop ? (
-              <Link to="/settings">前往运行配置保存 DeepSeek API Key</Link>
+              <Link to="/settings">前往运行配置保存密钥</Link>
             ) : (
               '在启动服务的终端设置环境变量，然后重启服务。'
             )
@@ -271,9 +292,27 @@ export function TaskForm({
             <div className="start-send-area">
               <ModeSelect value={mode} onChange={setMode} />
               <PermissionSelect value={config.permission_mode} onChange={/* 只覆盖新任务公开模式。 */ permission_mode => setDraft({ ...draft, permission_mode })} disabled={confirmingSubmission} />
-              <span className="start-model" title={config.requested_model}>
-                {config.requested_model}
-              </span>
+              <Select
+                aria-label="会话模型"
+                value={model.provider}
+                size="small"
+                variant="borderless"
+                virtual={false}
+                popupMatchSelectWidth={false}
+                disabled={confirmingSubmission}
+                options={modelChoices.map((choice) => ({
+                  value: choice.provider,
+                  label: modelLabel(choice, undefined, modelProviders[choice.provider]?.name),
+                  disabled: !modelProviders[choice.provider]?.enabled,
+                }))}
+                labelRender={/* 窄屏保留供应商入口，完整模型名称仍在选项内。 */ () => (
+                  <span title={model.requested_model}>
+                    {modelProviderName(model.provider, modelConnection?.name)}<span className="start-model">{' · ' + model.requested_model}</span>
+                  </span>
+                )}
+                onChange={/* 只更新当前新建表单的模型选择。 */ (provider: ModelProvider) =>
+                  setSelectedModel(modelChoices.find((choice) => choice.provider === provider) ?? null)}
+              />
               <Button
                 type="primary"
                 htmlType="submit"
@@ -284,7 +323,7 @@ export function TaskForm({
                 disabled={
                   !selected ||
                   selected.available === false ||
-                  !options.key_configured ||
+                  !modelReady ||
                   projectBusy
                 }
               />
@@ -337,7 +376,7 @@ export function TaskForm({
               </Form.Item>
             )}
             <div className="composer-config">
-              <span>{config.requested_model}</span>
+              <span>{modelLabel(model, undefined, modelConnection?.name)}</span>
               <Link to="/settings">调整模型与预算</Link>
             </div>
             <Checkbox

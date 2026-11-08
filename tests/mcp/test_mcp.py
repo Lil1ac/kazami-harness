@@ -346,7 +346,7 @@ def test_desktop_credential_update_revokes_old_authority_and_blocks_retrust(tmp_
                 return None
 
         native = Native()
-        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64, "test-key")
+        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64, {"deepseek": "test-key"})
         app = create_app(WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist"), RunConfig(), tmp_path / "runs", desktop=host)
         server = McpServerConfig(id="docs", label="文档", transport="http", url="https://example.test/mcp")
         item, _ = register(app.state.manager.mcp, server, [])

@@ -34,7 +34,7 @@ def effective_config(host: RunConfig, task) -> RunConfig:
         if key in patch:
             merged[key] = {**merged[key], **patch.pop(key)}
     merged.update(patch)
-    return load_config(overrides=merged)
+    return load_config(overrides=merged).freeze_models()
 
 
 def environment_snapshot(definition: dict, root: Path, host_config: dict) -> dict:
@@ -67,7 +67,9 @@ def environment_snapshot(definition: dict, root: Path, host_config: dict) -> dic
             "hooks": [{key: hook[key] for key in ("key", "fingerprint", "trusted", "enabled")} for hook in hooks],
             "skills": [item.model_dump(mode="json") for item in SkillCatalog(config.skill_roots).load(config.skills)],
             "agents": file_identity(workspace / "AGENTS.md", config.context.max_project_instruction_bytes) if (workspace / "AGENTS.md").exists() else None}
-    return {**data, "fingerprint": payload_digest({"definition": definition, "environment": data, "host": host_config})}
+    # 仅引用的自定义端点参与授权指纹，添加其他服务商不影响现有自动化。
+    host_snapshot = {**host_config, "run": {**host_config["run"], "custom_providers": data["config"]["custom_providers"]}}
+    return {**data, "fingerprint": payload_digest({"definition": definition, "environment": data, "host": host_snapshot})}
 
 
 class AutomationService:

@@ -92,7 +92,7 @@ function makeBackend(
     ],
     cwd: repository,
     token,
-    apiKey: "node-desktop-test-secret",
+    modelKeys: { deepseek: "node-desktop-test-secret" },
     logFile: path.join(root, "backend.log"),
     native: /* 原生选择替身只返回专属项目，下载使用主进程真实实现。 */ async (
       request,

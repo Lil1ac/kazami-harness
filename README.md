@@ -17,7 +17,9 @@ uv --cache-dir .uv-cache sync --frozen
 uv --cache-dir .uv-cache run harness --help
 ```
 
-CLI 和独立网页服务从启动终端的 `DEEPSEEK_API_KEY` 环境变量读取密钥，不读取 `.env`。桌面端使用设置页保存的加密凭据。CLI 密钥也可以在 PowerShell 的密码框输入，避免把明文写入命令历史：
+CLI 和独立网页服务从启动终端读取 `DEEPSEEK_API_KEY` 或 `DASHSCOPE_API_KEY`。桌面端使用设置页按供应商保存的加密凭据。Qwen 首版使用百炼北京地域，可通过 `harness run --provider qwen --model qwen-plus` 选择。完整参数、角色配置与凭据规则见 [模型供应商与角色配置](docs/MODELS.md)。
+
+PowerShell 可以用密码框输入 CLI 凭据，避免把明文写入命令历史。
 
 ```powershell
 $credential = Get-Credential -UserName 'deepseek' -Message '在密码框输入 DeepSeek API Key'

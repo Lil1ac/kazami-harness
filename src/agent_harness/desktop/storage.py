@@ -7,7 +7,8 @@ import threading
 from pydantic import Field, ValidationError, field_validator
 
 from agent_harness.config import ConfigurationError
-from agent_harness.schemas import DataModel, RunConfig, RunLimits, ToolName
+from agent_harness.schemas import DataModel, ModelSelection, RunConfig, RunLimits, ToolName
+from agent_harness.model_selection import CustomProvider, ModelProvider, ModelRole
 
 
 def resource_root() -> Path:
@@ -28,25 +29,17 @@ class DesktopBudget(DataModel):
     run_timeout_seconds: float = Field(gt=0, le=604800, allow_inf_nan=False)  # 总运行时间，单位秒。
 
 
-class DesktopRunSettings(DataModel):
+class DesktopRunSettings(ModelSelection):
     """跨启动沿用的公开设置，不包含凭据、系统提示词或执行命令。"""
 
-    requested_model: str = Field(min_length=1, max_length=200)  # 提交给模型供应商的名称。
+    role_models: dict[ModelRole, ModelSelection] = Field(default_factory=dict)  # 独立角色模型，空映射为全部继承。
     tools: list[ToolName] = Field(min_length=1)  # 用户明确允许的基础工具集合。
     limits: DesktopBudget  # 与前端设置页一致的总体预算。
-
-    @field_validator("requested_model")
-    @classmethod
-    def clean_model(cls, value: str) -> str:
-        """清理模型名称首尾空白并返回；纯空白名称抛 ValueError，不写入设置。"""
-        if not value.strip():
-            raise ValueError("模型名称不能为空")
-        return value.strip()
 
     def apply(self, base: RunConfig) -> RunConfig:
         """把公开设置合入 base 并完整校验，返回新配置；不改变活动任务的快照。"""
         raw = base.model_dump()
-        raw.update(requested_model=self.requested_model, tools=self.tools)
+        raw.update(self.model_dump(exclude={"limits"}))
         raw["limits"] = RunLimits.model_validate({**raw["limits"], **self.limits.model_dump()})
         return RunConfig.model_validate(raw)
 
@@ -55,6 +48,7 @@ class DesktopPreferences(DataModel):
     """后台公开设置的唯一格式；窗口状态和密钥不进入此模型。"""
 
     config: DesktopRunSettings | None = None  # None 使用宿主 TOML 默认。
+    custom_providers: dict[ModelProvider, CustomProvider] = Field(default_factory=dict, max_length=16)  # 本机登记定义，不包含密钥。
     downloads_directory: Path = Field(default_factory=default_download_directory)  # 用户下载目标目录。
 
     @field_validator("downloads_directory")

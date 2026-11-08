@@ -7,13 +7,14 @@ import logging
 from pathlib import Path
 import socket
 import sys
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, ValidationError
 import uvicorn
 
 from agent_harness.config import ConfigurationError, load_config
 from agent_harness.providers.base import ModelClient
-from agent_harness.schemas import DataModel
+from agent_harness.schemas import DataModel, RunConfig
 from agent_harness.web.api import create_app
 from agent_harness.web.config import load_web_config
 from agent_harness.desktop.bridge import NativeBridge
@@ -25,7 +26,7 @@ class Bootstrap(DataModel):
     """仅父子标准流传输的启动凭据；禁止通过 argv、环境或运行配置传递。"""
 
     token: str = Field(min_length=32, max_length=256, repr=False)  # 当前进程独立的随机会话值。
-    api_key: SecretStr = Field(max_length=2560)  # 解密后的模型凭据；空值允许查看历史。
+    model_keys: dict[Literal["deepseek", "qwen"], Annotated[SecretStr, Field(max_length=2560)]]  # 启动携带内置供应商密钥，自定义密钥按登记版本读取。
 
 
 async def serve(data_directory: Path, runs_directory: Path, config_path: Path | None, bootstrap: Bootstrap, bridge: NativeBridge, model_client: ModelClient | None = None, *, web_config_path: Path | None = None) -> None:
@@ -38,13 +39,14 @@ async def serve(data_directory: Path, runs_directory: Path, config_path: Path | 
     root = resource_root()
     store = PreferenceStore(data_directory)
     config = load_config(config_path or root / "harness.example.toml")
+    config = RunConfig.model_validate({**config.model_dump(), "custom_providers": {**config.custom_providers, **store.value.custom_providers}})
     if store.value.config is not None:
         config = store.value.config.apply(config)
     # 桌面复用宿主预设和调度规则；界面始终使用随应用分发的构建，工作树仍由应用数据目录管理。
     web_config = load_web_config(web_config_path, project_dir=root).model_copy(update={"worktrees_root": store.directory / "worktrees", "frontend_dist": root / "frontend" / "dist"})
     if not (web_config.frontend_dist / "index.html").is_file():
         raise ConfigurationError("前端尚未构建，请先运行 npm.cmd --prefix frontend run build。")
-    host = DesktopHost(store, bridge, bootstrap.token, bootstrap.api_key.get_secret_value())
+    host = DesktopHost(store, bridge, bootstrap.token, {provider: key.get_secret_value() for provider, key in bootstrap.model_keys.items()})
     app = create_app(web_config, config, runs_directory, desktop=host, model_client=model_client)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -58,6 +60,7 @@ async def serve(data_directory: Path, runs_directory: Path, config_path: Path | 
             server.should_exit = True
 
         bridge.start(asyncio.get_running_loop(), shutdown)
+        await host.load_custom_keys(config)
         task = asyncio.create_task(server.serve(sockets=[listener]))
         while not server.started and not task.done():
             await asyncio.sleep(.01)

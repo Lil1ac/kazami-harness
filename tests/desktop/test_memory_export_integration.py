@@ -23,7 +23,7 @@ def test_memory_export_native_destination_and_invalid_paths(tmp_path: Path):
     preferences = PreferenceStore(tmp_path / "desktop")
     preferences.update(downloads_directory=tmp_path / "downloads")
     native = NativeDownload()
-    host = DesktopHost(preferences, native, "memory-token", "offline-key")
+    host = DesktopHost(preferences, native, "memory-token", {"deepseek": "offline-key"})
     model = ScriptModel([])
     app = create_app(web, RunConfig(), tmp_path / "records", model_client=model, desktop=host)
 

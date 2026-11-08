@@ -1,6 +1,19 @@
 # 当前切片支持读、搜、写、局部编辑、命令五类工具；命令只用于可信本地任务，配置会保存为运行快照。
-provider = "deepseek"
-requested_model = "deepseek-flash"
+provider = "deepseek" # 选 qwen 时使用阿里云百炼北京地域。
+requested_model = "deepseek-flash" # 选择 qwen 时可填 qwen-plus，也可省略此项使用供应商默认。
+
+# 配置段可放在文件末尾；没有配置的探索、审阅角色继承父会话。
+# [role_models.review]
+# provider = "qwen"
+# requested_model = "qwen-plus"
+
+# 自定义服务商的配置段放在文件末尾。选择该服务商时用 --provider custom-local。
+# [custom_providers.custom-local]
+# name = "本机兼容服务"
+# base_url = "http://127.0.0.1:11434/v1"
+# default_model = "your-local-model"
+# auth = "none"
+# enabled = true
 tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
 # 宿主技能集合：相对本配置文件解析；网页只能选择名称，不能改路径。

@@ -8,6 +8,9 @@ import {
 } from "./files";
 import { NativeRequest, textParameter } from "./protocol";
 
+/** 可由宿主为模型凭据开户的固定供应商标识。 */
+export type ModelProvider = "deepseek" | "qwen";
+
 /** 验证 url 是可交给默认应用的网页或邮件地址；返回规范 URL，拒绝本地文件和脚本协议。 */
 export function externalUrl(url: string): string {
   if (/[\r\n\0]/.test(url)) throw new Error("外部链接无效");
@@ -23,7 +26,7 @@ export function externalUrl(url: string): string {
 
 /** Electron 主进程的原生能力；所有文件引用均来自后台已经核对的运行证据。 */
 export class NativeService {
-  private readonly credentialFile: string; // 仅保存 safeStorage 密文，不进入公开配置和运行记录。
+  private readonly modelCredentialDirectory: string; // 模型按供应商保存 safeStorage 密文。
   private readonly mcpCredentialDirectory: string; // 每个连接独立密文，不与模型密钥混用。
   private credentialWrite: Promise<void> = Promise.resolve(); // 串行保存，避免并发替换同一密文文件。
   private readonly notifications = new Map<string, Notification>(); // 保持活动弹窗引用，关闭后释放，防止原生对象提前回收。
@@ -33,20 +36,22 @@ export class NativeService {
     dataDirectory: string,
     private readonly window: () => BrowserWindow | undefined,
   ) {
-    this.credentialFile = path.join(dataDirectory, "credential.enc");
+    this.modelCredentialDirectory = path.join(dataDirectory, "model-credentials");
     this.mcpCredentialDirectory = path.join(dataDirectory, "mcp-credentials");
   }
 
-  /** 将可选 key 转为固定密文路径；undefined 使用模型密钥，其他值须为 MCP 标识，不允许路径穿越。 */
-  private credentialPath(key?: string): string {
-    if (key === undefined) return this.credentialFile;
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(key)) throw new Error("外部凭据标识无效");
-    return path.join(this.mcpCredentialDirectory, key + ".enc");
+  /** 按 scope 和 key 返回独立的密文路径，拒绝未知供应商或非法连接标识。 */
+  private credentialPath(scope: "model" | "mcp", key: string): string {
+    const valid = scope === "model"
+      ? /^(deepseek|qwen|custom-[a-z0-9][a-z0-9-]{0,31}-[a-f0-9]{64})$/.test(key)
+      : /^[a-z][a-z0-9_-]{0,31}$/.test(key);
+    if (!valid) throw new Error("凭据分区标识无效");
+    return path.join(scope === "model" ? this.modelCredentialDirectory : this.mcpCredentialDirectory, key + ".enc");
   }
 
-  /** 解密可选 key 分区；undefined 读取模型密钥，其他值为连接标识。未配置返回空字符串，加密不可用抛错。 */
-  async readCredential(key?: string): Promise<string> {
-    const file = this.credentialPath(key); // key 缺省读取模型，非空读取独立外部连接。
+  /** 解密 scope 下的 key；未配置返回空字符串，加密不可用抛错。 */
+  async readCredential(scope: "model" | "mcp", key: string): Promise<string> {
+    const file = this.credentialPath(scope, key);
     const encrypted = await readOptional(file);
     if (!encrypted) return "";
     if (!(await safeStorage.isAsyncEncryptionAvailable()))
@@ -60,9 +65,9 @@ export class NativeService {
     return result.result;
   }
 
-  /** 保存 secret 到可选 key 分区；undefined 为模型，空 secret 清除该分区。仅写密文，失败保留原值。 */
-  async writeCredential(secret: string, key?: string): Promise<void> {
-    const file = this.credentialPath(key); // 空 secret 清除此分区，其他分区保持。
+  /** 保存 secret 到 scope 下的 key；空字符串清除该分区，失败保留原值。 */
+  async writeCredential(scope: "model" | "mcp", key: string, secret: string): Promise<void> {
+    const file = this.credentialPath(scope, key);
     const operation = this.credentialWrite.then(
       /* 同一时刻只允许一个密文保存或删除操作。 */ async () => {
         if (!secret) {
@@ -116,13 +121,15 @@ export class NativeService {
         });
         return selected.canceled ? null : selected.filePaths[0];
       }
+      case "credential.read":
+        return await this.readCredential("model", textParameter(parameters, "provider", 112));
       case "credential.write":
-        await this.writeCredential(textParameter(parameters, "secret", 2560));
+        await this.writeCredential("model", textParameter(parameters, "provider", 112), textParameter(parameters, "secret", 2560));
         return null;
       case "mcp.credential.read":
-        return await this.readCredential(textParameter(parameters, "key", 32));
+        return await this.readCredential("mcp", textParameter(parameters, "key", 32));
       case "mcp.credential.write":
-        await this.writeCredential(textParameter(parameters, "secret", 2560), textParameter(parameters, "key", 32));
+        await this.writeCredential("mcp", textParameter(parameters, "key", 32), textParameter(parameters, "secret", 2560));
         return null;
       case "file.download":
         return await downloadFile(

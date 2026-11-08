@@ -40,6 +40,7 @@ async def request_model(context: "RunContext", client: ModelClient, messages: li
     context.request_purpose = purpose
     context.emit("model_request_started", {
         "model_turn": context.request_turn,
+        "provider": context.manifest.config.provider,
         "requested_model": context.manifest.config.requested_model,
         "message_count": len(messages), "purpose": purpose,
     })
@@ -52,8 +53,11 @@ async def request_model(context: "RunContext", client: ModelClient, messages: li
     finally:
         REQUEST_CONTEXT.reset(token)
     _collect_usage(context, response.usage)
+    if purpose == "execution":
+        context.result.response_model = response.response_model
     context.emit("model_response", {
         "model_turn": context.request_turn, "response_id": response.response_id,
+        "provider": context.manifest.config.provider,
         "response_model": response.response_model, "system_fingerprint": response.system_fingerprint,
         "finish_reason": response.finish_reason, "usage": response.usage, "purpose": purpose,
     })

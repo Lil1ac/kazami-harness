@@ -38,7 +38,7 @@ export const config: RunConfig = {
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
   provider: 'deepseek',
   requested_model: 'deepseek-flash',
-  api_key_env: 'DEEPSEEK_API_KEY',
+  role_models: {},
   tools: ['read_file', 'search_files', 'write_file', 'run_command'],
   system_prompt: '如实执行任务。',
   context: {
@@ -72,7 +72,10 @@ export const config: RunConfig = {
 };
 export const options: OptionsResponse = {
   config,
-  key_configured: true,
+  model_providers: {
+    deepseek: { name: 'DeepSeek', default_model: 'deepseek-flash', api_key_env: 'DEEPSEEK_API_KEY', auth: 'bearer', enabled: true, key_configured: true },
+    qwen: { name: 'Qwen', default_model: 'qwen-plus', api_key_env: 'DASHSCOPE_API_KEY', auth: 'bearer', enabled: true, key_configured: false },
+  },
   recent_projects: [], // 首次启动等待用户打开真实目录。
   verifiers: [], // 无宿主登记时不提供独立验收选择。
   active_run_ids: [],

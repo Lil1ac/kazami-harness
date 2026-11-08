@@ -28,6 +28,8 @@ const record: SubagentRecord = {
   title: '检查调用方',
   objective: '只读检查api.py',
   role: 'review',
+  model: { provider: 'qwen', requested_model: 'qwen-plus' },
+  response_model: 'qwen-plus-fixture',
   cleanup_status: 'not_needed', log_parent_id: null, workspace: null, write_scope: [], changed_paths: [], scope_violations: [], pending_action: null, snapshot_status: 'pending',
   task_id: null,
   status: 'completed',

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable
+import os
 import traceback
 import time
 from dataclasses import dataclass, field
@@ -12,9 +13,11 @@ import httpx
 
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, validate_python_execution
 from agent_harness.config import ConfigurationError
-from agent_harness.schemas import ArtifactRef, RunManifest, RunResult, VerificationResult
+from agent_harness.model_selection import valid_model_key
+from agent_harness.schemas import ArtifactRef, RunConfig, RunManifest, RunResult, VerificationResult
 from agent_harness.providers.base import ModelClient, ModelDelta, ModelError
-from agent_harness.providers.deepseek import DeepSeekClient
+from agent_harness.providers.chat import ChatCompletionsClient
+from agent_harness.providers.factory import create_model_client
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.execution.local import LocalChangeStore
@@ -74,6 +77,7 @@ class RunContext:
     command_controllers: dict[str, object] = field(default_factory=dict)  # 根段聚合父子命令控制器，用于观察及统一停止。
     hooks: object | None = None  # 当前 Agent 的生命周期扩展调度器；无工具执行器时为空。
     mcp_credential_provider: object | None = None  # 异步桌面秘密读取器；仅内存使用，不写入清单或事件。
+    role_client: Callable[[RunConfig], ChatCompletionsClient] | None = None  # 独立角色客户端入口，仅根运行持有。
 
     @property
     def runs_root(self) -> Path:
@@ -187,8 +191,12 @@ def validate_execution(manifest: RunManifest, api_key: str) -> None:
     api_key 必须是非空可打印 ASCII 且无空白，错误抛 ConfigurationError。
     验收入口由配置模块启动预检并固定，密钥不写入 manifest 或日志。
     """
-    if not api_key or any(not 33 <= ord(char) <= 126 for char in api_key):
-        raise ConfigurationError("请在环境变量 DEEPSEEK_API_KEY 中设置有效密钥（不能包含空白或控制字符）。")
+    config = manifest.config
+    if any(not config.custom_providers[provider].enabled for provider in config.selected_providers() & config.custom_providers.keys()):
+        raise ConfigurationError("所选自定义服务商已停用，请重新选择。")
+    if config.requires_model_key and not valid_model_key(api_key):
+        hint = f"（Web/CLI 使用 {config.api_key_env}）" if config.api_key_env else ""
+        raise ConfigurationError(f"请为当前供应商配置有效 API 密钥{hint}。")
 
 
 def validate_auto_repair(manifest: RunManifest) -> None:
@@ -271,6 +279,7 @@ async def _run_task(
     file_changes: LocalChangeStore | None = None,
     project_manager: ProjectManager | None = None,
     mcp_credential_provider=None,
+    model_credential_provider: Callable[[RunConfig], str] | None = None,
 ) -> RunOutcome:
     """执行模型任务及可选独立验收，返回已保存的结果、目录和事件数。
 
@@ -282,6 +291,7 @@ async def _run_task(
     file_changes=None时使用默认有界快照；宿主可传入带保护目录的原目录证据存储。
     project_manager仅供Git隔离运行，非隔离时不使用；结束快照与项目审阅复用。
     mcp_credential_provider=None 时外部认证仅用环境引用；非空为异步桌面私有读取器，不进入快照。
+    model_credential_provider 为独立角色的宿主密钥解析器；None 时读取供应商对应环境变量。
     总秒级预算覆盖模型、工具与验收；之后固定交付证据再保存唯一终态，采集异常独立提示。
     函数会调用外部服务、执行工具并写文件；StorageError 立即传播，不伪造落盘成功。
     """
@@ -358,6 +368,14 @@ async def _run_task(
     from agent_harness.runtime.agent import run_agent
     from agent_harness.runtime.completion import apply_verification
 
+    def role_client(config: RunConfig) -> ChatCompletionsClient:
+        """返回 config 对应的独立角色客户端，缺少有效密钥时抛可记录的模型错误。"""
+        key = model_credential_provider(config) if model_credential_provider is not None else os.environ.get(config.api_key_env, "") if config.api_key_env else ""
+        if config.requires_model_key and not valid_model_key(key):
+            raise ModelError("model_credentials_invalid", "请为委派角色配置有效 API 密钥。")
+        return create_model_client(config, key, on_attempt=context.http_attempt, on_delta=context.model_delta, transport=transport)
+
+    context.role_client = role_client
     try:
         if on_context is not None:
             on_context(context)
@@ -366,7 +384,7 @@ async def _run_task(
             if model_client is not None:
                 await run_agent(context, model_client, tool_executor, verifier=verifier)
             else:
-                async with DeepSeekClient(api_key, manifest.config, on_attempt=context.http_attempt, on_delta=context.model_delta, transport=transport) as client:
+                async with create_model_client(manifest.config, api_key, on_attempt=context.http_attempt, on_delta=context.model_delta, transport=transport) as client:
                     await run_agent(context, client, tool_executor, verifier=verifier)
     except TimeoutError:
         if result.execution_status == "completed" and verifier is not None:

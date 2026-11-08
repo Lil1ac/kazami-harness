@@ -259,7 +259,7 @@ def test_missing_key_is_rejected_before_record_creation(web_config: WebConfig, m
     async def scenario():
         """读取脱敏选项后尝试提交，再确认运行根目录没有任务文件。"""
         async with api_client(web_config) as (client, app):
-            assert (await client.get("/api/options")).json()["key_configured"] is False
+            assert (await client.get("/api/options")).json()["model_providers"]["deepseek"]["key_configured"] is False
             response = await submit_run(client, json={"prompt": "离线任务", "workspace_id": "sample"})
             assert response.status_code in {400, 422, 503}
             assert response.json()["error"]["code"]
@@ -327,7 +327,7 @@ def test_history_pagination_filter_and_options_never_serialize_key(web_config: W
             assert second_view["config"]["limits"]["max_model_turns"] == 2
             assert second_view["config"]["limits"]["max_tool_calls"] == trusted_config().limits.max_tool_calls
             options = await client.get("/api/options")
-            assert options.json()["key_configured"] is True
+            assert options.json()["model_providers"]["deepseek"]["key_configured"] is True
             assert SECRET not in "".join([page1.text, page2.text, options.text, json.dumps(second_view)])
 
     asyncio.run(scenario())

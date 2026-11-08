@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from pydantic import Field, SecretStr, ValidationError
 
 from agent_harness.config import ConfigurationError
+from agent_harness.model_selection import CustomProviderSettings, ModelProvider, ModelVersion, valid_model_key
 from agent_harness.schemas import DataModel
 from agent_harness.web.service import WebRunManager, WebServiceError
 from agent_harness.desktop.host import DesktopHost
@@ -24,6 +25,14 @@ class CredentialRequest(DataModel):
     """模型凭据写入请求；SecretStr 避免异常或调试表示意外输出密钥。"""
 
     secret: SecretStr = Field(max_length=2560)  # 空字符串表示明确清除，接口永不回读正文。
+    version: ModelVersion | None = None  # 自定义服务商必须回传当前端点版本。
+
+
+class ProviderUpdate(DataModel):
+    """按页面已审阅的版本保存完整自定义服务商定义。"""
+
+    definition: CustomProviderSettings  # 用户可编辑的连接及默认模型。
+    version: ModelVersion  # 更新前页面读取的端点版本。
 
 
 class UrlRequest(DataModel):
@@ -39,21 +48,40 @@ def install_routes(app: FastAPI, host: DesktopHost, manager: WebRunManager) -> N
     async def settings(body: SettingsRequest) -> dict:
         """保存 body 中的公开设置并返回最新选项；非法预算、路径或写盘失败返回受控错误。"""
         try:
-            await asyncio.to_thread(host.configure, body.config, Path(body.downloads_directory))
+            await host.configure(body.config, Path(body.downloads_directory))
         except (ConfigurationError, ValidationError, OSError):
             raise WebServiceError(422, "desktop_settings_failed", "设置保存失败，请检查预算、绝对下载路径和目录权限。") from None
         result = await asyncio.to_thread(manager.options)
         result["desktop"] = host.public_settings()
         return result
 
-    @app.put("/api/desktop/credential")
-    async def credential(body: CredentialRequest) -> dict:
-        """把 body 密钥交给 Electron 加密保存；只返回存在标记，空字符串明确清除。"""
+    @app.put("/api/desktop/credentials/{provider}")
+    async def credential(provider: ModelProvider, body: CredentialRequest) -> dict:
+        """把 body 密钥交给 Electron 按 provider 加密；只返回存在标记，空字符串明确清除。"""
+        secret = body.secret.get_secret_value().strip()
+        if secret and not valid_model_key(secret):
+            raise WebServiceError(422, "model_credentials_invalid", "API 密钥不能包含空白或控制字符。")
         try:
-            await host.save_key(body.secret.get_secret_value())
+            await host.save_key(provider, secret, body.version)
         except ConfigurationError:
             raise WebServiceError(503, "credential_store_failed", "本机凭据加密保存失败，请检查当前用户权限。") from None
-        return {"key_configured": bool(host.api_key(manager.run_config))}
+        return {"key_configured": bool(secret)}
+
+    @app.post("/api/desktop/model-providers", status_code=201)
+    async def create_provider(body: CustomProviderSettings) -> dict:
+        """登记 body 并返回稳定标识，持久化失败时返回受控错误。"""
+        try:
+            return {"provider": await host.configure_provider(None, None, body)}
+        except ConfigurationError:
+            raise WebServiceError(503, "desktop_settings_failed", "自定义服务商保存失败，请检查目录权限。") from None
+
+    @app.put("/api/desktop/model-providers/{provider}")
+    async def update_provider(provider: ModelProvider, body: ProviderUpdate) -> dict:
+        """更新 provider 当前版本的定义。地址变更时旧密钥不可再用。"""
+        try:
+            return {"provider": await host.configure_provider(provider, body.version, body.definition)}
+        except ConfigurationError:
+            raise WebServiceError(503, "desktop_settings_failed", "自定义服务商保存失败，请检查目录权限。") from None
 
     @app.post("/api/desktop/download")
     async def download(body: UrlRequest) -> dict:

@@ -116,7 +116,7 @@ class JobQueue:
 
     def public(self, job: dict, db=None) -> dict:
         """返回 job 可展示字段；排除固定内部提交参数，保留归属、结果和错误。"""
-        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy", "resources", "automation_stop_requested"}}
+        value = {key: value for key, value in job.items() if key not in {"payload", "digest", "memory_policy", "resources", "automation_stop_requested", "model_versions"}}
         if job.get("waiting_action_id"):
             value["approval_status"] = PermissionStore(self.manager.runs_root).get(job["waiting_action_id"], db)["status"]
         session = job.get("session_id")
@@ -253,7 +253,7 @@ class JobQueue:
                 raise TaskError("unknown_workspace", "请选择已登记的项目目录。")
             identity = directory_identity(selected.path)
             source_path = str(selected.path.resolve())
-            overrides = self.manager.run_config.model_dump(mode="json", include={"requested_model", "tools", "limits", "context", "memory", "skills", "auto_repair", "permission_mode"})
+            overrides = self.manager.run_config.model_dump(mode="json", include={"provider", "requested_model", "role_models", "tools", "limits", "context", "memory", "skills", "auto_repair", "permission_mode"})
             patch = payload["create"]["config"]
             for section in ("limits", "context", "memory"):
                 overrides[section].update(patch.get(section) or {})
@@ -262,6 +262,9 @@ class JobQueue:
             config_data = self.manager.run_config.model_dump(mode="python")
             config_data.update(overrides)
             config = load_config(overrides=config_data)
+            self.manager.check_model_versions(config.model_versions())
+            if request.create.model_versions is not None and request.create.model_versions != config.model_versions():
+                raise TaskError("model_provider_changed", "模型连接已变更，请刷新后重新提交。")
             verifier = None
             if request.create.verifier_id is not None:
                 verifier = next((item.path for item in self.manager.web_config.verifiers if item.id == request.create.verifier_id), None)
@@ -278,6 +281,8 @@ class JobQueue:
                 _, commit, _ = await asyncio.to_thread(self.manager.projects._inspect_base, selected, request.create.base_ref)
                 payload["create"]["base_ref"] = commit  # 队列期间分支移动不会改变已选隔离基线。
         else:
+            config = parent.manifest.config
+            self.manager.check_model_versions(config.model_versions())
             source_path = str(parent.manifest.task.workspace)
             identity = directory_identity(parent.manifest.task.workspace)
             selected = next(item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == parent.manifest.origin.preset_id)
@@ -295,6 +300,7 @@ class JobQueue:
         job = {"id": identifier, "status": "queued", "run_id": str(uuid4()), "session_id": session,
                "title": (request.create.prompt if request.create else request.followup.prompt)[:200], "project_id": request.create.project_id or request.create.workspace_id if request.create else parent.manifest.origin.preset_id,
                "created_at": now(), "payload": payload, "digest": digest, "source_path": source_path, "workspace_identity": identity,
+               "model_versions": config.model_versions(),
                "memory_policy": config.memory.model_dump() if request.create is not None else {**parent.manifest.config.memory.model_dump(), **(request.followup.config.memory.model_dump(exclude_unset=True) if request.followup.config.memory else {})},
                "project_label": selected.label, "source_policy": source_policy(selected), "error": None, "validation_status": "unverified", "execution_status": None}
         job["resources"] = self.scope(job)  # 接纳时冻结仓库及共享资源身份，排队期间不可悄然换源。
@@ -411,6 +417,7 @@ class JobQueue:
             if job.get("kind") == "integration":
                 await self.manager.integrations.run_job(job)
                 return
+            self.manager.check_model_versions(job.get("model_versions", {}))
             if job.get("automation") and job["payload"].get("create") is not None:
                 self.manager.automations.validate_start(job["automation"])
             if directory_identity(Path(job["source_path"])) != job["workspace_identity"]:

@@ -153,7 +153,7 @@ def test_parallel_development_dirty_baseline_and_parent_integration(project_conf
                 preferences = PreferenceStore(project_config.project_dir / 'desktop')
                 preferences.update(downloads_directory=project_config.project_dir / 'downloads')
                 native = NativeDownload()
-                host = DesktopHost(preferences, native, 'offline-token', 'offline-key')
+                host = DesktopHost(preferences, native, 'offline-token', {'deepseek': 'offline-key'})
                 host.manager = app.state.manager
                 detail = await client.get(f"/api/runs/{view['run_id']}/subagents/{record['run_id']}")
                 assert detail.status_code == 200, detail.text

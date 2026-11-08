@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { Alert, Skeleton, Tabs } from 'antd';
 import { getRun, errorMessage } from '../api';
 import { duration, phaseLabel } from '../format';
+import { modelLabel } from '../modelSelection';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { useRunPlanning } from '../hooks/useRunPlanning';
 import { StateBreakdown } from './RunStatus';
@@ -235,7 +236,7 @@ function InspectorPanels({
                     </div>
                     <div>
                       <dt>模型</dt>
-                      <dd>{run.config.requested_model}</dd>
+                      <dd title={'请求模型：' + run.config.requested_model}>{modelLabel(run.config, run.result.response_model, run.config.custom_providers?.[run.config.provider]?.name)}</dd>
                     </div>
                     <div>
                       <dt>总时限</dt>

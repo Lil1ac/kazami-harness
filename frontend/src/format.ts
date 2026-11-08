@@ -70,5 +70,21 @@ export const reviewLabels: Record<ProjectReview['status'], string> = {
 
 /** 将模型证书失败reason翻译为操作文案；其他或尚未结束的原因返回null，保留原有状态规则。 */
 export function modelFailureLabel(reason: string | null | undefined): string | null {
-  return reason === 'model_tls_verification' ? '模型服务证书校验失败' : null;
+  switch (reason) {
+    case 'model_tls_verification': return '模型服务证书校验失败';
+    case 'model_credentials_invalid': return '请配置当前模型供应商的密钥';
+    case 'model_authentication': return '模型服务认证失败，请检查密钥和地域';
+    case 'model_rate_limited': return '模型服务限流';
+    case 'model_stream_interrupted': return '模型响应中断';
+    case 'model_unavailable': return '模型服务暂时不可用';
+    case 'model_transport': return '模型服务连接失败';
+    case 'model_bad_request': return '模型服务拒绝请求，请检查模型配置';
+    case 'model_provider_changed': return '服务商连接已变更，请使用当前配置新建会话';
+    case 'model_provider_disabled': return '所选自定义服务商已停用';
+    case 'model_redirect': return '接口返回重定向，请填写实际服务地址';
+    case 'model_probe_tool_missing': return '模型未返回预期的测试工具调用';
+    case 'model_protocol_error': return '模型响应格式无效';
+    case 'model_timeout': return '模型服务响应超时';
+    default: return null;
+  }
 }

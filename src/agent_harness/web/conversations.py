@@ -232,6 +232,8 @@ class ConversationService:
             merged['hooks'] = self.manager.run_config.hooks.model_dump()  # 后续运行统一读取当前宿主扩展策略，旧轮只保留阅读快照。
             merged['skill_roots'] = list(self.manager.run_config.skill_roots)  # 技能来源使用当前宿主登记，选择默认沿用前轮。
             patch = request.config.model_dump(exclude_none=True, exclude_unset=True)
+            if any(patch.get(key, merged[key]) != merged[key] for key in ("provider", "requested_model", "role_models")):
+                raise SessionError("session_model_locked", "会话模型配置已固定。请新建会话以更换模型。")
             for section in ('limits', 'context', 'memory'):
                 if section in patch:
                     merged[section] = {**merged[section], **patch.pop(section)}
@@ -240,6 +242,7 @@ class ConversationService:
                 merged["memory"] = memory_policy
             try:
                 config = load_config(overrides=merged)
+                self.manager.check_model_versions(config.model_versions())
                 if (resume is not None or execution_resume is not None) and config.limits != parent.manifest.config.limits:
                     raise SessionError("permission_stale", "动作审批接续不能修改原预算，请先处理等待再提交新要求。")
                 if config.planning_policy == "required" and not (planning.plans and planning.plans[-1].status == "approved"):
@@ -249,7 +252,6 @@ class ConversationService:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
                 task = parent.manifest.task.model_copy(update={'prompt': prompt})
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, automation=parent.manifest.automation, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
-                import os
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)
             except (ConfigurationError, ValidationError) as error:
@@ -291,6 +293,11 @@ class ConversationService:
                 task = task.model_copy(update={'workspace': root, 'verifier': verifier, 'python_execution': execution})
                 manifest = manifest.model_copy(update={'task': task})
                 validate_auto_repair(manifest)
+                from agent_harness.web.service import WebServiceError
+                try:
+                    self.manager.check_model_versions(config.model_versions())
+                except WebServiceError as error:
+                    raise SessionError(error.code, error.message) from None
                 self.store.commit(session_id, request.request_id)
                 return await self.manager._launch(manifest, api_key, owner)
             except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:

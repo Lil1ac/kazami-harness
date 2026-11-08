@@ -3,10 +3,12 @@
 from tests.helpers.streaming import model_stream_response
 
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import subprocess
 import sys
 from pathlib import Path
+from threading import Thread
 
 import pytest
 
@@ -34,15 +36,64 @@ def test_invalid_workspace_does_not_create_run(tmp_path: Path):
     assert not records.exists()
 
 
-def test_missing_key_does_not_create_run_or_send_request(tmp_path: Path):
-    """验证执行模式缺少密钥时提前退出，不创建运行目录。"""
+@pytest.mark.parametrize("provider,key_env", [("deepseek", "DEEPSEEK_API_KEY"), ("qwen", "DASHSCOPE_API_KEY")])
+def test_missing_key_does_not_create_run_or_send_request(tmp_path: Path, provider: str, key_env: str):
+    """验证显式 provider 缺少对应 key_env 时提前退出，另一供应商凭据不能代用。"""
     records = tmp_path / "records"
     env = os.environ.copy()
-    env.pop("DEEPSEEK_API_KEY", None)
-    result = invoke("run", "--task", "测试任务", "--workspace", tmp_path, "--runs-dir", records, env=env)
+    env.update(DEEPSEEK_API_KEY="offline-deepseek", DASHSCOPE_API_KEY="offline-qwen")
+    env.pop(key_env)
+    result = invoke("run", "--provider", provider, "--task", "测试任务", "--workspace", tmp_path, "--runs-dir", records, env=env)
     assert result.returncode == 2
-    assert "DEEPSEEK_API_KEY" in result.stderr
+    assert key_env in result.stderr
     assert not records.exists()
+
+
+def test_custom_provider_cli_uses_toml_and_real_loopback_stream(tmp_path: Path):
+    """启动本机合成端点，由真实 CLI 读取 TOML 并发送免密流式请求。"""
+    requests: list[tuple[str, str | None, dict]] = []  # 收集接口路径、认证头和请求体。
+
+    class CompatibleHandler(BaseHTTPRequestHandler):
+        """返回固定 Chat Completions SSE，避免访问外部供应商。"""
+
+        def do_POST(self):
+            """记录本机 POST 并返回完整 SSE，响应后结束连接。"""
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append((self.path, self.headers.get("Authorization"), body))
+            response = model_stream_response(200, json={"model": "loopback-actual", "choices": [{
+                "message": {"role": "assistant", "content": "本机响应完成"}, "finish_reason": "stop",
+            }]})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(response.content)
+
+        def log_message(self, format, *args):
+            """抑制 format 与 args 的默认日志，测试只保留结构化请求事实。"""
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), CompatibleHandler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config = tmp_path / "custom.toml"
+            config.write_text(f'''[custom_providers.custom-loopback]
+name = "本机测试"
+base_url = "http://localhost:{server.server_port}/v1/"
+default_model = "loopback-model"
+auth = "none"
+''', encoding="utf-8")
+            result = invoke("run", "--provider", "custom-loopback", "--task", "离线连通测试",
+                            "--workspace", tmp_path, "--config", config, "--runs-dir", tmp_path / "records", "--json")
+            assert result.returncode == 3, result.stderr  # 没有独立验收器时，CLI 用 3 表示执行完成但未验收。
+            summary = json.loads(result.stdout)
+            assert summary["execution_status"] == "completed" and summary["response_model"] == "loopback-actual"
+            assert len(requests) == 1
+            path, auth, body = requests[0]
+            assert path == "/v1/chat/completions" and auth is None
+            assert body["model"] == "loopback-model" and body["stream"] is True
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
 
 
 def test_config_error_does_not_echo_sensitive_value(tmp_path: Path):

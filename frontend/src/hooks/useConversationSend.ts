@@ -245,6 +245,9 @@ export function useConversationSend(
       mcp_tools: _previousMcpTools,
       auto_repair: _previousRepairChoice,
       memory: _previousMemoryChoice,
+      provider: _newTaskProvider,
+      requested_model: _newTaskModel,
+      role_models: _newTaskRoleModels,
       ...overrides
     } = draft;
     const submission = pending || {

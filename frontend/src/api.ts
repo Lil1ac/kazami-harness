@@ -18,6 +18,9 @@ import type {
   OptionsResponse,
   RunView,
   DesktopRunSettings,
+  ModelProvider,
+  CustomProviderSettings,
+  ModelProbeResult,
   JobView,
   TaskSnapshot,
 } from './types';
@@ -267,12 +270,30 @@ export function saveDesktopSettings(
   });
 }
 
-/** 将 secret 交给桌面宿主进行系统加密保存；空字符串明确清除，返回值不包含密钥正文。 */
-export function saveDesktopCredential(secret: string): Promise<{ key_configured: boolean }> {
-  return request('/api/desktop/credential', {
+/** 把 secret 加密到 provider 分区；空值清除，返回存在标记。 */
+export function saveDesktopCredential(provider: ModelProvider, secret: string, version?: string): Promise<{ key_configured: boolean }> {
+  return request('/api/desktop/credentials/' + provider, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ secret }),
+    body: JSON.stringify({ secret, version }),
+  });
+}
+
+/** 保存 definition，edit 为空时新建，提供时按原版本更新并返回稳定标识。 */
+export function saveCustomProvider(definition: CustomProviderSettings, edit?: { provider: ModelProvider; version: string }): Promise<{ provider: ModelProvider }> {
+  return request('/api/desktop/model-providers' + (edit ? '/' + edit.provider : ''), {
+    method: edit ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(edit ? { definition, version: edit.version } : definition),
+  });
+}
+
+/** 用固定合成消息探测 provider 的 version，返回逐项状态。 */
+export function probeModelProvider(provider: ModelProvider, version: string): Promise<ModelProbeResult> {
+  return request('/api/model-providers/' + provider + '/probe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version }),
   });
 }
 

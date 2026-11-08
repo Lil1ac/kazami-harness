@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import { cancelSubagent, errorMessage, getSubagent, getSubagentDiff, discardSubagentWorkspace, patchUrl } from '../api';
 import { duration, modelFailureLabel } from '../format';
+import { modelLabel } from '../modelSelection';
 import { MarkdownMessage } from './MarkdownMessage';
 import { EventTrail } from './EventTrail';
 import { ContextPanel } from './ContextPanel';
@@ -99,15 +100,15 @@ function SubagentDetails({
       <p className="agent-objective">{record.objective}</p>
       <div className="agent-detail-meta">
         <span>{record.role === 'develop' ? '开发' : record.role === 'explore' ? '探索' : '审阅'}</span>
+        <span title={'请求模型：' + record.model.requested_model}>{modelLabel(record.model, record.response_model, record.provider_name)}</span>
         <span>{duration(record.elapsed_seconds * 1000)}</span>
-        <span>{(record.usage.total_tokens ?? 0).toLocaleString()} token</span>
       </div>
       {active && (data?.subagent.status ?? record.status) === 'running' && (
         <Button danger loading={stopping} onClick={stopChild}>
           停止此子任务
         </Button>
       )}
-      {modelFailureLabel(record.stop_reason) && <Alert type="error" title={modelFailureLabel(record.stop_reason)} description="请检查系统受信任证书；修正后再明确接续。" />}
+      {modelFailureLabel(record.stop_reason) && <Alert type="error" title={modelFailureLabel(record.stop_reason)} />}
       {stopError && <Alert type="error" title={stopError} />}
       <details className="agent-runtime">
         <summary>执行信息</summary>
@@ -130,8 +131,9 @@ function SubagentDetails({
           </p>
         )}
         <p className="muted">
-          {(record.usage.total_tokens ?? 0).toLocaleString()} token
-          {!record.usage_complete || record.status === 'running' ? ' · 已知部分' : ''}
+          {record.usage_complete || (record.usage.total_tokens ?? 0) > 0
+            ? `${(record.usage.total_tokens ?? 0).toLocaleString()} token${record.usage_complete ? '' : ' · 已知部分'}`
+            : '暂无已知用量'}
           ，已计入父运行；子时限 {record.timeout_seconds.toFixed(1)} 秒。
         </p>
         {record.cleanup_status !== 'not_needed' && <p>进程清理：{record.cleanup_status === 'complete' ? '已完成' : record.cleanup_status === 'unknown' ? '结果不明' : '未完成'}</p>}

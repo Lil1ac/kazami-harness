@@ -56,7 +56,9 @@ def test_manual_run_persistent_origin_notifications_and_idempotence(tmp_path: Pa
         """驱动规则创建、真实产物、历史、已读与重复请求，返回None。"""
         app, workspace, model = application(tmp_path, [reply(call("write_file", path="report.txt", content="巡检完成")), reply(text="完成")])
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
-            created = await client.post("/api/automations", json=definition())
+            request = definition()
+            request["task"]["config"] = {"provider": "qwen", "requested_model": "qwen-plus"}
+            created = await client.post("/api/automations", json=request)
             assert created.status_code == 201, created.text
             rule = created.json()
             assert not rule["enabled"] and len(rule["next_times"]) == 5 and not model.requests
@@ -68,6 +70,7 @@ def test_manual_run_persistent_origin_notifications_and_idempotence(tmp_path: Pa
             assert workspace.joinpath("report.txt").read_text(encoding="utf-8") == "巡检完成"
             run = (await client.get("/api/runs/" + fire["run_id"])).json()
             assert run["automation"]["rule_id"] == rule["id"]
+            assert run["config"]["provider"] == "qwen" and run["config"]["requested_model"] == "qwen-plus"
             assert (await action(client, rule, "run", identifier)).status_code == 200
             assert len((await client.get(f"/api/automations/{rule['id']}/history")).json()["items"]) == 1
             messages = (await client.get("/api/automation-notifications")).json()["items"]

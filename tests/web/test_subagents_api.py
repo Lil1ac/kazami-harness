@@ -90,7 +90,7 @@ def test_interrupted_parent_reconstructs_subagent_counts_without_replay(tmp_path
         store = RunStore.create(root, manifest)
         store.append("run_started", {"messages": [], "tools": []})
         store.append("model_request_started", {"model_turn": 1})
-        record = SubagentRecord(run_id=uuid4(), title="未结束研究", objective="检查调用方", role="explore", max_model_turns=4, max_tool_calls=8, timeout_seconds=60.0, model_turns=2, tool_calls=1, usage={"total_tokens": 20})
+        record = SubagentRecord(run_id=uuid4(), title="未结束研究", objective="检查调用方", role="explore", model={"provider": "deepseek", "requested_model": "deepseek-flash"}, max_model_turns=4, max_tool_calls=8, timeout_seconds=60.0, model_turns=2, tool_calls=1, usage={"total_tokens": 20})
         store.append("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
         store.append("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
         model = ScriptModel([])

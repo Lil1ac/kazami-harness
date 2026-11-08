@@ -35,6 +35,35 @@ const gitProject: LocalProjectOption = {
   branch: 'main',
 }; // 可不配置测试的Git项目。
 
+it('新会话把明确选择的 Qwen 供应商与模型成对提交', async () => {
+  // 界面选择与请求保持一致，凭据仅用于决定是否可发送。
+  setup({ model_providers: { ...options.model_providers, qwen: { ...options.model_providers.qwen, key_configured: true } } });
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: '会话模型' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'Qwen · qwen-plus' }));
+  fireEvent.change(screen.getByLabelText('任务描述'), { target: { value: '使用通义检查测试项目' } });
+  fireEvent.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(() => expect(createRun).toHaveBeenCalledWith(expect.objectContaining({
+    config: expect.objectContaining({ provider: 'qwen', requested_model: 'qwen-plus' }),
+  }), expect.anything()));
+});
+
+it('本机免密服务商可以提交并携带当前端点版本', async () => {
+  // 免密连接的凭据状态为 false，仍允许发送，端点版本随请求冻结。
+  const version = 'a'.repeat(64);
+  setup({ model_providers: { ...options.model_providers, 'custom-local': {
+    name: '本机兼容服务', default_model: 'local-model', base_url: 'http://127.0.0.1:11434/v1',
+    version, api_key_env: null, auth: 'none', enabled: true, key_configured: false,
+  } } });
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: '会话模型' }));
+  fireEvent.click(await screen.findByRole('option', { name: '本机兼容服务 · local-model' }));
+  fireEvent.change(screen.getByLabelText('任务描述'), { target: { value: '使用本机模型' } });
+  fireEvent.click(screen.getByRole('button', { name: '开始执行' }));
+  await waitFor(() => expect(createRun).toHaveBeenCalledWith(expect.objectContaining({
+    config: expect.objectContaining({ provider: 'custom-local', requested_model: 'local-model' }),
+    model_versions: { 'custom-local': version },
+  }), expect.anything()));
+});
+
 /** 在真实查询、路由和配置上下文中挂载表单；remember决定是否恢复该项目编号。 */
 function setup(extra: Partial<OptionsResponse> = {}, remember = true, busy: string | null = null) {
   const configured: OptionsResponse = { ...options, recent_projects: [folder], ...extra };
@@ -171,7 +200,7 @@ it('选择已有项目保留草稿并重置隔离执行与自动修复授权', a
   expect(vi.mocked(createRun).mock.calls[0][0]).toMatchObject({
     project_id: 'other',
     execution_mode: 'local',
-    config: { auto_repair: false },
+    config: { provider: 'deepseek', requested_model: 'deepseek-flash', auto_repair: false },
   });
 });
 
@@ -261,7 +290,7 @@ it('隔离Git提交使用用户指定基线，执行方式与来源一并发送'
     project_id: gitProject.id,
     execution_mode: 'isolated',
     base_ref: 'main',
-    config: { auto_repair: false },
+    config: { provider: 'deepseek', requested_model: 'deepseek-flash', auto_repair: false },
   });
 });
 

@@ -35,7 +35,7 @@ def test_desktop_download_uses_same_plan_artifact_and_configured_directory(plann
     preferences = PreferenceStore(config.project_dir / "desktop")
     destination = config.project_dir / "downloads"
     preferences.update(downloads_directory=destination)
-    host = DesktopHost(preferences, native, "offline-token", "offline-key")
+    host = DesktopHost(preferences, native, "offline-token", {"deepseek": "offline-key"})
     model = ScriptModel([reply(call("submit_plan", **PLAN))])
     app = create_app(config, RunConfig(tools=["read_file"]), config.project_dir / "records", model_client=model, desktop=host)
 

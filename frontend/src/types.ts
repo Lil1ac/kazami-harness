@@ -248,8 +248,21 @@ export interface ContextView {
   skill_error?: SkillFailure | null; // 所选技能读取失败的原因，无错误时为空。
 }
 
-/** 可序列化运行设置；api_key_env 只保存变量名，前端从不接收密钥值。 */
-export interface RunConfig {
+/** 宿主内置的模型供应商，不接受页面传入任意认证地址。 */
+export type ModelProvider = 'deepseek' | 'qwen' | `custom-${string}`;
+
+/** 主会话或子角色冻结的供应商和请求模型。 */
+export interface ModelSelection {
+  provider: ModelProvider; // 固定供应商标识。
+  requested_model: string; // 提交给该供应商的模型标识。
+}
+
+/** 可独立配置的角色，缺项继承父会话。 */
+export type RoleModels = Partial<Record<'explore' | 'review', ModelSelection>>;
+
+/** 可序列化运行设置；前端从不接收密钥值。 */
+export interface RunConfig extends ModelSelection {
+  custom_providers?: Record<string, CustomProviderSettings>; // 运行历史中的自定义连接定义，无密钥。
   mcp_tools?: import('./mcpTypes').McpToolSelection[]; // 本轮选中的外部工具及版本。
   hooks: { rules: import('./hookTypes').HookRule[]; project_enabled: boolean; max_calls: number; max_seconds: number; max_context_bytes: number }; // 宿主扩展策略，只读。
   permission_policy: PermissionPolicy; // 当前宿主权限上限，只读。
@@ -257,9 +270,7 @@ export interface RunConfig {
   memory: MemoryPolicy; // 独立控制本轮读取与候选，宿主预算只读。
   planning_policy: 'auto' | 'required'; // 宿主只读策略，required时自动入口也必须先批准，浏览器不能覆盖。
   auto_repair: boolean; // 公开项目测试失败时最多自动修复两次，默认关闭，不重置预算。
-  provider: 'deepseek'; // 当前宿主配置的供应商。
-  requested_model: string; // 本次请求使用的模型名称。
-  api_key_env: 'DEEPSEEK_API_KEY'; // 仅展示宿主环境变量来源。
+  role_models: RoleModels; // 宿主或新会话固定的角色覆盖。
   tools: ToolName[]; // 本次任务允许使用的工具集合。
   system_prompt: string; // 服务端系统提示词，只读展示。
   skill_roots?: string[]; // 宿主登记技能集合目录，只读且不能通过页面覆盖。
@@ -321,6 +332,7 @@ export interface RunResult {
   http_attempts: number; // 实际 HTTP 尝试次数，含重试。
   tool_calls: number; // 已接纳的工具调用次数。
   final_answer: string | null; // 最终模型原文，界面按受限Markdown展示。
+  response_model?: string | null; // 供应商最近一次执行响应的实际模型。
   artifacts: ArtifactRef[]; // 已登记的所有产物。
   artifact_status: 'pending' | 'complete' | 'incomplete'; // 文件收集状态，独立于执行和测试。
   artifact_warnings: string[]; // 采集受限或证据未完整保存的后端说明。
@@ -363,6 +375,9 @@ export interface SubagentRecord {
   title: string; // 委派标题。
   objective: string; // 主Agent指定的研究范围。
   role: 'explore' | 'review' | 'develop'; // 探索、审阅或隔离开发。
+  model: ModelSelection; // 委派接纳时冻结的模型配置。
+  provider_name?: string | null; // 自定义服务商在委派当时的名称。
+  response_model?: string | null; // 子运行收到的实际响应模型。
   task_id: string | null; // 可选关联工作项，不自动改变其状态。
   status:
     | 'running'
@@ -689,12 +704,41 @@ export interface OptionsResponse {
   recent_projects: LocalProjectOption[]; // 用户目录与宿主初始项目，按最近打开排序。
   folder_picker_available?: boolean; // 本机原生文件夹选择器是否受支持。
   config: RunConfig; // 服务端默认配置。
-  key_configured: boolean; // 进程中是否存在可用模型密钥。
+  model_providers: Record<ModelProvider, ModelProviderOption>; // 供应商默认模型和凭据配置状态。
   verifiers: VerifierOption[]; // 已登记验收程序。
   skills?: SkillOption[]; // 宿主技能目录元数据；正文只在所选运行中加载。
   active_run_ids: string[]; // 全部活动主运行，准备阶段由后台作业单独展示。
 }
 
+/** 供应商可公开的设置元数据，不含密钥与请求正文。 */
+export interface ModelProviderOption {
+  name: string; // 服务商显示名称。
+  default_model: string; // 选择供应商时提供的默认模型。
+  api_key_env: string | null; // 独立 Web 和 CLI 的宿主变量名称，桌面或免密为空。
+  auth: 'bearer' | 'none'; // 远程密钥认证或本机免密。
+  enabled: boolean; // 停用时保留定义供设置页处理。
+  key_configured: boolean; // 密钥格式符合本地要求，尚未代表远端认证成功。
+  base_url?: string; // 自定义连接的固定地址。
+  version?: string; // 自定义端点版本，供探测、提交与密钥写入核对。
+}
+
+/** 用户可编辑的自定义端点定义，密钥单独保存。 */
+export interface CustomProviderSettings {
+  name: string; // 显示名称。
+  base_url: string; // 兼容接口根地址。
+  default_model: string; // 默认模型 ID。
+  auth: 'bearer' | 'none'; // 本机回环可免密。
+  enabled: boolean; // 是否接受新任务和续跑。
+}
+
+/** 固定合成请求的探测结果，正文与供应商原始错误不会回传。 */
+export interface ModelProbeResult {
+  connection: 'passed' | 'failed' | 'not_tested'; // 请求是否到达接口。
+  authentication: 'passed' | 'failed' | 'not_required' | 'not_tested'; // 凭据是否通过。
+  stream: 'passed' | 'failed' | 'not_tested'; // 是否获得完整文字流。
+  tools: 'passed' | 'failed' | 'not_tested'; // 是否返回匹配的模拟调用。
+  error_code: string | null; // 统一错误码，成功时为空。
+}
 /** 桌面设置的公开部分；密钥只返回存在标记，会话令牌不进入前端状态。 */
 export interface DesktopSettings {
   downloads_directory: string; // 已保存的绝对下载目录，默认优先使用 D 盘。
@@ -703,8 +747,8 @@ export interface DesktopSettings {
 }
 
 /** 桌面跨启动保存的运行设置；不含技能选择、内部策略和任何凭据。 */
-export interface DesktopRunSettings {
-  requested_model: string; // 后续任务默认使用的模型。
+export interface DesktopRunSettings extends ModelSelection {
+  role_models: RoleModels; // 后续会话的独立角色模型。
   tools: ToolName[]; // 默认工具权限。
   limits: Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_timeout_seconds'>; // 三项总体预算。
 }
@@ -715,7 +759,9 @@ export interface ConfigOverrides {
   permission_mode?: PermissionMode; // 仅覆盖下一轮会话模式，不接受宿主策略。
   memory?: Pick<MemoryPolicy, 'use' | 'capture'>; // 下一 Run 的两个选择，不允许修改内部记忆预算。
   auto_repair?: boolean; // 本轮明确开启/关闭自动修复；缺省继承宿主或前轮。
+  provider?: ModelProvider; // 新会话可与模型一起覆盖，续轮固定。
   requested_model?: string; // 缺省沿用宿主模型。
+  role_models?: RoleModels; // 新会话角色覆盖，空映射代表全部继承。
   tools?: ToolName[]; // 缺省沿用宿主工具。
   skills?: string[]; // 缺省继承宿主或前轮选择，[] 明确清空。
   limits?: Partial<RunLimits>; // 仅覆盖明确填写的预算字段。
@@ -728,6 +774,7 @@ export type CreateRunRequest = {
   prompt: string; // 非空任务文本。
   execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated 仅用于主动创建 Git 工作树。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
+  model_versions?: Record<string, string>; // 页面看到的自定义端点版本，防止提交到变化后的地址。
 } & (
   | {
       workspace_id: string; // 普通任务的登记工作区 ID，与 project_id 互斥。

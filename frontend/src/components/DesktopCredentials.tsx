@@ -2,25 +2,38 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Input, Space } from 'antd';
 import { errorMessage, saveDesktopCredential } from '../api';
-import type { OptionsResponse } from '../types';
+import type { ModelProvider, OptionsResponse } from '../types';
+import { modelProviderName } from '../modelSelection';
 
-/** 输入并安全保存本机模型密钥；configured 只表示是否已配置，不回读正文。 */
-export function DesktopCredentials({ configured }: { configured: boolean }) {
+/** 输入并保存 provider 的密钥；configured 仅表示是否已配置。 */
+export function DesktopCredentials({ provider, configured, name, version }: {
+  provider: ModelProvider; // 密钥所属服务商。
+  configured: boolean; // 当前密钥分区是否有值。
+  name?: string; // 自定义服务商的显示名称。
+  version?: string; // 自定义连接版本，避免向旧页面已变更的端点保存密钥。
+}) {
   const cache = useQueryClient();
   const [secret, setSecret] = useState(''); // 仅输入期间保留在组件内存，保存或清除后立即置空。
   const [saving, setSaving] = useState(false); // 防止重复写入凭据库。
   const [error, setError] = useState<string | null>(null); // 后端受控失败说明，不含输入值。
+  const label = modelProviderName(provider, name) + ' API Key';
 
   /** 保存 value 或以空字符串明确清除；成功只更新存在标记，不把输入写入查询缓存。 */
   async function save(value: string): Promise<void> {
     setSaving(true);
     setError(null);
     try {
-      const result = await saveDesktopCredential(value);
+      const result = await (version ? saveDesktopCredential(provider, value, version) : saveDesktopCredential(provider, value));
       cache.setQueryData<OptionsResponse>(
         ['options'],
         /* 只合并存在状态，保持配置及活动任务不变。 */ (current) =>
-          current ? { ...current, ...result } : current,
+          current && current.model_providers[provider]?.version === version ? {
+            ...current,
+            model_providers: {
+              ...current.model_providers,
+              [provider]: { ...current.model_providers[provider], ...result },
+            },
+          } : current,
       );
       setSecret('');
     } catch (failure) {
@@ -32,15 +45,15 @@ export function DesktopCredentials({ configured }: { configured: boolean }) {
 
   return (
     <section>
-      <h2>模型密钥</h2>
+      <h2>{label}</h2>
       <Alert
         type={configured ? 'success' : 'warning'}
         showIcon
-        title={configured ? '已加密保存到本机' : '请配置 DeepSeek API Key'}
+        title={configured ? '已加密保存到本机' : '尚未配置'}
       />
       <Input.Password
-        aria-label="DeepSeek API Key"
-        placeholder={configured ? '输入新密钥以替换' : 'DeepSeek API Key'}
+        aria-label={label}
+        placeholder={configured ? '输入新密钥以替换' : label}
         value={secret}
         autoComplete="new-password"
         maxLength={2560}

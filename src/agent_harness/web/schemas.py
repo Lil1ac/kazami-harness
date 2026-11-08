@@ -10,7 +10,8 @@ from agent_harness.schemas import AutomationOrigin, PythonExecution, ContextView
 from agent_harness.projects import ProjectReview, ProjectWorkspace
 from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
-from agent_harness.schemas import MemorySelection
+from agent_harness.schemas import MemorySelection, ModelSelection
+from agent_harness.model_selection import ModelProvider, ModelRole, ModelVersion
 from agent_harness.permissions.models import ActionDecision, PermissionMode
 from agent_harness.mcp.models import McpToolSelection
 from agent_harness.runtime.pipeline import Stage
@@ -22,11 +23,20 @@ class RunConfigPatch(DataModel):
     permission_mode: PermissionMode | None = None  # None继承；只能选择会话模式，不能修改宿主规则。
     memory: MemorySelection | None = None  # None 继承，只开放使用和候选选择，不允许页面修改宿主限额。
     auto_repair: bool | None = None  # None继承；显式开启要求宿主公开项目测试，首版最多两次修复。
+    provider: ModelProvider | None = None  # None 继承；选择供应商时须同时明确模型。
     requested_model: str | None = Field(default=None, min_length=1, max_length=200)  # None 沿用宿主模型。
+    role_models: dict[ModelRole, ModelSelection] | None = None  # None 继承，空映射让全部角色继承父级。
     tools: list[ToolName] | None = Field(default=None, min_length=1)  # None 沿用宿主工具。
     limits: dict[str, JsonValue] | None = None  # 按预算字段局部合并，再由 RunLimits 严格校验。
     skills: list[str] | None = Field(default=None, max_length=8)  # None 沿用宿主或前轮选择；空列表明确清空。
     context: dict[str, JsonValue] | None = None  # 上下文策略按字段覆盖；不开放任意指令文件路径。
+
+    @model_validator(mode="after")
+    def model_pair(self) -> "RunConfigPatch":
+        """要求显式供应商与模型成对提交；返回自身，缺少模型时拒绝请求。"""
+        if self.provider is not None and self.requested_model is None:
+            raise ValueError("选择供应商时需要同时选择模型")
+        return self
 
 
 # 提交任务时不接受宿主任意路径、程序参数或密钥。
@@ -39,6 +49,7 @@ class CreateRunRequest(DataModel):
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)  # 固定提交引用，默认提交时 HEAD。
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 每次运行配置，不修改服务默认值。
+    model_versions: dict[ModelProvider, ModelVersion] | None = Field(default=None, max_length=3)  # 页面提交时看到的自定义端点版本，宿主作业可省略。
 
 
     @model_validator(mode="after")

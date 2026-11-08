@@ -12,6 +12,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
 from agent_harness.execution.budget import RunBudget
 from agent_harness.hooks.models import HookPolicy
+from agent_harness.model_selection import CustomProvider, DEFAULT_MODELS, MODEL_KEY_ENVS, ModelProvider, ModelRole
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -247,17 +248,29 @@ class MemoryPolicy(MemorySelection):
 
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
-class RunConfig(DataModel):
+class ModelSelection(DataModel):
+    """固定的一组供应商与模型标识，用于主运行和独立角色。"""
+
+    provider: ModelProvider = "deepseek"  # 请求和密钥归属，默认 DeepSeek。
+    requested_model: str = Field(default_factory=lambda data: DEFAULT_MODELS.get(data["provider"], ""), min_length=1, max_length=200)  # 自定义默认模型由宿主目录解析。
+
+    @model_validator(mode="after")
+    def validate_model_name(self) -> "ModelSelection":
+        """核对当前模型标识并返回自身；拒绝空白及首尾空格。"""
+        if not self.requested_model or self.requested_model.strip() != self.requested_model:
+            raise ValueError("模型名不能为空白或带首尾空格")
+        return self
+
+# 每轮固定的模型、执行策略与已选择的服务商定义。
+class RunConfig(ModelSelection):
+    custom_providers: dict[ModelProvider, CustomProvider] = Field(default_factory=dict, max_length=16)  # 宿主可登记的端点，运行清单只保存本轮选择。
     mcp_tools: list[McpToolSelection] = Field(default_factory=list, max_length=16)  # 本轮明确选择的外部工具及定义指纹；空列表不连接服务。
     hooks: HookPolicy = Field(default_factory=HookPolicy)  # 宿主规则及扩展开销上限，页面不能覆盖。
     permission_policy: PermissionPolicy = Field(default_factory=PermissionPolicy)  # 宿主权限上限，网页不能覆盖。
     permission_mode: PermissionMode = "workspace_edit"  # 会话研究、工作区编辑或严格审批模式。
     memory: MemoryPolicy = Field(default_factory=MemoryPolicy)  # 每轮冻结使用/学习选择及宿主注入限额。
     planning_policy: Literal["auto", "required"] = "auto"  # 宿主策略：auto由Agent判断；required在新任务开始即只读，网页不能覆盖。
-    provider: Literal["deepseek"] = "deepseek"
-    requested_model: str = Field(default="deepseek-flash", min_length=1)
-    # 只记录密钥来源名称；凭据值从不进入可序列化配置。
-    api_key_env: Literal["DEEPSEEK_API_KEY"] = "DEEPSEEK_API_KEY"
+    role_models: dict[ModelRole, ModelSelection] = Field(default_factory=dict)  # 探索/审阅覆盖；未登记角色继承父运行。
     tools: list[ToolName] = Field(
         default_factory=lambda: ["read_file"],
         min_length=1,
@@ -274,11 +287,38 @@ class RunConfig(DataModel):
     context: ContextPolicy = Field(default_factory=ContextPolicy)
     auto_repair: bool = False  # 明确开启后，公开项目测试失败最多追加两次修复；仍共用本轮全部预算。
 
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_custom_defaults(cls, values: object) -> object:
+        """对配置字典补充主模型和角色的自定义默认模型。非法字段继续由模型校验。"""
+        if not isinstance(values, dict) or not isinstance(providers := values.get("custom_providers"), dict):
+            return values
+
+        def resolve(selection: object) -> object:
+            """在 selection 省略模型时返回补全的副本，保持调用者原字典。"""
+            if not isinstance(selection, dict) or "requested_model" in selection or not isinstance(provider := selection.get("provider"), str):
+                return selection
+            definition = providers.get(provider)
+            if isinstance(definition, CustomProvider):
+                return {**selection, "requested_model": definition.default_model}
+            if isinstance(definition, dict) and "default_model" in definition:
+                return {**selection, "requested_model": definition["default_model"]}
+            return selection
+
+        result = resolve(values)
+        if isinstance(roles := values.get("role_models"), dict):
+            return {**result, "role_models": {role: resolve(selection) for role, selection in roles.items()}}
+        return result
+
     @model_validator(mode="after")
     def validate_config(self) -> "RunConfig":
         """校验模型、窗口及工具/技能选择，返回自身；重复或非法选择抛 ValueError。"""
         if not self.requested_model.strip() or not self.system_prompt.strip():
             raise ValueError("模型名和系统提示词不能为空白")
+        if any(provider in DEFAULT_MODELS for provider in self.custom_providers):
+            raise ValueError("自定义服务商不能覆盖内置服务商")
+        if any(provider not in DEFAULT_MODELS and provider not in self.custom_providers for provider in self.selected_providers()):
+            raise ValueError("所选服务商尚未登记")
         window = self.context.model_context_tokens
         if window is not None and window <= self.limits.model_max_output_tokens + self.context.token_safety_margin:
             raise ValueError("模型窗口必须大于输出预留与安全余量之和")
@@ -294,6 +334,34 @@ class RunConfig(DataModel):
         if len(self.skill_roots) != len(set(self.skill_roots)):
             raise ValueError("技能目录不能重复")
         return self
+
+    def selected_providers(self) -> set[str]:
+        """返回主模型与已选角色实际引用的服务商标识。"""
+        return {self.provider, *(item.provider for item in self.role_models.values())}
+
+    def freeze_models(self) -> "RunConfig":
+        """返回只保留当前选择的服务商快照，供运行清单和历史展示使用。"""
+        return self.model_copy(update={"custom_providers": {
+            provider: self.custom_providers[provider]
+            for provider in sorted(self.selected_providers() & self.custom_providers.keys())
+        }})
+
+    def model_versions(self) -> dict[str, str]:
+        """返回当前主模型和角色所用的自定义端点版本，不含凭据。"""
+        return {provider: self.custom_providers[provider].version
+                for provider in sorted(self.selected_providers() & self.custom_providers.keys())}
+
+    @property
+    def api_key_env(self) -> str | None:
+        """返回当前供应商的环境变量名。桌面自定义密钥与免密端点可以为空。"""
+        definition = self.custom_providers.get(self.provider)
+        return definition.api_key_env if definition is not None else MODEL_KEY_ENVS[self.provider]
+
+    @property
+    def requires_model_key(self) -> bool:
+        """判断当前请求是否需要提供供应商 Bearer 凭据。"""
+        definition = self.custom_providers.get(self.provider)
+        return definition is None or definition.auth == "bearer"
 
 
 # 宿主预先指定的验收程序及其工作目录、超时；描述入口，不负责执行验收。
@@ -521,6 +589,9 @@ class SubagentRecord(DataModel):
     team_id: str | None = None  # 宿主绑定的持久团队编号；普通委派为空。
     team_member_id: str | None = None  # 稳定成员身份，跨审批和多个执行段保持不变。
     role: Literal["explore", "review", "develop"]  # 探索、审阅或隔离开发职责。
+    model: ModelSelection  # 接纳委派时固定的供应商与请求模型。
+    provider_name: str | None = None  # 历史展示的自定义服务商名称，内置服务商使用固定名称。
+    response_model: str | None = None  # 最近成功响应的实际模型；尚未获得响应时为空。
     task_id: UUID | None = None  # 可选同会话任务编号，不表示任务已完成。
     status: Literal["running", "waiting_input", "completed", "failed", "cancelled", "timed_out", "limit_exceeded", "interrupted"] = "running"  # 可信执行状态；缺终态且父任务已停止时为 interrupted。
     cleanup_status: Literal["not_needed", "complete", "unknown", "incomplete"] = "not_needed"  # 子命令最坏清理状态，父结果聚合不重复计量。
@@ -658,6 +729,7 @@ class RunResult(DataModel):
     http_attempts: int = Field(default=0, ge=0)
     tool_calls: int = Field(default=0, ge=0)
     final_answer: str | None = None
+    response_model: str | None = None  # 当前运行最近一个执行请求实际返回的模型。
     artifacts: list[ArtifactRef] = Field(default_factory=list)
     artifact_status: Literal["pending", "complete", "incomplete"] = "pending"  # 文件收集独立状态；不改变执行或验收结论。
     artifact_warnings: list[str] = Field(default_factory=list)  # 采集超限、文件变化或证据保存失败的受控说明。

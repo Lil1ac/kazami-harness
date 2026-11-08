@@ -139,9 +139,12 @@ async function start(): Promise<void> {
     args,
     cwd: app.isPackaged ? dataDirectory : repository,
     token,
-    apiKey: fixture
-      ? "offline-electron-fixture"
-      : await native.readCredential(),
+    modelKeys: fixture
+      ? { deepseek: "offline-electron-fixture" }
+      : {
+          deepseek: await native.readCredential("model", "deepseek"),
+          qwen: await native.readCredential("model", "qwen"),
+        },
     logFile: path.join(dataDirectory, "backend.log"),
     native: /* 显式离线验收固定选择测试项目；正式应用始终打开系统对话框。 */ (
       request,

@@ -1,13 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Skeleton } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, InputNumber, Select, Skeleton } from 'antd';
 import { CheckOutlined, UndoOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { McpSettings } from '../components/McpSettings';
 import { errorMessage, getOptions, saveDesktopSettings } from '../api';
 import { DesktopCredentials } from '../components/DesktopCredentials';
+import { CustomProviderPanel } from '../components/CustomProviderPanel';
 import { HookSettings } from '../components/HooksPanel';
 import { effectiveConfig, useConfigDraft } from '../config';
-import type { OptionsResponse, RunConfig, RunLimits, ToolName } from '../types';
+import type { ModelProvider, OptionsResponse, RoleModels, RunConfig, RunLimits, ToolName } from '../types';
 
 /** 用户可调整的总体预算；重试、清理和输出等内部限制由宿主配置维护。 */
 type TaskBudget = Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_timeout_seconds'>;
@@ -15,7 +16,9 @@ type TaskBudget = Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_ti
 /** 设置页仅收集直接影响下一次任务的模型、权限和总体预算。 */
 interface SettingsValues {
   downloads_directory?: string; // 桌面专用绝对下载目录，浏览器模式不提交。
+  provider: ModelProvider; // 默认使用的模型供应商。
   requested_model: string; // 提交前去除首尾空白，不能为空。
+  role_models: RoleModels; // 未填写的角色沿用父会话模型。
   tools: ToolName[]; // 用户明确允许的基础工具，至少选择一项。
   limits: TaskBudget; // 三项总体预算，不包含隐藏的运行器阈值。
 }
@@ -41,10 +44,15 @@ const toolOptions: { value: ToolName; label: string }[] = [
   { value: 'run_command', label: 'run_command · 执行命令' },
 ];
 
+/** 当前宿主可配置的角色及中文名称。 */
+const modelRoles = { explore: '探索', review: '审阅' } as const;
+
 /** 从完整 config 提取可编辑字段并返回独立表单值，不修改宿主配置或配置草稿。 */
 function settingsValues(config: RunConfig): SettingsValues {
   return {
+    provider: config.provider,
     requested_model: config.requested_model,
+    role_models: { ...config.role_models },
     tools: [...config.tools],
     limits: {
       max_model_turns: config.limits.max_model_turns,
@@ -74,16 +82,28 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
   const [applied, setApplied] = useState(false); // 仅确认浏览器草稿已更新，不代表任务启动。
   const [saving, setSaving] = useState(false); // 桌面设置保存期间防止重复提交。
   const [failure, setFailure] = useState<string | null>(null); // 保存失败的受控提示。
+  const providerOptions = (Object.keys(options.model_providers) as ModelProvider[]).map(
+    /* 停用项仍显示已保存配置，但不允许新选。 */ (value) => ({
+      value, label: options.model_providers[value].name, disabled: !options.model_providers[value].enabled,
+    }),
+  );
+  const builtinProviders = providerOptions.filter(/* 自定义连接在独立区管理。 */ ({ value }) => !options.model_providers[value].version);
 
   /** 保存校验后的 values；桌面持久化公开设置，浏览器合入草稿，失败时保留输入供重试。 */
   async function apply(values: SettingsValues): Promise<void> {
     setFailure(null);
+    const roleModels: RoleModels = {};
+    for (const role of Object.keys(modelRoles) as (keyof RoleModels)[]) {
+      const selection = values.role_models?.[role];
+      if (selection?.provider) roleModels[role] = { ...selection, requested_model: selection.requested_model.trim() };
+    }
+    const selection = { provider: values.provider, requested_model: values.requested_model.trim(), role_models: roleModels };
     if (options.desktop) {
       setSaving(true);
       try {
         const updated = await saveDesktopSettings(
           {
-            requested_model: values.requested_model.trim(),
+            ...selection,
             tools: values.tools,
             limits: values.limits,
           },
@@ -91,7 +111,9 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
         );
         cache.setQueryData(['options'], updated);
         const next = { ...draft };
+        delete next.provider;
         delete next.requested_model;
+        delete next.role_models;
         delete next.tools;
         delete next.limits;
         setDraft(next);
@@ -105,7 +127,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
     }
     setDraft({
       ...draft,
-      requested_model: values.requested_model.trim(),
+      ...selection,
       tools: values.tools,
       limits: { ...draft.limits, ...values.limits },
     });
@@ -115,10 +137,10 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
   /** 清空浏览器配置覆盖并恢复宿主表单值，返回 void；不更改活动任务的配置快照。 */
   function reset(): void {
     setDraft({});
-    form.setFieldsValue({
-      ...settingsValues(options.config),
-      downloads_directory: options.desktop?.downloads_directory,
-    });
+    const values = settingsValues(options.config);
+    form.setFieldsValue({ ...values, downloads_directory: options.desktop?.downloads_directory });
+    // 显式清理宿主未配置的角色，避免 rc-field-form 的对象合并保留原草稿。
+    form.setFieldValue('role_models', values.role_models);
     setApplied(false);
     setFailure(null);
   }
@@ -149,6 +171,10 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
         >
           <section className="settings-section">
             <h2>模型与工具</h2>
+            <Form.Item name="provider" label="默认供应商" rules={[{ required: true }]}>
+              <Select virtual={false} options={providerOptions} onChange={/* 切换后使用该供应商自己的默认标识。 */ (provider: ModelProvider) =>
+                form.setFieldValue('requested_model', options.model_providers[provider].default_model)} />
+            </Form.Item>
             <Form.Item
               name="requested_model"
               label="模型名称"
@@ -156,6 +182,24 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
             >
               <Input maxLength={200} />
             </Form.Item>
+            {(Object.keys(modelRoles) as (keyof RoleModels)[]).map((role) => (
+              <div key={role} className="limits-grid">
+                <Form.Item name={['role_models', role, 'provider']} label={modelRoles[role] + '供应商'}>
+                  <Select allowClear virtual={false} placeholder="继承会话" options={providerOptions}
+                    onChange={/* 继承时清空模型标识，显式选择时填入对应默认模型。 */ (provider?: ModelProvider) =>
+                      form.setFieldValue(['role_models', role, 'requested_model'], provider ? options.model_providers[provider].default_model : undefined)} />
+                </Form.Item>
+                <Form.Item noStyle dependencies={[[ 'role_models', role, 'provider' ]]}>
+                  {/* 只有独立供应商选择时才收集该角色模型。 */}
+                  {({ getFieldValue }) => getFieldValue(['role_models', role, 'provider']) && (
+                    <Form.Item name={['role_models', role, 'requested_model']} label={modelRoles[role] + '模型'}
+                      rules={[{ required: true, whitespace: true, message: '请填写模型名称' }]}>
+                      <Input maxLength={200} />
+                    </Form.Item>
+                  )}
+                </Form.Item>
+              </div>
+            ))}
             <Form.Item
               name="tools"
               label="允许的工具"
@@ -220,19 +264,15 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
           </div>
         </Form>
         <aside className="settings-aside">
-          {options.desktop ? (
-            <DesktopCredentials configured={options.key_configured} />
-          ) : (
+          {options.desktop ? builtinProviders.map(({ value }) => (
+            <DesktopCredentials key={value} provider={value} configured={options.model_providers[value].key_configured} />
+          )) : (
             <section>
               <h2>模型凭据</h2>
-              <p>
-                <code>{options.config.api_key_env}</code>
-              </p>
-              <Alert
-                type={options.key_configured ? 'success' : 'warning'}
-                showIcon
-                title={options.key_configured ? '宿主环境已配置' : '宿主环境未配置'}
-              />
+              {builtinProviders.map(({ value, label }) => (
+                <p key={value}>{label} · <code>{options.model_providers[value].api_key_env}</code>{' '}
+                  {options.model_providers[value].key_configured ? '已配置' : '未配置'}</p>
+              ))}
             </section>
           )}
           {options.desktop && (
@@ -246,6 +286,7 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
           <p className="muted">上下文、重试与输出限制由宿主 TOML 配置维护。</p>
         </aside>
       </div>
+      <CustomProviderPanel options={options} />
       <HookSettings projects={options.recent_projects} />
       <McpSettings />
     </div>

@@ -1,16 +1,18 @@
 """后台任务与 Electron 原生能力的边界，复用现有 HTTP/SSE 与目录登记链路。"""
 
+import asyncio
 import hmac
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from starlette.requests import Request
 
 from agent_harness.config import ConfigurationError
 from agent_harness.schemas import RunConfig
+from agent_harness.model_selection import CustomProvider, CustomProviderSettings, DEFAULT_MODELS, ModelProvider
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.service import WebServiceError
 from agent_harness.desktop.bridge import NativeClient
@@ -23,14 +25,15 @@ if TYPE_CHECKING:
 class DesktopHost:
     """保存会话和任务凭据内存副本，原生操作全部交给 Electron 父进程。"""
 
-    def __init__(self, store: PreferenceStore, native: NativeClient, token: str, api_key: str) -> None:
-        """绑定公开 store、原生 native 和私有 token/api_key；不回显或落盘凭据。"""
+    def __init__(self, store: PreferenceStore, native: NativeClient, token: str, model_keys: dict[ModelProvider, str]) -> None:
+        """绑定公开 store、原生 native、会话 token 和分区 model_keys；不回显或落盘凭据。"""
         self.store = store  # 公开设置的稳定存储。
         self.native = native  # 当前 Electron 父进程提供的受控能力。
         self.token = token  # 父进程生成并通过标准输入传入的会话随机值。
         self.cookie_name = "harness_desktop"  # Electron 为当前隔离会话设置的 HttpOnly Cookie。
         self.manager: WebRunManager | None = None  # create_app 绑定统一任务调度器。
-        self._key = api_key  # 只驻留内存；加密文件由 Electron 管理。
+        self._model_keys = dict(model_keys)  # 各供应商独立驻留内存，未配置的键可省略。
+        self._settings_write = asyncio.Lock()  # 序列化公开配置和密钥变更，防止凭据绑定到过期定义。
         self._picker_active = False  # 同时只允许一个原生选择请求。
 
     @property
@@ -40,7 +43,23 @@ class DesktopHost:
 
     def api_key(self, config: RunConfig) -> str:
         """返回 config 对应任务的内存凭据；只传 Runner，不写入环境或配置。"""
-        return self._key
+        definition = config.custom_providers.get(config.provider)
+        slot = definition.credential_slot(config.provider) if definition is not None else config.provider
+        return self._model_keys.get(slot, "")
+
+    async def load_custom_keys(self, config: RunConfig) -> None:
+        """为已登记的 config 读取当前凭据分区。加密库不可用时允许启动供用户修复。"""
+        async def load(slot: str) -> None:
+            """加载 slot 的密文对应值到内存。读取失败时保留未配置状态。"""
+            try:
+                value = await asyncio.wait_for(self.native.request("credential.read", {"provider": slot}), 5)
+            except (TimeoutError, ConfigurationError):
+                return
+            if isinstance(value, str):
+                self._model_keys[slot] = value
+
+        await asyncio.gather(*(load(definition.credential_slot(provider)) for provider, definition in config.custom_providers.items()
+                               if definition.auth == "bearer"))
 
     def authorized(self, request: Request) -> bool:
         """验证页面 Cookie 或主进程 Bearer token；其他浏览器不能访问桌面服务。"""
@@ -51,21 +70,61 @@ class DesktopHost:
         """返回桌面能力与公开目录；不返回会话令牌、密钥或 IPC 细节。"""
         return {"downloads_directory": str(self.store.value.downloads_directory), "data_directory": str(self.store.directory), "credential_source": "electron_safe_storage"}
 
-    def configure(self, settings: DesktopRunSettings, downloads: Path) -> dict:
+    async def configure(self, settings: DesktopRunSettings, downloads: Path) -> dict:
         """保存 settings 和绝对 downloads，返回公开状态；活动任务继续使用原快照。"""
         if self.manager is None:
             raise ConfigurationError("桌面服务尚未就绪。")
         preferences = DesktopPreferences(downloads_directory=downloads)
-        config = settings.apply(self.manager.run_config)
-        self.store.update(config=settings, downloads_directory=preferences.downloads_directory)
-        self.manager.run_config = config
+        async with self._settings_write:
+            config = settings.apply(self.manager.run_config)
+            await asyncio.to_thread(self.store.update, config=settings, downloads_directory=preferences.downloads_directory)
+            self.manager.run_config = config
         return self.public_settings()
 
-    async def save_key(self, secret: str) -> None:
-        """请求 Electron 加密保存 secret 后更新内存；空字符串清除，不修改活动调用。"""
-        value = secret.strip()
-        await self.native.request("credential.write", {"secret": value})
-        self._key = value
+    def _custom_definition(self, provider: ModelProvider, version: str | None) -> CustomProvider:
+        """读取 provider 的当前自定义定义并核对 version，过期编辑抛冲突。"""
+        definition = self.manager.run_config.custom_providers.get(provider)
+        if definition is None:
+            raise WebServiceError(404, "model_provider_unknown", "该自定义服务商不存在。")
+        if version != definition.version:
+            raise WebServiceError(409, "model_provider_changed", "服务商连接已变更，请刷新后重试。")
+        return definition
+
+    async def configure_provider(self, provider: ModelProvider | None, version: str | None, settings: CustomProviderSettings) -> ModelProvider:
+        """新增或按 version 修改自定义 settings，返回稳定标识。连接变化会切换凭据分区。"""
+        async with self._settings_write:
+            previous = self._custom_definition(provider, version) if provider is not None else None
+            provider = provider or f"custom-{uuid4().hex}"
+            generation = previous.generation if previous and (previous.base_url, previous.auth, previous.api_key_env) == (settings.base_url, settings.auth, None) else uuid4().hex
+            definition = CustomProvider(**settings.model_dump(), generation=generation)
+            current = self.manager.run_config
+            catalog = {**current.custom_providers, provider: definition}
+            if len(catalog) > 16:
+                raise WebServiceError(400, "model_provider_limit", "最多登记 16 个自定义服务商。")
+            config = current.model_copy(update={"custom_providers": catalog})
+            await asyncio.to_thread(self.store.update, custom_providers={**self.store.value.custom_providers, provider: definition})
+            self.manager.run_config = config
+            if previous and previous.connection_digest != definition.connection_digest:
+                old_slot = previous.credential_slot(provider)
+                self._model_keys.pop(old_slot, None)
+                try:
+                    await asyncio.wait_for(self.native.request("credential.write", {"provider": old_slot, "secret": ""}), 5)
+                except (TimeoutError, ConfigurationError):
+                    pass  # 旧分区已失效。清理失败不会将它绑定到新端点。
+            return provider
+
+    async def save_key(self, provider: ModelProvider, secret: str, version: str | None = None) -> None:
+        """加密保存 provider 的 secret 再更新内存；空字符串清除该分区，返回 None。"""
+        async with self._settings_write:
+            if provider in DEFAULT_MODELS:
+                slot = provider
+            else:
+                definition = self._custom_definition(provider, version)
+                if definition.auth != "bearer":
+                    raise WebServiceError(400, "model_key_not_required", "当前服务商使用本机免密连接。")
+                slot = definition.credential_slot(provider)
+            await self.native.request("credential.write", {"provider": slot, "secret": secret})
+            self._model_keys[slot] = secret
 
     async def mcp_credential(self, identifier: str) -> str:
         """读取 identifier 分区的系统加密凭据；返回内存明文，未配置为空，不回传页面。"""

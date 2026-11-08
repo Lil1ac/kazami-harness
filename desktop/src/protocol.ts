@@ -1,6 +1,7 @@
 /** 后台只允许请求固定原生能力；页面不能向主进程传入任意命令或文件 API。 */
 export type NativeMethod =
   | "folder.choose"
+  | "credential.read"
   | "credential.write"
   | "mcp.credential.read"
   | "mcp.credential.write"
@@ -24,6 +25,7 @@ export type NativeHandler = (request: NativeRequest) => Promise<unknown>;
 export function nativeRequest(value: unknown): NativeRequest {
   const methods: string[] = [
     "folder.choose",
+    "credential.read",
     "credential.write",
     "mcp.credential.read",
     "mcp.credential.write",

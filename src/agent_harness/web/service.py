@@ -16,7 +16,8 @@ import httpx
 from pydantic import ValidationError
 
 from agent_harness.config import ConfigurationError, load_config, prepare_task
-from agent_harness.providers.base import ModelClient
+from agent_harness.providers.base import ModelClient, ModelError
+from agent_harness.model_selection import DEFAULT_MODELS, MODEL_KEY_ENVS, valid_model_key
 from agent_harness.runtime.runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
 from agent_harness.schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
@@ -333,7 +334,7 @@ class WebRunManager:
             "config": self.run_config,
             "skills": SkillCatalog(self.run_config.skill_roots).discover(),
             "mcp_tools": self.mcp.options(),
-            "key_configured": bool(self.api_key(self.run_config)),
+            "model_providers": self.model_options(),
             "verifiers": [
                 {"id": item.id, "label": item.label, "description": item.description}
                 for item in self.web_config.verifiers
@@ -346,7 +347,50 @@ class WebRunManager:
 
     def api_key(self, config: RunConfig) -> str:
         """按 config 取得宿主凭据并返回；默认从环境读取，桌面注入凭据库，不记录值。"""
-        return self._key_provider(config) if self._key_provider is not None else os.environ.get(config.api_key_env, "")
+        if not config.requires_model_key:
+            return ""
+        return self._key_provider(config) if self._key_provider is not None else os.environ.get(config.api_key_env, "") if config.api_key_env else ""
+
+    def model_options(self) -> dict:
+        """返回内置与自定义服务商的公开定义和凭据状态，不读取给页面的密钥正文。"""
+        definitions = self.run_config.custom_providers
+        options = {
+            provider: {
+                "name": "DeepSeek" if provider == "deepseek" else "Qwen",
+                "default_model": default,
+                "api_key_env": MODEL_KEY_ENVS[provider],
+                "auth": "bearer",
+                "enabled": True,
+                "key_configured": valid_model_key(self.api_key(RunConfig(provider=provider))),
+            }
+            for provider, default in DEFAULT_MODELS.items()
+        }
+        for provider, definition in definitions.items():
+            config = RunConfig(provider=provider, custom_providers={provider: definition})
+            options[provider] = {
+                **definition.model_dump(exclude={"generation"}),
+                "version": definition.version,
+                "key_configured": valid_model_key(self.api_key(config)),
+            }
+        return options
+
+    def check_model_versions(self, versions: dict[str, str]) -> None:
+        """核对任务登记的 versions。已停用、移除或端点已变化时抛受控冲突。"""
+        current = self.run_config.custom_providers
+        for provider, version in versions.items():
+            definition = current.get(provider)
+            if definition is None or not definition.enabled:
+                raise WebServiceError(409, "model_provider_disabled", "所选自定义服务商已停用或移除。")
+            if definition.version != version:
+                raise WebServiceError(409, "model_provider_changed", "自定义服务商的连接已变更，请用当前配置新建会话。")
+
+    def role_model_key(self, config: RunConfig) -> str:
+        """核对独立角色 config 的当前端点并读取凭据，过期时返回可记录的模型错误。"""
+        try:
+            self.check_model_versions(config.model_versions())
+        except WebServiceError as error:
+            raise ModelError(error.code, error.message) from None
+        return self.api_key(config)
 
     def _project_option(self, preset: ProjectPreset) -> dict:
         """只读探测 preset 的固定 HEAD 与 dirty 标记；复用有界 Git，异常仅使该项目不可用。"""
@@ -417,7 +461,10 @@ class WebRunManager:
                 merged.update(patch)
                 if memory_policy is not None:
                     merged["memory"] = memory_policy
-                config = load_config(overrides=merged)
+                config = load_config(overrides=merged).freeze_models()
+                self.check_model_versions(config.model_versions())
+                if config.model_versions() != self.jobs.get(owner).get("model_versions", {}):
+                    raise WebServiceError(409, "model_provider_changed", "排队期间服务商连接已变更，请重新提交。")
                 source = preset.path if preset is not None else workspace.path
                 task = prepare_task(
                     request.prompt, source, verifier_path, config.limits.verifier_timeout_seconds,
@@ -464,13 +511,16 @@ class WebRunManager:
                 task = task.model_copy(update={"python_execution": execution})
                 manifest = manifest.model_copy(update={"task": task})
                 validate_auto_repair(manifest)
-            except (ConfigurationError, ProjectError, SnapshotError, ValidationError, PythonExecutionError) as error:
+                self.check_model_versions(config.model_versions())
+            except (ConfigurationError, ProjectError, SnapshotError, ValidationError, PythonExecutionError, WebServiceError) as error:
                 if prepared is not None:
                     try:
                         await asyncio.to_thread(self.projects.capture, identifier)
                         await asyncio.to_thread(self.projects.decide, identifier, "discard")
                     except ProjectError:
                         raise WebServiceError(503, "project_prepare_cleanup_failed", "任务尚未启动，项目工作树未能清理；请检查本地项目审阅记录。") from None
+                if isinstance(error, WebServiceError):
+                    raise
                 if isinstance(error, (ProjectError, SnapshotError)):
                     raise WebServiceError(400, error.code, error.message) from None
                 message = str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else "项目测试工作目录或导入路径无效。"
@@ -541,6 +591,7 @@ class WebRunManager:
                 file_changes=self.local_changes if item.manifest.origin is None or item.manifest.origin.execution_mode == 'local' else None,
                 project_manager=self.projects,
                 mcp_credential_provider=self.mcp_credential_provider,
+                model_credential_provider=self.role_model_key,
                 execution_lease=self.coordinator.lease,
             )
         except asyncio.CancelledError:

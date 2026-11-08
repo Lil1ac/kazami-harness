@@ -24,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    run = commands.add_parser("run", help="执行 DeepSeek 文件与命令任务")
+    run = commands.add_parser("run", help="执行模型文件与命令任务")
     task = run.add_mutually_exclusive_group(required=True)
     task.add_argument("--task", help="任务描述，建议写明工作区内文件名")
     task.add_argument("--task-file", type=Path, help="UTF-8 任务描述文件")
@@ -34,6 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="运行记录目录")
     run.add_argument("--python-executable", help="项目 Python 解释器；相对实际工作区，省略按 PATH 查找")
     run.add_argument("--model", help="覆盖 requested_model")
+    run.add_argument("--provider", help="选择内置或 TOML 登记的服务商")
     run.add_argument("--max-model-turns", type=int, help="覆盖模型轮次上限")
     run.add_argument("--auto-repair", action="store_true", default=None, help="公开项目测试失败后最多修复两次；验收清单须声明kind=project_tests")
     run.add_argument("--use-memory", action=argparse.BooleanOptionalAction, default=None, help="使用本项目已确认记忆；--no-use-memory 只关闭读取")
@@ -156,6 +157,8 @@ def _run(args: argparse.Namespace) -> int:
     启动预检失败时不创建记录；执行结束但未验收时返回 3。
     """
     overrides: dict = {}
+    if args.provider is not None:
+        overrides["provider"] = args.provider
     if args.model is not None:
         overrides["requested_model"] = args.model
     if args.max_model_turns is not None:
@@ -167,10 +170,10 @@ def _run(args: argparse.Namespace) -> int:
         overrides["memory"] = memory
     config = load_config(args.config, overrides)
     task = prepare_task(_prompt(args), args.workspace, args.verifier, config.limits.verifier_timeout_seconds, python_executable=args.python_executable)
-    manifest = RunManifest(run_id=uuid4(), task=task, config=config)
+    manifest = RunManifest(run_id=uuid4(), task=task, config=config.freeze_models())
     validate_auto_repair(manifest)
     # 密钥值只交给请求适配器；配置快照与事件中仅记录环境变量名称。
-    api_key = os.environ.get(config.api_key_env, "")
+    api_key = os.environ.get(config.api_key_env, "") if config.api_key_env else ""
     outcome = asyncio.run(_execute_with_signals(manifest, args.runs_dir, api_key))
     result = outcome.result
     run_dir, event_count = outcome.run_dir, outcome.event_count

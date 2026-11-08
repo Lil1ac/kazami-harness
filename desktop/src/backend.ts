@@ -2,6 +2,7 @@ import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { NativeHandler, nativeRequest } from "./protocol";
+import type { ModelProvider } from "./native";
 
 /** 后台启动输入；凭据只进入标准输入，不能拼进命令行、日志或公开设置。 */
 export interface BackendOptions {
@@ -9,7 +10,7 @@ export interface BackendOptions {
   args: string[]; // 固定模块及数据路径参数，不含任何密钥。
   cwd: string; // 与用户选择的任务目录无关的稳定后台启动目录。
   token: string; // 当前桌面实例的随机会话值。
-  apiKey: string; // 主进程刚解密的模型凭据，可为空。
+  modelKeys: Partial<Record<ModelProvider, string>>; // 主进程刚解密的供应商凭据，缺项可查看历史。
   logFile: string; // 后台标准错误输出的本机日志位置。
   native: NativeHandler; // 主进程的受控原生请求处理器。
   onUnexpectedExit: () => void; // 仅在非正常退出时通知窗口，不自动重放任务。
@@ -47,7 +48,9 @@ export class BackendProcess {
       PYTHONUTF8: "1",
       PYTHONUNBUFFERED: "1",
     };
-    delete environment.DEEPSEEK_API_KEY;
+    for (const key of Object.keys(environment)) {
+      if (["DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY"].includes(key.toUpperCase())) delete environment[key];
+    }
     delete environment.ELECTRON_RUN_AS_NODE;
     this.child = spawn(this.options.executable, this.options.args, {
       cwd: this.options.cwd,
@@ -137,10 +140,10 @@ export class BackendProcess {
     child.stdin.write(
       JSON.stringify({
         token: this.options.token,
-        api_key: this.options.apiKey,
+        model_keys: this.options.modelKeys,
       }) + "\n",
     );
-    this.options.apiKey = ""; // 传输后撤销启动选项中的明文副本。
+    this.options.modelKeys = {}; // 传输后撤销启动选项中的明文引用。
     try {
       return await ready;
     } catch (error) {

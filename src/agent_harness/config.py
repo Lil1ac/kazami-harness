@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
+from agent_harness.model_selection import CustomProvider
 from agent_harness.schemas import ContextPolicy, RunConfig, RunLimits, TaskSpec, VerifierSpec
 
 
@@ -18,6 +19,7 @@ class ConfigurationError(Exception):
 
 _FIELD_NAMES = (
     set(RunConfig.model_fields)
+    | set(CustomProvider.model_fields)
     | set(RunLimits.model_fields)
     | set(ContextPolicy.model_fields)
     | set(TaskSpec.model_fields)
@@ -85,6 +87,8 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
     if overrides is not None:
         sources.append(overrides)
     for source in sources:
+        if "provider" in source and source["provider"] != merged["provider"] and "requested_model" not in source:
+            merged.pop("requested_model", None)  # 改供应商时让统一模型字段按新供应商生成默认值。
         for key, value in source.items():
             # 预算、上下文和记忆策略逐字段覆盖；工具数组等值由高优先级来源整体替换。
             if key in {"limits", "context", "memory", "permission_policy", "hooks"} and isinstance(value, dict) and isinstance(merged[key], dict):
@@ -92,9 +96,12 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
             else:
                 merged[key] = value
     try:
-        return RunConfig.model_validate(merged)
+        config = RunConfig.model_validate(merged)
     except ValidationError as error:
         raise ConfigurationError(_validation_message("运行配置", error)) from None
+    if path is not None and any(item.auth == "bearer" and not item.api_key_env for item in config.custom_providers.values()):
+        raise ConfigurationError("TOML 中使用 API Key 的自定义服务商需要配置 api_key_env。")
+    return config
 
 
 def _resolve_directory(path: Path, label: str) -> Path:

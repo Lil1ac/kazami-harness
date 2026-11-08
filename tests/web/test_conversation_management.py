@@ -122,7 +122,7 @@ def test_desktop_deleted_artifact_never_reaches_native_bridge(tmp_path: Path):
     from agent_harness.web.api import create_app
     from tests.desktop.test_plan_export_integration import NativeDownload
     native = NativeDownload()
-    host = DesktopHost(PreferenceStore(tmp_path / 'desktop'), native, 'management-token', 'offline-management')
+    host = DesktopHost(PreferenceStore(tmp_path / 'desktop'), native, 'management-token', {'deepseek': 'offline-management'})
     app = create_app(config_for(tmp_path), RunConfig(tools=['write_file']), tmp_path / 'runs', model_client=NavigationModel(), desktop=host)
 
     async def scenario():

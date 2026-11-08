@@ -67,9 +67,10 @@ class NativeMock:
 def test_public_settings_survive_restart_without_credentials(tmp_path: Path, monkeypatch) -> None:
     """保存模型和下载目录后跨启动保留；资源定位不依赖当前目录，密钥不能混入配置。"""
     store = PreferenceStore(tmp_path)
-    settings = DesktopRunSettings(requested_model="  desktop-model ", tools=["read_file"], limits={"max_model_turns": 7, "max_tool_calls": 16, "run_timeout_seconds": 60.0})
+    settings = DesktopRunSettings(provider="qwen", requested_model="desktop-model", tools=["read_file"], limits={"max_model_turns": 7, "max_tool_calls": 16, "run_timeout_seconds": 60.0})
     store.update(config=settings, downloads_directory=tmp_path / "downloads")
     loaded = PreferenceStore(tmp_path)
+    assert loaded.value.config.provider == "qwen"
     assert loaded.value.config.requested_model == "desktop-model"
     assert loaded.value.downloads_directory == tmp_path / "downloads"
     assert "secret" not in store.path.read_text(encoding="utf-8")
@@ -87,7 +88,7 @@ def test_desktop_session_settings_and_native_credential_failures(tmp_path: Path)
     async def scenario() -> None:
         """通过真实 HTTP 中间件保存设置并模拟凭据故障；所有记录只包含存在状态。"""
         native = NativeMock(tmp_path)
-        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64, "desktop-test-secret")
+        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64, {"deepseek": "desktop-test-secret", "qwen": "qwen-test-secret"})
         web = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist")
         app = create_app(web, RunConfig(), tmp_path / "runs", desktop=host)
         async with app.router.lifespan_context(app):
@@ -106,11 +107,13 @@ def test_desktop_session_settings_and_native_credential_failures(tmp_path: Path)
                 assert (await client.put("/api/desktop/settings", json={**body, "downloads_directory": "relative"})).status_code == 422
                 assert host.store.path.read_bytes() == saved
                 native.failed = True
-                assert (await client.put("/api/desktop/credential", json={"secret": "replacement"})).status_code == 503
+                assert (await client.put("/api/desktop/credentials/deepseek", json={"secret": "replacement"})).status_code == 503
                 assert host.api_key(host.manager.run_config) == "desktop-test-secret"
                 native.failed = False
-                response = await client.put("/api/desktop/credential", json={"secret": ""})
+                response = await client.put("/api/desktop/credentials/deepseek", json={"secret": ""})
                 assert response.json() == {"key_configured": False}
+                assert host.api_key(RunConfig(provider="qwen")) == "qwen-test-secret"
+                assert "qwen-test-secret" not in options.text
                 assert "desktop-test-secret" not in host.store.path.read_text(encoding="utf-8")
                 assert (await client.post("/api/desktop/external", json={"url": "javascript:alert(1)"})).status_code == 400
     asyncio.run(scenario())
@@ -156,7 +159,7 @@ def test_parent_pipe_loss_cancels_active_run_and_exits(tmp_path: Path) -> None:
         lines.put(process.stdout.readline())
 
     try:
-        process.stdin.write(json.dumps({"token": token, "api_key": "offline-parent-pipe"}) + "\n")
+        process.stdin.write(json.dumps({"token": token, "model_keys": {"deepseek": "offline-parent-pipe"}}) + "\n")
         process.stdin.flush()
         threading.Thread(target=read_ready, daemon=True).start()
         ready = json.loads(lines.get(timeout=15))

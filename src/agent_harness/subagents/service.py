@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import Field
 
 from agent_harness.providers.base import ModelError
-from agent_harness.schemas import DataModel, DelegationOrigin, RunManifest, RunResult, SubagentRecord
+from agent_harness.schemas import DataModel, DelegationOrigin, ModelSelection, RunManifest, RunResult, SubagentRecord
 from agent_harness.storage.runs import RunHistory, RunStore, StorageError
 from agent_harness.subagents.profiles import PROFILES
 from agent_harness.subagents.reports import finalize_report
@@ -137,7 +137,7 @@ class SubagentController:
     def __init__(self, parent: "RunContext", client: "ModelClient", executor: "ToolExecutor"):
         """绑定parent预算、已开启client和父executor；返回None，不立即调用模型。"""
         self.parent = parent  # 共享预算与取消归属，委派不另占队列槽。
-        self.client = client  # 复用同一供应商连接及模型配置，不新增凭据来源。
+        self.client = client  # 角色使用父模型时复用已打开的父连接。
         self.executor = executor  # 读取父级工具白名单及当前规划、任务权限。
         self.jobs: dict[UUID, asyncio.Task] = {}  # 本轮已创建任务；终态仍保留以便幂等查询和检查异常。
         self.pending_reports: set[UUID] = set()  # 异步报告尚未通过等待/读取回执交给父模型，防止提前声称完成。
@@ -269,6 +269,7 @@ class SubagentController:
         """把child已提交计数写入record并发布父快照；返回None，存储错误立即上抛。"""
         record.model_turns, record.tool_calls, record.http_attempts = child.result.model_turns, child.result.tool_calls, child.result.http_attempts
         record.usage, record.usage_complete = child.result.usage.model_dump(), child.result.usage_complete
+        record.response_model = child.result.response_model
         record.elapsed_seconds, record.event_count = child.active_duration(), child.event_count
         record.cleanup_status = child.result.cleanup_status
         self.parent.emit("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
@@ -359,6 +360,9 @@ class SubagentController:
             from agent_harness.teams.models import MEMBER_TOOLS
             allowed = allowed.union(MEMBER_TOOLS)
         config = parent.manifest.config.model_copy(deep=True)
+        role_model = config.role_models.get(arguments.role)
+        if role_model is not None:
+            config = config.model_copy(update=role_model.model_dump())
         config.tools = [tool for tool in config.tools if tool in allowed]
         config.mcp_tools = [item for item in config.mcp_tools if item.name in allowed]
         config.skills = list(arguments.skill_names)
@@ -410,8 +414,11 @@ class SubagentController:
                                config=config, origin=parent.manifest.origin, automation=parent.manifest.automation, planning=planning.model_copy(deep=True),
                                delegation=DelegationOrigin(parent_run_id=parent.manifest.run_id, role=arguments.role, task_id=arguments.task_id, write_scope=scope,
                                    team_id=team_assignment["team_id"] if team_assignment else None, team_member_id=team_assignment["member_id"] if team_assignment else None))
+        provider_definition = config.custom_providers.get(config.provider)
         record = SubagentRecord(run_id=manifest.run_id, title=arguments.title.strip(), objective=arguments.objective,
-                                role=arguments.role, task_id=arguments.task_id, skill_names=config.skills, parent_reserve=reserve,
+                                role=arguments.role, model=ModelSelection(provider=config.provider, requested_model=config.requested_model),
+                                provider_name=provider_definition.name if provider_definition is not None else None,
+                                task_id=arguments.task_id, skill_names=config.skills, parent_reserve=reserve,
                                 log_parent_id=parent.manifest.run_id, workspace=str(workspace) if developing else None, write_scope=scope,
                                 max_model_turns=turns, max_tool_calls=calls, timeout_seconds=seconds)
         if team_assignment is not None:
@@ -565,7 +572,7 @@ class SubagentController:
                     write_scope=scope, previous_parent_id=record.log_parent_id, previous_run_id=record.run_id,
                     team_id=record.team_id, team_member_id=record.team_member_id))
             # 安全暂停没有待执行动作，但同样要继承此前预算；单独由启动器初始化，不能伪造审批。
-            new_record = record.model_copy(update={"run_id": identifier, "log_parent_id": parent.manifest.run_id,
+            new_record = record.model_copy(update={"run_id": identifier, "log_parent_id": parent.manifest.run_id, "response_model": None,
                 "status": "running", "pending_action": None, "report": None, "snapshot_status": "pending", "write_scope": scope,
                 "max_model_turns": turns, "max_tool_calls": max(1, calls), "timeout_seconds": seconds})
             assignment = None
@@ -626,7 +633,14 @@ class SubagentController:
                 from agent_harness.teams.controller import TeamController
                 executor.team = TeamController(child, self, record.team_member_id, executor=executor)
             async with asyncio.timeout_at(child.deadline):
-                await run_agent(child, self.client, executor, inherited_context=inputs)
+                parent_config = parent.manifest.config
+                if (config.provider, config.requested_model) == (parent_config.provider, parent_config.requested_model):
+                    await run_agent(child, self.client, executor, inherited_context=inputs)
+                else:
+                    if parent.role_client is None:
+                        raise ModelError("model_not_ready", "独立角色的模型客户端不可用。")
+                    async with parent.role_client(config) as client:
+                        await run_agent(child, client, executor, inherited_context=inputs)
             result.execution_status = "completed"
         except AgentStopped as error:
             result.execution_status, result.stop_reason = error.status, error.reason

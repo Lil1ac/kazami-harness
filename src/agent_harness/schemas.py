@@ -1,6 +1,7 @@
 """配置与运行记录的数据结构及校验规则；供应商消息由适配器保存。"""
 
 import hashlib
+import json
 import os
 import re
 from datetime import UTC, datetime
@@ -8,7 +9,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
 from agent_harness.execution.budget import RunBudget
 from agent_harness.hooks.models import HookPolicy
@@ -453,11 +454,79 @@ class PythonExecution(DataModel):
         return self
 
 
+# 限制浏览器每轮引用数量、单项与合计的 UTF-8 字节数；模型仍按实际输入计量。
+MAX_FILE_REFERENCES = 8
+MAX_REFERENCE_BYTES = 32 * 1024
+MAX_REFERENCE_TOTAL_BYTES = 64 * 1024
+
+
+class ProjectFileRange(DataModel):
+    """从实际工作区或选定 Git 提交引用一个 UTF-8 文件，行号从 1 开始且包含两端。"""
+
+    path: str = Field(min_length=1, max_length=4096)  # 以斜杠分隔的工作区相对文件名。
+    start_line: int | None = Field(default=None, ge=1)  # 两端均为空表示引用整个文件。
+    end_line: int | None = Field(default=None, ge=1)  # 有起始行时必须指定不早于起始行的结束行。
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        """验证 value 为规范项目相对文件名，返回原字符串；非法路径在读取前拒绝。"""
+        parts = value.split("/")
+        if any(part in {"", ".", ".."} or part.casefold() == ".git" for part in parts):
+            raise ValueError("请选择项目内的普通文件")
+        if "\\" in value or ":" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("文件名包含不可用字符")
+        return value
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ProjectFileRange":
+        """整文件不设行号，行段必须成对且有序；成功返回自身。"""
+        if self.start_line is None and self.end_line is None:
+            return self
+        if self.start_line is None or self.end_line is None or self.start_line > self.end_line:
+            raise ValueError("请指定有效的起始行和结束行")
+        return self
+
+
+class ProjectFileReference(ProjectFileRange):
+    """用户已核对的引用选择，正文由宿主读取，浏览器仅提交范围与版本。"""
+
+    version: str = Field(pattern=r"^[a-f0-9]{64}$")  # 绑定来源、范围和实际文件内容的 SHA-256。
+
+
+class ProjectFileSnapshot(ProjectFileReference):
+    """保存给本轮模型的原始 UTF-8 文本及其来源，历史预览读取同一份快照。"""
+
+    content: str = Field(max_length=MAX_REFERENCE_BYTES)  # 整文件或指定行段正文，保留原换行。
+    commit: str | None = Field(default=None, pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$")  # 首轮隔离任务的固定提交。
+
+    def reference(self) -> ProjectFileReference:
+        """返回绑定范围的引用摘要；对话列表及排队核对均只使用这些字段。"""
+        return ProjectFileReference(path=self.path, start_line=self.start_line, end_line=self.end_line, version=self.version)
+
+    @model_validator(mode="after")
+    def validate_size(self) -> "ProjectFileSnapshot":
+        """检查正文按 UTF-8 编码后的大小；超限拒绝，成功返回自身。"""
+        if len(self.content.encode("utf-8")) > MAX_REFERENCE_BYTES:
+            raise ValueError("项目文件引用超出大小限制")
+        return self
+
+
 class TaskSpec(DataModel):
-    prompt: str = Field(min_length=1)
-    workspace: Path
+    """本轮用户要求、运行目录和固定的项目文件引用。"""
+
+    prompt: str = Field(min_length=1)  # 用户输入的任务正文，用于会话标题及当前要求。
+    workspace: Path  # 本轮实际执行的绝对目录。
     python_execution: PythonExecution | None = None  # 接纳运行时固定；None 表示尚未准备，读取时不推断当前环境。
-    verifier: VerifierSpec | None = None
+    verifier: VerifierSpec | None = None  # None 表示本轮未登记独立验收。
+    file_references: list[ProjectFileSnapshot] = Field(default_factory=list, max_length=MAX_FILE_REFERENCES)  # 仅本轮显式选择的资料。
+
+    def user_content(self) -> str:
+        """返回交给模型的用户正文；引用作为独立 JSON 数据段附加，展示标题仍使用原要求。"""
+        if not self.file_references:
+            return self.prompt
+        values = [item.model_dump(exclude={"version"}, exclude_none=True) for item in self.file_references]
+        return self.prompt + "\n\n【用户引用的项目文件】\n" + json.dumps(values, ensure_ascii=False, separators=(",", ":"))
 
     @model_validator(mode="after")
     def validate_task(self) -> "TaskSpec":

@@ -1,0 +1,151 @@
+/* 短标签保持输入区紧凑，长文件名可从标题和预览中读取。 */
+.composer-file-references,
+.historical-file-references {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.composer-file-references {
+  margin: 0 0 6px;
+}
+.historical-file-references {
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.composer-file-references > .ant-btn {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 320px);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.file-reference-chip button,
+.file-reference-entries button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-reference-chip button:hover,
+.file-reference-entries button:hover {
+  background: var(--hover);
+}
+
+.file-reference-chip button:disabled {
+  cursor: default;
+  color: var(--muted);
+  background: transparent;
+}
+
+.file-reference-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  min-width: 0;
+  font-size: 12px;
+  text-align: start;
+}
+
+.file-reference-name > span:last-child,
+.file-reference-entries button > span:last-child,
+.file-reference-location code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-reference-remove {
+  padding: 3px 5px;
+  font-size: 10px;
+}
+
+.file-reference-dialog {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-reference-location,
+.file-reference-range,
+.file-reference-pagination {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.file-reference-range {
+  flex-wrap: wrap;
+}
+.file-reference-range .ant-input-number {
+  width: 74px;
+}
+.file-reference-dialog small {
+  color: var(--muted);
+}
+
+.file-reference-entries {
+  margin: 0;
+  padding: 0;
+  max-height: min(54dvh, 400px);
+  overflow-y: auto;
+  list-style: none;
+  border-block: 1px solid var(--line);
+}
+
+.file-reference-entries button {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 7px;
+  text-align: start;
+}
+
+.file-reference-code {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 12px;
+  padding: 10px 12px;
+  max-height: min(46dvh, 360px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-muted, var(--hover));
+}
+
+.file-reference-code pre {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+  overflow: visible;
+  font: 12px/1.55 var(--code);
+  white-space: pre;
+}
+
+.file-reference-line-numbers {
+  color: var(--muted);
+  text-align: end;
+  user-select: none;
+}
+
+.file-reference-empty {
+  margin: 0;
+  color: var(--muted);
+}

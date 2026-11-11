@@ -23,6 +23,11 @@ import type {
   ModelProbeResult,
   JobView,
   TaskSnapshot,
+  ProjectFileTarget,
+  ProjectFileListing,
+  ProjectFileRange,
+  ProjectFilePreview,
+  ProjectFileSnapshot,
 } from './types';
 import type {
   RuntimeView,
@@ -33,6 +38,33 @@ import type {
 } from './runtimeTypes';
 import type { HookCatalog } from './hookTypes';
 import type { AutomationDefinition, AutomationFire, AutomationGrant, AutomationList, AutomationNotification, AutomationReview, AutomationRule, AutomationSchedule } from './automationTypes';
+
+/** 读取 target 下 directory 的一页项目文件，offset 从零开始；signal 用于取消已离开的请求。 */
+export function listProjectFiles(
+  target: ProjectFileTarget, directory: string, offset: number, signal?: AbortSignal,
+): Promise<ProjectFileListing> {
+  return request('/api/file-references/list', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, directory, offset }), signal,
+  });
+}
+
+/** 预览 target 的 selection，返回可随普通消息提交核对的版本，不写项目文件。 */
+export function previewProjectFile(
+  target: ProjectFileTarget, selection: ProjectFileRange, signal?: AbortSignal,
+): Promise<ProjectFilePreview> {
+  return request('/api/file-references/preview', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, selection }), signal,
+  });
+}
+
+/** 读取 runId 的第 index 项固定资料，index 从零开始；历史只读取本轮快照。 */
+export function getProjectFileReference(
+  runId: string, index: number, signal?: AbortSignal,
+): Promise<ProjectFileSnapshot> {
+  return request('/api/runs/' + encodeURIComponent(runId) + '/file-references/' + index, { signal });
+}
 
 /** 读取持久规则和调度状态，不恢复执行。 */
 export function getAutomations(): Promise<AutomationList> {

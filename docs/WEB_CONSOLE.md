@@ -132,6 +132,9 @@ CLI 的 serve 只组装模块，不另建执行循环。核心目录和阅读路
 | GET /api/runs/{id}/diff | 固定隔离补丁或原目录逐轮文本差异，返回content/truncated/size_bytes |
 | GET /api/runs/{id}/patch | 下载已核对完整性的完整补丁，丢弃后仍可访问 |
 | GET /api/runs/{id}/artifacts | location+path必须匹配登记引用；preview=true返回文本预览，否则附件下载 |
+| POST /api/file-references/list | 按实际执行来源列出受控项目文件，目录内分页 |
+| POST /api/file-references/preview | 预览 UTF-8 文件或指定行段，返回与内容及来源绑定的版本 |
+| GET /api/runs/{id}/file-references/{index} | 按从零开始的顺序读取该轮固定引用，沿用会话读取权限 |
 
 RunView包含run_id、prompt、workspace、created_at、result、phase、event_count、last_seq、active、cancelling、interrupted、warnings、本次config、可空project审阅详情及可空context上下文详情；追加session_id、可空parent_run_id及从1开始的turn_index描述用户轮次。result继续使用RunResult及可空verification；毫秒、字节、字符等单位沿用后端定义。用户消息、工具输出、日志、指令和补丁按纯文本转义，Agent最终回答按受限Markdown渲染，不启用原始HTML。
 

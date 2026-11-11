@@ -786,6 +786,44 @@ export interface ConfigOverrides {
   context?: Partial<ContextPolicy>; // 逐字段覆盖本次上下文策略，未设置字段沿用宿主默认。
 }
 
+/** 项目内的文件或闭区间行段；两个行号都为空表示引用整文件。 */
+export interface ProjectFileRange {
+  path: string; // 按项目根解释的斜杠分隔路径。
+  start_line: number | null; // 从 1 开始的起始行。
+  end_line: number | null; // 包含在范围内的结束行。
+}
+
+/** 已预览的选择；宿主接纳时使用 version 核对真实内容。 */
+export interface ProjectFileReference extends ProjectFileRange {
+  version: string; // 绑定文件、范围及执行来源的版本。
+}
+
+/** 预览和历史均显示宿主读取的正文。 */
+export interface ProjectFileSnapshot extends ProjectFileReference {
+  content: string; // 保存原始换行的 UTF-8 片段。
+  commit: string | null; // 首轮 Git 隔离任务的提交，其他情况为空。
+}
+
+/** 新建按登记来源读取，续轮只传实际会话最新 Run。 */
+export type ProjectFileTarget =
+  | { workspace_id: string } // 普通目录。
+  | { project_id: string; execution_mode: 'local' | 'isolated'; base_ref: string } // Git 原目录或固定基线。
+  | { run_id: string }; // 已建立会话的当前工作区。
+
+/** 文件选择器的一层受控目录。 */
+export interface ProjectFileListing {
+  entries: { path: string; kind: 'file' | 'directory' }[]; // 可访问的文件和子目录。
+  next_offset: number | null; // 下一页起点，无后续时为空。
+  scan_limited: boolean; // 目录超过宿主扫描上限时说明结果有限。
+}
+
+/** 一次预览返回可添加的版本或供缩小范围的片段。 */
+export interface ProjectFilePreview {
+  snapshot: ProjectFileSnapshot | null; // 超出单项大小限制时为空。
+  line_count: number; // 原文件行数，空文件为零。
+  excerpt: string; // 超限范围的开头，仅供预览。
+}
+
 /** 提交任务的受控 HTTP 请求体；不支持模型密钥或任意验收命令。 */
 export type CreateRunRequest = {
   mode?: 'auto' | 'plan'; // 自动允许Agent主动规划；plan明确要求先规划。
@@ -793,6 +831,7 @@ export type CreateRunRequest = {
   execution_mode?: 'local' | 'isolated'; // 默认所选目录；isolated 仅用于主动创建 Git 工作树。
   config: ConfigOverrides; // 仅影响本次任务的配置覆盖。
   model_versions?: Record<string, string>; // 页面看到的自定义端点版本，防止提交到变化后的地址。
+  file_references?: ProjectFileReference[]; // 明确添加到本轮的项目资料，正文由宿主读取。
 } & (
   | {
       workspace_id: string; // 普通任务的登记工作区 ID，与 project_id 互斥。
@@ -824,6 +863,7 @@ export interface FollowupRequest {
   request_id: string; // 浏览器生成的 UUID。
   prompt: string; // 本次新增要求。
   config?: ConfigOverrides; // 默认沿用前轮，可用当前配置草稿覆盖。
+  file_references?: ProjectFileReference[]; // 普通续轮的已核对项目文件或行段。
 }
 
 /** 交付索引由该轮固定证据生成，点击后才加载完整差异和输出。 */
@@ -836,6 +876,7 @@ export interface ConversationDelivery {
 /** 连续对话的一轮；详细测试、事件与差异仍在独立运行详情。 */
 export interface ConversationTurn {
   delivery: ConversationDelivery | null; // 执行中或记录不可读时为空。
+  file_references?: ProjectFileReference[]; // 固定引用摘要；刚收到运行确认的本地投影等待会话刷新。
   stop_reason?: string | null; // 区分规划收尾、拒绝与开发结果；未建立终态时未知。
   run_id: string; // 本轮运行编号。
   parent_run_id: string | null; // 前轮编号。

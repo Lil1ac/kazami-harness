@@ -25,6 +25,7 @@ from agent_harness.web.schemas import QueueSettings, ConversationPage, CreatePro
 from agent_harness.web.service import WebRunManager, WebServiceError
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.jobs import JobRequest
+from agent_harness.web.file_references import install_file_reference_routes
 from agent_harness.web.conversation_management import ConversationError, ConversationChange, ConversationBatch, ConversationPurge
 from agent_harness.work.tasks import TaskError, TaskService, TaskCreate, TaskUpdate
 from agent_harness.work.planning import PlanningError
@@ -84,6 +85,7 @@ def create_app(
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
     install_memory_routes(app, manager)
+    install_file_reference_routes(app, manager)
     from agent_harness.web.automations import install_automation_routes
     install_automation_routes(app, manager)
     from agent_harness.web.runtime import install_runtime_routes

@@ -11,7 +11,8 @@ from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.projects import ProjectError
 from agent_harness.runtime.runner import validate_auto_repair, validate_execution
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution
-from agent_harness.schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec, ExecutionResume
+from agent_harness.schemas import HistorySource, RunManifest, RunOrigin, VerifierSpec, ExecutionResume, ProjectFileSnapshot
+from agent_harness.web.file_references import check_reference_budget
 from agent_harness.runtime.control import ControlStore
 from agent_harness.storage.sessions import SessionError, SessionStore, history_messages, payload_digest
 from agent_harness.storage.snapshots import SnapshotError
@@ -122,6 +123,7 @@ class ConversationService:
                     validation_status=view.result.validation_status,
                     created_at=view.created_at, interrupted=view.interrupted,
                     delivery=_delivery(view),
+                    file_references=[item.reference() for item in manifest.task.file_references],
                 )
                 if identifier == record.run_ids[-1]:
                     latest_history = history
@@ -151,8 +153,8 @@ class ConversationService:
             blocked = SessionError("conversation_inactive", "请先恢复会话，再继续发送或处理计划。")
         return ConversationView(title=management.title, management=management, source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, active_run_ids=[busy] if busy is not None else [], continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
 
-    async def submit(self, parent_id: UUID, request: FollowupRequest, *, run_id: UUID, job_id: str, memory_policy: dict):
-        """准备已接纳 request；parent_id 为最新轮，run_id/job_id 固定归属，memory_policy 为冻结策略，返回运行视图。"""
+    async def submit(self, parent_id: UUID, request: FollowupRequest, *, run_id: UUID, job_id: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]):
+        """准备已接纳 request；parent_id 为最新轮，run_id/job_id 固定归属，策略及引用由接纳时固定，返回运行视图。"""
         parent = self.manager._read_history(parent_id)
         session_id = parent.manifest.session_id or parent_id
         self.manager.management.require_active(str(session_id))
@@ -179,7 +181,7 @@ class ConversationService:
             raise SessionError('service_closing', '本地服务正在关闭。')
         if self.manager.active_for_session(str(session_id)) is not None or any(item[0] == session_id for item in self.manager._submissions):
             raise SessionError('run_busy', '当前会话正在准备或运行，请等待完成或取消。')
-        task = asyncio.create_task(self._start(parent_id, session_id, request, digest, run_id, job_id, memory_policy), name='harness-followup-prepare')
+        task = asyncio.create_task(self._start(parent_id, session_id, request, digest, run_id, job_id, memory_policy, file_references), name='harness-followup-prepare')
         self.manager._submissions[key] = task
         self.submission_digests[key] = digest
 
@@ -192,8 +194,8 @@ class ConversationService:
         task.add_done_callback(observe)
         return await asyncio.shield(task)
 
-    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str, identifier: UUID, owner: str, memory_policy: dict):
-        """核验 parent_id/session_id 与 request/digest，按 identifier/owner 准备新段并返回视图；memory_policy 固定记忆，失败不改父证据。"""
+    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str, identifier: UUID, owner: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]):
+        """核验请求及父轮归属，用冻结的记忆策略和文件引用准备新段；返回运行视图，失败保留父轮证据。"""
         async with self.manager._lock:
             if self.manager._closing:
                 raise SessionError('service_closing', '本地服务正在关闭。')
@@ -268,7 +270,9 @@ class ConversationService:
                 prompt = request.prompt.strip()
                 if not prompt:
                     raise SessionError('invalid_prompt', '追加要求不能为空白。')
-                task = parent.manifest.task.model_copy(update={'prompt': prompt})
+                # 历史输入随既有消息继承，当前轮展示与提交只携带本次显式选择的引用。
+                task = parent.manifest.task.model_copy(update={'prompt': prompt, 'file_references': file_references})
+                check_reference_budget(task, config.context.max_input_bytes)
                 manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, automation=parent.manifest.automation, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)

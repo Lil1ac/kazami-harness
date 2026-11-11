@@ -195,8 +195,8 @@ class ProjectManager:
         _, commit, dirty = self._inspect_base(preset, "HEAD")
         return {"head_commit": commit, "source_dirty": dirty, "branch": self._git(preset.path, ["rev-parse", "--abbrev-ref", "HEAD"]).decode("utf-8").strip()}
 
-    def _inspect_base(self, preset: ProjectPreset, base_ref: str) -> tuple[Path, str, bool]:
-        """校验宿主 Git 根项目并解析 base_ref，返回实体根目录、固定提交与源 dirty 状态。"""
+    def _resolve_base(self, preset: ProjectPreset, base_ref: str) -> tuple[Path, str]:
+        """将 preset 的 base_ref 解析为实体仓库根目录和固定提交；只查询 Git 元数据。"""
         repository = preset.path.resolve()
         if not repository.is_dir() or self._is_link(preset.path):
             raise ProjectError("project_unavailable", "项目目录不存在或不是可用的实体目录。")
@@ -214,6 +214,11 @@ class ProjectManager:
         commit_text = commit.decode().strip()
         if len(commit_text) not in (40, 64) or any(ch not in "0123456789abcdef" for ch in commit_text):
             raise ProjectError("project_ref_invalid", "Git 未返回有效的固定提交。")
+        return repository, commit_text
+
+    def _inspect_base(self, preset: ProjectPreset, base_ref: str) -> tuple[Path, str, bool]:
+        """核对 preset 的 base_ref 可用于建工作树，返回实体根目录、固定提交与源目录改动状态。"""
+        repository, commit_text = self._resolve_base(preset, base_ref)
         stages = self._git(repository, ["ls-tree", "-r", commit_text])
         if any(line.startswith(b"160000 ") for line in stages.splitlines()):
             raise ProjectError("project_submodule_unsupported", "当前版本暂不支持含子模块的项目。")

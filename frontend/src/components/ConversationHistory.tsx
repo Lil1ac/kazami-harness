@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Checkbox, Dropdown, Input, Pagination, Select } from 'antd';
 import { FilterOutlined, CheckSquareOutlined } from '@ant-design/icons';
@@ -7,9 +8,17 @@ import { errorMessage, getConversations, getOptions } from '../api';
 import { ConversationList } from './ConversationList';
 import { ConversationBatchActions } from './ConversationBatchActions';
 
+/** 会话生命周期分类的视觉和键盘顺序。 */
+const categories = [
+  { value: 'active', label: '正常对话' },
+  { value: 'archived', label: '已归档' },
+  { value: 'trashed', label: '回收站' },
+] as const;
+
 /** 全局与项目共用搜索、生命周期和分页；筛选在后端完成，批量选择仅限当前页。 */
 export function ConversationHistory({ projectId }: { projectId?: string }) {
   const [params, setParams] = useSearchParams();
+  const categoryId = useId(); // 分类标签及筛选列表面板的可访问标识。
   const [selecting, setSelecting] = useState(false); // 用户主动进入多选后才显示复选框。
   const [selected, setSelected] = useState<Set<string>>(new Set()); // 筛选或页码变化清空，绝不跨页隐式全选。
   const parsed = Number(params.get('page'));
@@ -66,6 +75,39 @@ export function ConversationHistory({ projectId }: { projectId?: string }) {
     }
     setParams(next);
   }
+
+  /** 切换生命周期 value；正常状态使用默认 URL，其余筛选条件保留。 */
+  function chooseCategory(value: (typeof categories)[number]['value']): void {
+    update({ state: value === 'active' ? '' : value });
+  }
+
+  /** 方向键循环切换分类，Home/End 直达两端，并将焦点移到新选中的标签。 */
+  function categoryKeys(event: KeyboardEvent<HTMLDivElement>): void {
+    const current = categories.findIndex(
+      /* 当前分类由 URL 决定，键盘与点击使用同一事实。 */ (item) => item.value === state,
+    );
+    const last = categories.length - 1;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowRight':
+        next = current === last ? 0 : current + 1;
+        break;
+      case 'ArrowLeft':
+        next = current <= 0 ? last : current - 1;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = last;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    chooseCategory(categories[next].value);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+  }
   /** 按checked切换id的本页选择；返回void，不变更会话管理状态。 */
   function select(id: string, checked: boolean): void {
     setSelected(
@@ -106,22 +148,23 @@ export function ConversationHistory({ projectId }: { projectId?: string }) {
           {selecting ? '完成多选' : '多选'}
         </Button>
       </div>
-      <div className="conversation-category-tabs" role="tablist" aria-label="会话分类">
-        {[
-          { value: 'active', label: '正常对话' },
-          { value: 'archived', label: '已归档' },
-          { value: 'trashed', label: '回收站' },
-        ].map(
+      <div
+        className="conversation-category-tabs"
+        role="tablist"
+        aria-label="会话分类"
+        onKeyDown={categoryKeys}
+      >
+        {categories.map(
           /* 分类直接切换服务端查询，保留搜索与当前项目范围。 */ (item) => (
             <button
               key={item.value}
               type="button"
               role="tab"
+              id={categoryId + '-' + item.value}
+              aria-controls={categoryId + '-panel'}
+              tabIndex={state === item.value ? 0 : -1}
               aria-selected={state === item.value}
-              onClick={
-                /* 切换分类重置分页。 */ () =>
-                  update({ state: item.value === 'active' ? '' : item.value })
-              }
+              onClick={/* 切换分类重置分页。 */ () => chooseCategory(item.value)}
             >
               {item.label}
             </button>
@@ -208,25 +251,27 @@ export function ConversationHistory({ projectId }: { projectId?: string }) {
           onDone={/* 批量成功项移除，失败项保持选择。 */ (failed) => setSelected(new Set(failed))}
         />
       )}
-      <ConversationList
-        items={items}
-        loading={query.isPending}
-        error={query.error ? errorMessage(query.error) : null}
-        showProject={!projectId}
-        selected={selecting ? selected : undefined}
-        onSelect={selecting ? select : undefined}
-      />
-      {(query.data?.total || 0) > 12 && (
-        <Pagination
-          current={page}
-          pageSize={12}
-          total={query.data?.total || 0}
-          showSizeChanger={false}
-          onChange={
-            /* 翻页只导航，不提交执行。 */ (value) => update({ page: String(value) }, false)
-          }
+      <div role="tabpanel" id={categoryId + '-panel'} aria-labelledby={categoryId + '-' + state}>
+        <ConversationList
+          items={items}
+          loading={query.isPending}
+          error={query.error ? errorMessage(query.error) : null}
+          showProject={!projectId}
+          selected={selecting ? selected : undefined}
+          onSelect={selecting ? select : undefined}
         />
-      )}
+        {(query.data?.total || 0) > 12 && (
+          <Pagination
+            current={page}
+            pageSize={12}
+            total={query.data?.total || 0}
+            showSizeChanger={false}
+            onChange={
+              /* 翻页只导航，不提交执行。 */ (value) => update({ page: String(value) }, false)
+            }
+          />
+        )}
+      </div>
     </section>
   );
 }

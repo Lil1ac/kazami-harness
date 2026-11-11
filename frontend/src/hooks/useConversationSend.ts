@@ -11,6 +11,7 @@ import type {
   HumanDecision,
   RunView,
   JobView,
+  ProjectFileReference,
 } from '../types';
 
 /** 未确认的发送；父轮和完整载荷一起固定，重试只能确认同一请求。 */
@@ -77,6 +78,7 @@ export function useConversationSend(
   run: RunView | undefined,
   conversation: ConversationView,
   onConfirmed: (view: RunView) => void,
+  fileReferences: ProjectFileReference[] = [],
 ) {
   const { draft } = useConfigDraft();
   const cache = useQueryClient();
@@ -267,6 +269,7 @@ export function useConversationSend(
         request_id: crypto.randomUUID(),
         prompt: text.trim(),
         ...(mode === 'plan' ? { mode } : {}),
+        ...(fileReferences.length ? { file_references: structuredClone(fileReferences) } : {}),
         // 冻结完整配置，后续修改草稿或技能时不改变幂等重试的原请求。
         config: structuredClone({
           ...overrides,

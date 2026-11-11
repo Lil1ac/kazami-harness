@@ -5,7 +5,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
-import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
+import type {
+  LocalProjectOption,
+  OptionsResponse,
+  CreateRunRequest,
+  ProjectFileTarget,
+} from '../types';
 import { modelChoices, modelChoiceValue, modelLabel } from '../modelSelection';
 import { SkillSelector } from './SkillSelector';
 import { McpSelector } from './McpSelector';
@@ -13,6 +18,8 @@ import { ProjectSelector } from './ProjectSelector';
 import { ModeSelect } from './ModeSelect';
 import { PermissionSelect } from './PermissionPanel';
 import { ExecutionContext } from './ExecutionContext';
+import { ProjectReferences } from './ProjectReferences';
+import { useProjectFileDraft } from '../hooks/useProjectFileDraft';
 
 /** 新任务的可编辑内容；项目来源由用户明确选择，不从示例默认推断。 */
 interface TaskValues {
@@ -124,6 +131,17 @@ export function TaskForm({
     choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === targetId) ||
     (opened?.id === targetId ? opened : undefined);
   const isolated = frozen ? frozen.execution_mode === 'isolated' : createWorktree;
+  const baseRef = Form.useWatch('base_ref', { form, preserve: true })?.trim() || 'HEAD';
+  const referenceTarget: ProjectFileTarget | undefined = selected?.available
+    ? selected.kind === 'project'
+      ? {
+          project_id: selected.id,
+          execution_mode: isolated ? 'isolated' : 'local',
+          base_ref: isolated ? frozen?.base_ref || baseRef : 'HEAD',
+        }
+      : { workspace_id: selected.id }
+    : undefined;
+  const references = useProjectFileDraft(draftKey, referenceTarget);
   const repairAvailable = selected?.kind === 'project' && Boolean(selected.test_argv?.length); // 只使用已保存的公开测试，不取未保存的命令草稿。
   useEffect(
     /* 换项目必须重新选择，避免把旧项目的自动修复授权带到其他目录。 */ () => {
@@ -166,6 +184,7 @@ export function TaskForm({
       } catch {
         /* 成功运行不依赖浏览器存储。 */
       }
+      references.change([]);
       void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
       navigate('/jobs/' + run.id);
@@ -227,6 +246,7 @@ export function TaskForm({
         auto_repair: repairAvailable && autoRepair,
       },
       ...(Object.keys(versions).length ? { model_versions: versions } : {}),
+      ...(references.items.length ? { file_references: references.items } : {}),
     });
   }
   const error = mutation.error;
@@ -340,6 +360,13 @@ export function TaskForm({
               placeholder="修复一个问题、实现一个功能，或分析项目中的文件…"
             />
           </Form.Item>
+          <ProjectReferences
+            target={referenceTarget}
+            scope={references.scope}
+            items={frozen?.file_references ?? references.items}
+            onChange={references.change}
+            disabled={projectBusy || confirmingSubmission || mutation.isPending}
+          />
           <div className="start-input-toolbar">
             <div className="start-send-area">
               <ModeSelect

@@ -1,0 +1,31 @@
+/* 查找控件占一行，窄屏优先保留输入和前后跳转。 */
+.conversation-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.conversation-search .ant-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.conversation-search-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-search .ant-btn {
+  flex: 0 0 auto;
+}
+.conversation-search-hit {
+  outline: 2px solid var(--accent, #7770eb);
+  outline-offset: 3px;
+  border-radius: 6px;
+}

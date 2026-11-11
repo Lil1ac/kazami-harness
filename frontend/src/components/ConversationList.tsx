@@ -1,10 +1,12 @@
+import { useLayoutEffect, useRef } from 'react';
 import { Alert, Checkbox, Empty, Skeleton, Tag } from 'antd';
 import { PushpinOutlined } from '@ant-design/icons';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import type { ConversationSummary } from '../types';
 import { dateTime } from '../format';
 import { RunStatus } from './RunStatus';
 import { ConversationActions } from './ConversationActions';
+import { rememberConversationList, restoreConversationList } from '../conversationNavigation';
 
 /** 由最新轮精简状态复用已有展示规则，关联异常时不把旧轮成功当成当前成功。 */
 export function ConversationStatus({ item }: { item: ConversationSummary }) {
@@ -29,6 +31,17 @@ export function ConversationList({
   selected?: Set<string>; // 当前页批量选择；未提供时不显示复选框。
   onSelect?: (id: string, checked: boolean) => void; // 只改变选择，不发起任务或管理请求。
 }) {
+  const location = useLocation();
+  const listPath = location.pathname + location.search; // 保留项目、状态、关键词和页码。
+  const restored = useRef<string | null>(null); // 同一次导航只在列表首次就绪后恢复。
+  useLayoutEffect(
+    /* 等真实行渲染后再恢复，避免加载占位将滚动位置夹到顶部。 */ () => {
+      if (loading || restored.current === location.key) return;
+      restored.current = location.key;
+      restoreConversationList(listPath);
+    },
+    [listPath, loading, location.key],
+  );
   return (
     <div className="conversation-list">
       {error && <Alert type="error" title="无法刷新会话" description={error} />}
@@ -60,6 +73,21 @@ export function ConversationList({
                   }
                   aria-label={'继续对话：' + item.title}
                   title={item.error || undefined}
+                  state={{ conversationList: listPath }}
+                  onClick={
+                    /* 普通点击或键盘打开会话时保存列表位置；在新标签打开不会离开本页。 */ (
+                      event,
+                    ) => {
+                      if (
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.shiftKey &&
+                        !event.altKey &&
+                        !['trashed', 'purging'].includes(item.management.state)
+                      )
+                        rememberConversationList(listPath);
+                    }
+                  }
                 >
                   <div className="start-run-title">
                     <strong>

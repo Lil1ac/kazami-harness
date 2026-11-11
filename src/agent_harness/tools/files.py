@@ -7,6 +7,8 @@ import os
 import stat
 import tempfile
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Literal
 
@@ -114,22 +116,10 @@ def _inspect_open_file(stream: BinaryIO, max_bytes: int) -> tuple[str, NewlineSt
     raise FileToolError("file_changed", "文件在读取期间变大，请重新读取后编辑。")
 
 
-def read_file(
-    workspace: Path,
-    runs_root: Path,
-    arguments: ReadFileArguments,
-    preview_chars: int,
-    max_edit_bytes: int,
-) -> dict:
-    """读取工作区普通文件的一页UTF-8内容，返回分页位置、大小、完整内容指纹与换行类型。
-
-    workspace/runs_root 限定访问范围；arguments 的 offset/max_bytes 均为字节，
-    preview_chars 限制可见字符。大小不超过 max_edit_bytes 的文件额外按有界块计算
-    sha256与newline，供edit_file校验和选择原文；更大文件仍可分页，两字段均为None。
-    newline为lf/crlf/cr/mixed/none之一，始终描述完整文件而非当前页，不整文件加载。
-    读取前后状态变化、编码或偏移错误转为 FileToolError；本函数不修改文件。
-    """
-    path = _resolve_file(workspace, runs_root, arguments.path)
+@contextmanager
+def _open_checked_file(workspace: Path, runs_root: Path, requested: str) -> Iterator[tuple[Path, BinaryIO, os.stat_result]]:
+    """在工作区内打开 requested，提供实际路径、只读句柄和初始状态；退出时核对路径和文件版本。"""
+    path = _resolve_file(workspace, runs_root, requested)
     try:
         before = path.stat()
         if not stat.S_ISREG(before.st_mode):
@@ -145,36 +135,14 @@ def read_file(
             # 文件解析与打开之间若发生变化，拒绝本次读取；本地模式不承诺抵御恶意宿主。
             if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
                 raise FileToolError("file_read_error", "读取期间文件发生变化，请重试。")
-            if _resolve_file(workspace, runs_root, arguments.path) != path:
+            if _resolve_file(workspace, runs_root, requested) != path:
                 raise FileToolError("file_read_error", "读取期间文件路径发生变化，请重试。")
-            if arguments.offset > opened.st_size:
-                raise FileToolError("invalid_offset", "offset 超过文件末尾，请使用上页的 next_offset。")
-            stream.seek(arguments.offset)
-            # 分页与指纹共用句柄；指纹最多扫描编辑预算内的文件，不扩大模型可见内容。
-            raw = stream.read(arguments.max_bytes + 4)
-            sha256, newline = _inspect_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else (None, None)
+            yield path, stream, opened
             if (_file_signature(before) != _file_signature(opened)
                     or _file_signature(os.fstat(stream.fileno())) != _file_signature(opened)
                     or _file_signature(path.stat()) != _file_signature(opened)
-                    or _resolve_file(workspace, runs_root, arguments.path) != path):
+                    or _resolve_file(workspace, runs_root, requested) != path):
                 raise FileToolError("file_changed", "读取期间文件发生变化，请重新读取后编辑。")
-        if raw and raw[0] & 0xC0 == 0x80 and arguments.offset == 0:
-            raise FileToolError("invalid_encoding", "文件不是有效的 UTF-8 文本，请先转换编码。")
-        if raw and raw[0] & 0xC0 == 0x80:
-            raise FileToolError("invalid_offset", "offset 位于字符内部，请使用上页的 next_offset。")
-        content, bytes_read = _decode_page(raw, arguments.max_bytes, preview_chars)
-        eof = bytes_read == len(raw)
-        return {
-            "path": path.relative_to(workspace).as_posix(),
-            "content": content,
-            "offset": arguments.offset,
-            "next_offset": None if eof else arguments.offset + bytes_read,
-            "bytes_read": bytes_read,
-            "eof": eof,
-            "size_bytes": opened.st_size,
-            "sha256": sha256,
-            "newline": newline,
-        }
     except FileToolError:
         raise
     except FileNotFoundError:
@@ -183,6 +151,57 @@ def read_file(
         raise FileToolError("permission_denied", "没有读取此文件的权限。") from None
     except (OSError, ValueError, OverflowError):
         raise FileToolError("file_read_error", "文件读取失败，请检查文件状态后重试。") from None
+
+
+def read_file(
+    workspace: Path,
+    runs_root: Path,
+    arguments: ReadFileArguments,
+    preview_chars: int,
+    max_edit_bytes: int,
+) -> dict:
+    """读取工作区普通文件的一页UTF-8内容，返回分页位置、大小、完整内容指纹与换行类型。
+
+    workspace/runs_root 限定访问范围；arguments 的 offset/max_bytes 均为字节，
+    preview_chars 限制可见字符。大小不超过 max_edit_bytes 的文件额外按有界块计算
+    sha256与newline，供edit_file校验和选择原文；更大文件仍可分页，两字段均为None。
+    newline为lf/crlf/cr/mixed/none之一，始终描述完整文件而非当前页，不整文件加载。
+    """
+    with _open_checked_file(workspace, runs_root, arguments.path) as (path, stream, opened):
+        if arguments.offset > opened.st_size:
+            raise FileToolError("invalid_offset", "offset 超过文件末尾，请使用上页的 next_offset。")
+        stream.seek(arguments.offset)
+        # 分页与指纹共用句柄；指纹最多扫描编辑预算内的文件，不扩大模型可见内容。
+        raw = stream.read(arguments.max_bytes + 4)
+        sha256, newline = _inspect_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else (None, None)
+    if raw and raw[0] & 0xC0 == 0x80 and arguments.offset == 0:
+        raise FileToolError("invalid_encoding", "文件不是有效的 UTF-8 文本，请先转换编码。")
+    if raw and raw[0] & 0xC0 == 0x80:
+        raise FileToolError("invalid_offset", "offset 位于字符内部，请使用上页的 next_offset。")
+    content, bytes_read = _decode_page(raw, arguments.max_bytes, preview_chars)
+    eof = bytes_read == len(raw)
+    return {
+        "path": path.relative_to(workspace).as_posix(),
+        "content": content,
+        "offset": arguments.offset,
+        "next_offset": None if eof else arguments.offset + bytes_read,
+        "bytes_read": bytes_read,
+        "eof": eof,
+        "size_bytes": opened.st_size,
+        "sha256": sha256,
+        "newline": newline,
+    }
+
+
+def read_file_snapshot(workspace: Path, runs_root: Path, requested: str, max_bytes: int) -> bytes:
+    """读取并核对 workspace 内 requested 的完整字节；max_bytes 是上限，超限拒绝，无写入。"""
+    with _open_checked_file(workspace, runs_root, requested) as (_, stream, opened):
+        if opened.st_size > max_bytes:
+            raise FileToolError("reference_source_too_large", "源文件超过项目引用的读取上限。")
+        raw = stream.read(max_bytes + 1)
+        if len(raw) != opened.st_size:
+            raise FileToolError("file_changed", "读取期间文件发生变化，请重新预览。")
+    return raw
 
 # 搜索参数只表达字面量匹配与有界结果，不接受正则执行或额外宿主路径。
 class SearchFilesArguments(DataModel):

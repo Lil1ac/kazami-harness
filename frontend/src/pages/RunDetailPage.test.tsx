@@ -107,7 +107,11 @@ function show(initialPath = '/runs/run-a') {
 /** 暴露实际路由路径与查询串，验证关闭和确认决定后的刷新入口。 */
 function LocationSnapshot() {
   const { pathname, search } = useLocation();
-  return <output aria-label="当前查询参数" data-path={pathname}>{search}</output>;
+  return (
+    <output aria-label="当前查询参数" data-path={pathname}>
+      {search}
+    </output>
+  );
 }
 
 beforeEach(
@@ -202,6 +206,35 @@ it('普通入口默认收起详情，展开和关闭检查器保留同一输入�
   expect(screen.getByRole('log', { name: '会话消息' })).toBe(log);
   expect(input).toHaveValue('保留这条要求');
   expect(createFollowup).not.toHaveBeenCalled();
+});
+
+it('查找可以在旧轮提问与回答间跳转，并保留最新轮草稿与关闭焦点', async () => {
+  // 同一关键词命中旧轮提问和回答，切换只改变消息定位。
+  const first = runs.get('run-a')!;
+  const latest = sessionRun('run-b', 2, '补充检查');
+  runs.set(latest.run_id, latest);
+  record = { ...record, latest_run_id: latest.run_id, turns: [turn(first), turn(latest)] };
+  const user = userEvent.setup();
+  show('/runs/run-b');
+  const composer = await screen.findByLabelText('输入消息');
+  await user.type(composer, '保留的草稿');
+  const trigger = screen.getByRole('button', { name: '查找会话消息' });
+  await user.click(trigger);
+  const search = screen.getByRole('textbox', { name: '查找提问或回答' });
+  expect(search).toHaveFocus();
+  await user.type(search, '第一次修复');
+  expect(screen.getByText('1 / 2')).toBeVisible();
+  expect(screen.getByText('第一次修复')).toHaveClass('conversation-search-hit');
+  await user.keyboard('{Enter}');
+  expect(screen.getByText('2 / 2')).toBeVisible();
+  expect(screen.getByText('已处理：第一次修复').closest('[data-find-part]')).toHaveClass(
+    'conversation-search-hit',
+  );
+  await user.keyboard('{Escape}');
+  expect(trigger).toHaveFocus();
+  expect(composer).toHaveValue('保留的草稿');
+  expect(createFollowup).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('当前查询参数')).toHaveAttribute('data-path', '/runs/run-b');
 });
 
 it('确认待处理决定后关闭抽屉并跳到新轮，旧查询串不会覆盖新地址', async () => {

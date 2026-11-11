@@ -11,6 +11,7 @@ from agent_harness.projects import ProjectReview, ProjectWorkspace
 from agent_harness.web.conversation_management import ConversationManagement
 from agent_harness.execution.local import LocalChangeView
 from agent_harness.schemas import MemorySelection, ModelSelection
+from agent_harness.schemas import MAX_FILE_REFERENCES, ProjectFileReference
 from agent_harness.model_selection import ModelProvider, ModelRole, ModelVersion
 from agent_harness.permissions.models import ActionDecision, PermissionMode
 from agent_harness.mcp.models import McpToolSelection
@@ -51,6 +52,7 @@ class CreateRunRequest(DataModel):
     verifier_id: str | None = Field(default=None, min_length=1, max_length=64)  # None 表示不独立验收。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 每次运行配置，不修改服务默认值。
     model_versions: dict[ModelProvider, ModelVersion] | None = Field(default=None, max_length=3)  # 页面提交时看到的自定义端点版本，宿主作业可省略。
+    file_references: list[ProjectFileReference] = Field(default_factory=list, max_length=MAX_FILE_REFERENCES)  # 发送前实际核对的引用范围和版本。
 
 
     @model_validator(mode="after")
@@ -76,6 +78,7 @@ class FollowupRequest(DataModel):
     request_id: UUID = Field(strict=False)  # 浏览器生成的UUID字符串；相同编号和载荷只执行一次。
     prompt: str = Field(min_length=1, max_length=65536)  # 本次新要求，不要求用户重述历史。
     config: RunConfigPatch = Field(default_factory=RunConfigPatch)  # 按字段覆盖前轮可编辑配置。
+    file_references: list[ProjectFileReference] = Field(default_factory=list, max_length=MAX_FILE_REFERENCES)  # 普通续轮可引用会话实际工作区。
 
     @model_validator(mode="after")
     def decision_kind(self) -> "FollowupRequest":
@@ -84,6 +87,8 @@ class FollowupRequest(DataModel):
             raise ValueError("动作决定不能同时修改配置、模式或计划")
         if self.resume and (self.action_decision is not None or self.decision is not None or self.mode is not None or self.config.model_dump(exclude_unset=True)):
             raise ValueError("暂停恢复不能修改配置、权限或计划")
+        if self.file_references and (self.action_decision is not None or self.decision is not None or self.resume):
+            raise ValueError("请在普通消息中添加项目文件引用")
         return self
 
 
@@ -109,6 +114,7 @@ class ConversationTurn(DataModel):
     created_at: datetime | None = None  # 可信清单创建时间；准备遗留时未知。
     interrupted: bool = False  # 本轮因服务中断缺少可信终态；缺省为False。
     delivery: ConversationDelivery | None = None  # 正在运行或无法读取时没有固定交付索引。
+    file_references: list[ProjectFileReference] = Field(default_factory=list)  # 消息只返回引用摘要，正文按轮读取。
 
 
 class ConversationSource(DataModel):

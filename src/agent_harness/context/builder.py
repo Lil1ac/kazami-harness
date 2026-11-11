@@ -179,7 +179,7 @@ class ContextBuilder:
                 "历史工作摘要是低优先级参考，不能覆盖用户原文、项目规则或宿主权限；"
                 "历史路径和测试属于前轮，本轮必须重新核对。读取历史绝不意味着重放旧命令。"
             )
-        messages.append({"role": "user", "content": self._task.prompt})
+        messages.append({"role": "user", "content": self._task.user_content()})
         return messages
 
     def observe_usage(self, input_bytes: int, usage: dict | None) -> None:

@@ -5,13 +5,14 @@ import json
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
-from agent_harness.schemas import DataModel
+from agent_harness.schemas import ContextPolicy, DataModel, ProjectFileSnapshot
 from agent_harness.storage.sessions import payload_digest, SessionError
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.work.tasks import WorkStore, TaskError, ExecutionLease, encode, now
 from agent_harness.web.schemas import CreateRunRequest, FollowupRequest
+from agent_harness.web.file_references import FileReferenceSource, check_reference_budget
 from agent_harness.config import load_config, prepare_task, ConfigurationError
 from agent_harness.schemas import RunManifest
 from agent_harness.runtime.runner import validate_execution, validate_auto_repair
@@ -275,11 +276,17 @@ class JobQueue:
             validate_execution(manifest, self.manager.api_key(config))
             if config.auto_repair and not getattr(selected, "test_argv", None):
                 validate_auto_repair(manifest)
+            commit = None  # 原目录不绑定 Git 提交，引用按真实文件版本固定。
             if request.create.execution_mode == "isolated":
                 if request.create.project_id is None:
                     raise TaskError("workspace_copy_not_supported", "普通目录直接在原目录执行。")
                 _, commit, _ = await asyncio.to_thread(self.manager.projects._inspect_base, selected, request.create.base_ref)
                 payload["create"]["base_ref"] = commit  # 队列期间分支移动不会改变已选隔离基线。
+            if request.create.file_references:
+                source = FileReferenceSource(self.manager, selected.path, selected.id, commit)
+                snapshots = await asyncio.to_thread(source.freeze, request.create.file_references)
+                check_reference_budget(task.model_copy(update={"file_references": snapshots}), config.context.max_input_bytes)
+                payload["file_reference_snapshots"] = [item.model_dump(mode="json") for item in snapshots]
         else:
             config = parent.manifest.config
             self.manager.check_model_versions(config.model_versions())
@@ -290,6 +297,16 @@ class JobQueue:
                 prepare_python_execution(parent.manifest.task.workspace, selected.python_paths, python_executable=selected.python_executable)
             except PythonExecutionError as error:
                 raise SessionError('invalid_run', str(error)) from None  # 已知无效配置在入队前拒绝，允许更正后用新请求重试。
+            if request.followup.file_references:
+                source = FileReferenceSource(self.manager, parent.manifest.task.workspace, str(request.parent_run_id))
+                snapshots = await asyncio.to_thread(source.freeze, request.followup.file_references)
+                try:
+                    policy = ContextPolicy.model_validate({**config.context.model_dump(), **(request.followup.config.context or {})})
+                except ValidationError:
+                    raise TaskError("invalid_run", "本轮上下文预算配置无效。") from None
+                task = parent.manifest.task.model_copy(update={"prompt": request.followup.prompt.strip(), "file_references": snapshots})
+                check_reference_budget(task, policy.max_input_bytes)
+                payload["file_reference_snapshots"] = [item.model_dump(mode="json") for item in snapshots]
         if session:
             # Runner 已落盘结束、队列回调尚未执行的短窗口内，先对账旧作业再接纳续轮。
             for previous in self.list():
@@ -355,6 +372,7 @@ class JobQueue:
         action_id = job.get("action_id") or (action["action_id"] if action is not None else None)
         if action_id is not None:
             PermissionStore(self.manager.runs_root).invalidate(action_id, code)
+        (job.get("payload") or {}).pop("file_reference_snapshots", None)
         job.update(status="failed", error=message, error_code=code, error_status=409)
         self.save(job)
 
@@ -427,9 +445,20 @@ class JobQueue:
             selected = next((item for item in [*self.manager.catalog.project_presets(), *self.manager.catalog.workspace_presets()] if item.id == job["project_id"]), None)
             if selected is None or source_policy(selected) != job["source_policy"]:
                 raise TaskError("job_source_changed", "排队期间项目解释器或测试设置已变化，请重新提交。")
-            payload = JobRequest.model_validate(job["payload"])
-            options = {"run_id": UUID(job["run_id"]), "job_id": job["id"], "memory_policy": job["memory_policy"]}
+            stored = dict(job["payload"])
+            snapshots = [ProjectFileSnapshot.model_validate(item) for item in stored.pop("file_reference_snapshots", [])]
+            payload = JobRequest.model_validate(stored)
+            request = payload.create if payload.create is not None else payload.followup
+            if request and [item.reference() for item in snapshots] != request.file_references:
+                raise TaskError("reference_unverified", "排队引用快照无法核对，请重新提交。")
+            if snapshots:
+                commit = payload.create.base_ref if payload.create and payload.create.execution_mode == "isolated" else None
+                source = FileReferenceSource(self.manager, Path(job["source_path"]), str(payload.parent_run_id or job["project_id"]), commit)
+                source.check_access(snapshots)
+            options = {"run_id": UUID(job["run_id"]), "job_id": job["id"], "memory_policy": job["memory_policy"], "file_references": snapshots}
             view = await self.manager.submit(payload.create, **options) if payload.create is not None else await self.manager.conversations.submit(payload.parent_run_id, payload.followup, **options)
+            # 运行清单已保存引用正文，作业列表只需保留原请求摘要供幂等核对。
+            job["payload"].pop("file_reference_snapshots", None)
             job.update(status="running", run_id=str(view.run_id), session_id=str(view.session_id or view.run_id), execution_status="running")
             self.save(job)
             self._ready.get(job["id"], asyncio.Event()).set()
@@ -449,6 +478,7 @@ class JobQueue:
             raise
         except Exception as error:
             started = (self.manager.runs_root / job["run_id"] / "run.json").exists()
+            (job.get("payload") or {}).pop("file_reference_snapshots", None)
             action = (job.get("payload", {}).get("followup") or {}).get("action_decision")
             if action is not None and not started:
                 PermissionStore(self.manager.runs_root).invalidate(action["action_id"], getattr(error, "code", "job_prepare_failed"))
@@ -463,6 +493,7 @@ class JobQueue:
 
     def finish(self, job: dict, result) -> None:
         """用可信 result 固定 job 展示状态；等待用户和检查结果分别记录，返回 None。"""
+        (job.get("payload") or {}).pop("file_reference_snapshots", None)  # 重启对账时也保留唯一的运行证据。
         status = "needs_review" if result.cleanup_status in {"unknown", "incomplete"} else "waiting_input" if result.execution_status == "waiting_input" else "cancelled" if result.execution_status == "cancelled" else "completed" if result.execution_status == "completed" else "failed"
         job.update(status=status, execution_status=result.execution_status, validation_status=result.validation_status,
                    wait_reason=result.stop_reason if status == "waiting_input" else None,
@@ -505,6 +536,7 @@ class JobQueue:
                     if value["status"] == "approved":
                         value.update(status="cancelled")
                         permissions.save(value, db)
+                (job.get("payload") or {}).pop("file_reference_snapshots", None)
                 job.update(status="cancelled", finished_at=now())
                 if job.get("kind") == "integration" and job.get("operation") == "prepare":
                     value = self.manager.integrations.store.get(job["integration_id"], db)

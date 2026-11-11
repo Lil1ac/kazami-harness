@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Drawer, Skeleton } from 'antd';
 import {
@@ -10,6 +10,7 @@ import {
   LayoutOutlined,
   LeftOutlined,
   RightOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { ApiError } from '../api';
@@ -18,6 +19,7 @@ import { ConversationActions } from '../components/ConversationActions';
 import { ConversationRecovery } from '../components/ConversationRecovery';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { mergeConfirmedRun, pendingDecisionLabel } from '../conversation';
+import { conversationListFrom } from '../conversationNavigation';
 import { RunStatus } from '../components/RunStatus';
 import { ConversationPanel } from '../components/ConversationPanel';
 import { RunInspector } from '../components/RunInspector';
@@ -133,7 +135,8 @@ function SessionWorkspace({
 }) {
   const cache = useQueryClient();
   const navigate = useNavigate();
-  const locationKey = useLocation().key;
+  const { key: locationKey, state: routeState } = useLocation();
+  const returnTo = conversationListFrom(routeState);
   const [params, setParams] = useSearchParams();
   const narrow = useNarrowWorkspace();
   const requestedSelection = params.get('inspect') || routeRun.run_id;
@@ -150,6 +153,9 @@ function SessionWorkspace({
   const inspectorTrigger = useRef<HTMLElement | null>(null); // 用户打开详情的入口，用于关闭后恢复焦点。
   const decisionToggle = useRef<HTMLButtonElement>(null); // 队列直达审批关闭时的焦点回退。
   const decisionTrigger = useRef<HTMLElement | null>(null); // 会话内实际打开审批的按钮。
+  const [searchOpen, setSearchOpen] = useState(false); // 查找属于当前会话，不进入运行详情路由。
+  const searchId = useId(); // 与查找开关建立可访问关联。
+  const searchToggle = useRef<HTMLButtonElement>(null); // 关闭后恢复顶栏焦点。
   const confirmedFrom = useRef<string | null>(null); // 已发起新轮跳转的位置键，用于跳过旧地址的异步清理。
   const focusAfterClose = useRef<{ target: HTMLElement; surface: 'detail' | 'decision' } | null>(
     null,
@@ -189,11 +195,16 @@ function SessionWorkspace({
   });
   useEffect(
     /* 过期队列链接回到会话；确认跳转会自行清理原地址，避免两个 replace 竞争。 */ () => {
-      if (latest && params.has('decision') && !decisionOpen && confirmedFrom.current !== locationKey) {
-        setParams(clearInspection(params), { replace: true });
+      if (
+        latest &&
+        params.has('decision') &&
+        !decisionOpen &&
+        confirmedFrom.current !== locationKey
+      ) {
+        setParams(clearInspection(params), { replace: true, state: routeState });
       }
     },
-    [latest, decisionOpen, locationKey, params, setParams],
+    [latest, decisionOpen, locationKey, params, routeState, setParams],
   );
 
   /** 查看 runId 的分类 value；commandCallId 只用于该轮输出定位，不重建对话。 */
@@ -209,7 +220,7 @@ function SessionWorkspace({
     next.set('tab', value);
     if (value === 'output' && commandCallId) next.set('command', commandCallId);
     else next.delete('command');
-    setParams(next, { replace: true });
+    setParams(next, { replace: true, state: routeState });
   }
 
   /** 关闭详情并清除深链接，随后把焦点还给消息入口。 */
@@ -217,7 +228,7 @@ function SessionWorkspace({
     const target = inspectorTrigger.current || inspectorToggle.current;
     focusAfterClose.current = target ? { target, surface: 'detail' } : null;
     inspectorTrigger.current = null;
-    setParams(clearInspection(params), { replace: true });
+    setParams(clearInspection(params), { replace: true, state: routeState });
   }
 
   /** 打开当前运行的决定；trigger 缺省时使用顶栏入口作为关闭后的焦点。 */
@@ -226,7 +237,7 @@ function SessionWorkspace({
     decisionTrigger.current = trigger ?? null;
     const next = clearInspection(params);
     next.set('decision', latest.run_id);
-    setParams(next, { replace: true });
+    setParams(next, { replace: true, state: routeState });
   }
 
   /** 关闭审批阅读，恢复原入口，保留尚未发送的会话草稿。 */
@@ -234,7 +245,13 @@ function SessionWorkspace({
     const target = decisionTrigger.current || decisionToggle.current;
     focusAfterClose.current = target ? { target, surface: 'decision' } : null;
     decisionTrigger.current = null;
-    setParams(clearInspection(params), { replace: true });
+    setParams(clearInspection(params), { replace: true, state: routeState });
+  }
+
+  /** 关闭会话内查找并恢复开关焦点，保留命中消息的阅读位置。 */
+  function closeSearch(): void {
+    setSearchOpen(false);
+    searchToggle.current?.focus({ preventScroll: true });
   }
 
   /** surface 关闭后恢复其焦点；目标已被新一轮移除时无需处理。 */
@@ -267,7 +284,7 @@ function SessionWorkspace({
 
     void cache.invalidateQueries({ queryKey: ['conversations'] });
     void cache.invalidateQueries({ queryKey: ['options'] });
-    void navigate(`/runs/${view.run_id}`, { replace: true });
+    void navigate('/runs/' + view.run_id, { replace: true, state: routeState });
   }
   const selectedIndex = conversation.turns.findIndex(
     /* 标题使用所选轮次，旧测试和新运行分别展示。 */ (turn) => turn.run_id === selectedId,
@@ -318,13 +335,20 @@ function SessionWorkspace({
       <header className="session-header">
         <Link
           to={
-            conversation.management.assigned_project?.available
+            returnTo ||
+            (conversation.management.assigned_project?.available
               ? '/projects/' + encodeURIComponent(conversation.management.assigned_project.id)
-              : '/runs?view=history'
+              : '/runs?view=history')
           }
           className="session-back"
           aria-label={
-            conversation.management.assigned_project?.available ? '返回项目会话' : '返回全部会话'
+            (
+              returnTo
+                ? returnTo.startsWith('/projects/')
+                : conversation.management.assigned_project?.available
+            )
+              ? '返回项目会话'
+              : '返回全部会话'
           }
         >
           <ArrowLeftOutlined />
@@ -345,6 +369,20 @@ function SessionWorkspace({
             )}
         </div>
         <div className="session-header-actions">
+          <Button
+            ref={searchToggle}
+            type="text"
+            size="small"
+            icon={<SearchOutlined />}
+            title="查找会话消息"
+            aria-label="查找会话消息"
+            aria-expanded={searchOpen}
+            aria-controls={searchOpen ? searchId : undefined}
+            onClick={
+              /* 打开查找后自动聚焦输入，关闭时回到开关。 */ () =>
+                searchOpen ? closeSearch() : setSearchOpen(true)
+            }
+          />
           <ConversationActions
             value={conversation.management}
             onChanged={
@@ -418,6 +456,8 @@ function SessionWorkspace({
           onShowDecision={showDecision}
           onCloseDecision={closeDecision}
           onDecisionClosed={/* 审批退出后回到它的入口。 */ () => restoreFocus('decision')}
+          searchId={searchOpen ? searchId : undefined}
+          onCloseSearch={closeSearch}
           onConfirmed={confirmed}
           onStop={
             /* 用户明确停止当前轮，草稿与已有输出保持可读。 */ () =>
@@ -451,7 +491,7 @@ function SessionWorkspace({
                       const next = new URLSearchParams(params);
                       if (wide) next.delete('wide');
                       else next.set('wide', '1');
-                      setParams(next, { replace: true });
+                      setParams(next, { replace: true, state: routeState });
                     }
                   }
                 />

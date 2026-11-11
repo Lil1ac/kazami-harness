@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Checkbox, Drawer, Input, Select, Popover, Tooltip } from 'antd';
 import {
   ArrowDownOutlined,
@@ -16,6 +16,7 @@ import './ConversationComposer.css';
 import { ModeSelect } from './ModeSelect';
 import { phaseLabel, modelFailureLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
+import { useProjectFileDraft } from '../hooks/useProjectFileDraft';
 import { useRuntimeControl } from '../hooks/useRuntimeControl';
 import { RuntimePanel } from './RuntimePanel';
 import { useRunPlanning } from '../hooks/useRunPlanning';
@@ -32,6 +33,8 @@ import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption
 import { pendingDecisionLabel, runDelivery } from '../conversation';
 import { modelLabel } from '../modelSelection';
 import { ExecutionContext } from './ExecutionContext';
+import { ConversationSearch } from './ConversationSearch';
+import { HistoricalFileReferences, ProjectReferences } from './ProjectReferences';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
@@ -45,6 +48,8 @@ interface ConversationPanelProps {
   onShowDecision?: (trigger: HTMLElement) => void; // 从消息摘要进入审批，记住触发位置。
   onCloseDecision?: () => void; // 关闭审批并清理路由选择。
   onDecisionClosed?: () => void; // 抽屉退出后恢复键盘焦点。
+  searchId?: string; // 有值时显示与顶栏按钮关联的查找栏。
+  onCloseSearch?: () => void; // 关闭后交还顶栏焦点。
   onConfirmed: (run: RunView) => void; // 服务确认新运行后原地更新会话与路由。
   onStop?: () => void; // 用户点击停止后由宿主取消当前运行；缺省不提供停止入口。
   stopping?: boolean; // 宿主正在清理或取消请求尚未返回。
@@ -140,7 +145,9 @@ function TurnMessage({
         {selected && run?.result.planning.pending?.kind === 'question' ? (
           <p className="message-waiting">需要你确认下面的问题。</p>
         ) : answer ? (
-          <MarkdownMessage text={answer} />
+          <div data-find-part="answer">
+            <MarkdownMessage text={answer} />
+          </div>
         ) : selected && run?.active ? null : (
           <p className="message-waiting">
             {turn.execution_status
@@ -221,13 +228,30 @@ export function ConversationPanel({
   onShowDecision,
   onCloseDecision,
   onDecisionClosed,
+  searchId,
+  onCloseSearch,
   onConfirmed,
   onStop,
   stopping = false,
   skills = [],
   mcpTools = [],
 }: ConversationPanelProps) {
-  const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
+  const referenceTarget =
+    run && run.run_id === conversation.latest_run_id ? { run_id: run.run_id } : undefined;
+  const references = useProjectFileDraft(
+    'harness-chat:' + conversation.session_id,
+    referenceTarget,
+  );
+  const send = useConversationSend(
+    conversation.session_id,
+    run,
+    conversation,
+    /* 只有收到真实的新轮确认才移除已提交引用。 */ (view) => {
+      references.change([]);
+      onConfirmed(view);
+    },
+    references.items,
+  );
   const runtime = useRuntimeControl(run?.run_id, Boolean(run?.active));
   const { tasks, planning } = useRunPlanning(run);
   const decisionLabel = pendingDecisionLabel(run);
@@ -249,10 +273,13 @@ export function ConversationPanel({
   }
 
   /** 用户主动展开历史内容时停在触发位置；再次跟随由滚动到底或按钮触发。 */
-  function pauseFollowing(): void {
-    atBottom.current = false;
-    setShowJump(true);
-  }
+  const pauseFollowing = useCallback(
+    /* 由过程展开和查找共同使用，不因消息刷新重新定位。 */ () => {
+      atBottom.current = false;
+      setShowJump(true);
+    },
+    [],
+  );
   useLayoutEffect(
     /* 新消息、过程或发送状态改变时仅跟随底部读者。 */ () => {
       if (atBottom.current) jumpToLatest();
@@ -282,6 +309,7 @@ export function ConversationPanel({
   /** 将当前草稿按活动状态投递；运行中输入固定意图，成功确认后才清除对应正文。 */
   function sendMessage(): void {
     if ((run?.active || runtime.pending) && conversation.management.state === 'active') {
+      if (references.items.length && !runtime.pending) return; // 保留用户已选资料，等普通续轮一起提交。
       const original = send.text;
       void runtime.send(original).then(
         /* 不清空等待期间新写入的另一份草稿。 */ (confirmed) => {
@@ -306,6 +334,20 @@ export function ConversationPanel({
   );
   return (
     <section className="conversation-surface" aria-label="连续对话">
+      {searchId && onCloseSearch && (
+        <ConversationSearch
+          id={searchId}
+          turns={conversation.turns}
+          hiddenAnswerRunId={
+            run?.active || run?.result.planning.pending?.kind === 'question'
+              ? run?.run_id
+              : undefined
+          }
+          viewport={viewport}
+          onReveal={pauseFollowing}
+          onClose={onCloseSearch}
+        />
+      )}
       {run &&
       (taskItems.length > 0 ||
         planning?.plans.length ||
@@ -374,7 +416,12 @@ export function ConversationPanel({
             /* 每条用户消息与本轮执行一一对应，稳定保留历史阅读位置。 */ (turn) => (
               <article key={turn.run_id} className="chat-turn" data-run-id={turn.run_id}>
                 <div className="user-message" aria-label="你的消息">
-                  <div className="user-message-body">{turn.prompt}</div>
+                  <div className="user-message-body" data-find-part="prompt">
+                    {turn.prompt}
+                  </div>
+                  {Boolean(turn.file_references?.length) && (
+                    <HistoricalFileReferences runId={turn.run_id} items={turn.file_references!} />
+                  )}
                 </div>
                 <TurnMessage
                   turn={turn}
@@ -575,6 +622,23 @@ export function ConversationPanel({
                 }
               }
             />
+            {conversation.management.state === 'active' &&
+              (!run?.active || references.items.length > 0) && (
+                <ProjectReferences
+                  target={
+                    run?.active || !conversation.can_continue || decisionLabel
+                      ? undefined
+                      : referenceTarget
+                  }
+                  scope={references.scope}
+                  items={send.pending?.body.file_references ?? references.items}
+                  onChange={references.change}
+                  disabled={Boolean(send.pending)}
+                />
+              )}
+            {run?.active && references.items.length > 0 && (
+              <p className="composer-notice">当前运行结束后可发送已选文件。</p>
+            )}
             <div className="composer-toolbar">
               {!run?.active && (
                 <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
@@ -691,7 +755,8 @@ export function ConversationPanel({
                       ? conversation.management.state !== 'active' ||
                         runtime.sending ||
                         (!runtime.pending &&
-                          (!send.text.trim() ||
+                          (references.items.length > 0 ||
+                            !send.text.trim() ||
                             send.text.length > 16000 ||
                             runtime.query.data?.state?.status !== 'running'))
                       : !send.canSend

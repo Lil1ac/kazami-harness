@@ -33,6 +33,8 @@ from agent_harness.work.exports import materialize_plan_export
 from agent_harness.subagents.service import read_child, report_page, SubagentError
 from agent_harness.subagents.reports import partial_report
 from agent_harness.schemas import SubagentRecord
+from agent_harness.schemas import ProjectFileSnapshot
+from agent_harness.web.file_references import check_reference_budget
 from agent_harness.web.config import WebConfig
 from agent_harness.web.conversations import ConversationService
 from agent_harness.web.conversation_index import ConversationIndex
@@ -402,14 +404,14 @@ class WebRunManager:
             option["error"] = error.message
         return option
 
-    async def submit(self, request: CreateRunRequest, *, run_id: UUID, job_id: str, memory_policy: dict) -> RunView:
+    async def submit(self, request: CreateRunRequest, *, run_id: UUID, job_id: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]) -> RunView:
         """准备已认领资源的 request 并返回 RunView；run_id/job_id 是队列固定归属，memory_policy 是接纳时策略。
 
-        页面断开不取消准备；准备失败由原作业保存错误和释放资源，不创建旁路请求。
+        file_references 为接纳时固定的资料。页面断开不取消准备；失败由原作业保存错误和释放资源。
         """
         if self._closing:
             raise WebServiceError(503, "service_closing", "本地服务正在关闭。")
-        preparation = asyncio.create_task(self._start_request(request, run_id, job_id, memory_policy), name=f"harness-prepare-{run_id}")
+        preparation = asyncio.create_task(self._start_request(request, run_id, job_id, memory_policy, file_references), name=f"harness-prepare-{run_id}")
         key = (run_id, run_id)
         self._submissions[key] = preparation
 
@@ -421,10 +423,10 @@ class WebRunManager:
         preparation.add_done_callback(observe_completion)
         return await asyncio.shield(preparation)
 
-    async def _start_request(self, request: CreateRunRequest, identifier: UUID, owner: str, memory_policy: dict) -> RunView:
+    async def _start_request(self, request: CreateRunRequest, identifier: UUID, owner: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]) -> RunView:
         """预检 request 后在已认领资源内准备 identifier；owner 绑定作业，memory_policy 固定本轮记忆。
 
-        密钥、任务与产物路径在 Git 创建前检查；202 仅在 Runner 落盘建立上下文后返回。
+        file_references 是排队时固定的正文与范围。密钥、预算与产物路径在 Git 创建前检查。
         Git 同步操作在线程执行，调用方取消也等待准备结束，防止工作树无人登记。
         """
         async with self._lock:
@@ -464,6 +466,8 @@ class WebRunManager:
                     python_paths=(preset or workspace).python_paths,
                     python_executable=(preset or workspace).python_executable,
                 )
+                task = task.model_copy(update={"file_references": file_references})
+                check_reference_budget(task, config.context.max_input_bytes)
                 selected_id = preset.id if preset is not None else workspace.id
                 mode = request.execution_mode
                 if mode == 'isolated' and workspace is not None:

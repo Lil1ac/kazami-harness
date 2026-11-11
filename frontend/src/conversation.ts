@@ -44,6 +44,7 @@ export function mergeConfirmedRun(current: ConversationView, view: RunView): Con
     created_at: view.created_at,
     interrupted: view.interrupted,
     delivery: runDelivery(view),
+    file_references: existing?.file_references,
   };
   return {
     ...current,

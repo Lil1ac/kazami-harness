@@ -69,9 +69,12 @@ describe('代码审阅', /* 代码事实、测试和人工决定相互独立；�
       }),
     );
     const preview = await screen.findByLabelText('代码补丁预览');
-    expect(preview).toHaveTextContent('+<script>window.hacked = true</script>');
+    await waitFor(
+      /* 补丁预览查询晚于文件清单。 */ () =>
+        expect(preview).toHaveTextContent('+<script>window.hacked = true</script>'),
+    );
     expect(preview.querySelector('script')).toBeNull();
-    expect(screen.getByText('new.py')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new.py/ })).toBeInTheDocument();
     expect(screen.getByText('删除')).toBeInTheDocument();
     expect(screen.getByText('二进制文件')).toBeInTheDocument();
     expect(screen.getByText(/差异预览已截断/)).toBeInTheDocument();
@@ -79,6 +82,25 @@ describe('代码审阅', /* 代码事实、测试和人工决定相互独立；�
       'href',
       '/api/runs/run-a/patch',
     );
+  });
+  it('切换文件只打开所选路径的固定差异', async () => {
+    vi.mocked(getDiff).mockResolvedValue({
+      content: '--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-old\n+first-only\n--- a/第二.txt\n+++ b/第二.txt\n@@ -1 +1 @@\n-old\n+second-only\n',
+      truncated: false,
+      size_bytes: 128,
+    });
+    const user = setup(makeProject({ files: [
+      { path: 'first.txt', status: 'modified', binary: false },
+      { path: '第二.txt', status: 'modified', binary: false },
+    ] }));
+    expect(await screen.findByText('+first-only')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /第二.txt/ }));
+    expect(screen.getByRole('button', { name: /第二.txt/ })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('+second-only')).toBeVisible();
+    expect(screen.queryByText('+first-only')).not.toBeInTheDocument();
+    // 路径已有标题，预览从实际差异开始，完整补丁仍可下载。
+    expect(screen.queryByText('+++ b/第二.txt')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /下载完整补丁/ })).toBeInTheDocument();
   });
   it.each([
     { active: true, snapshot_status: 'ready' as const },

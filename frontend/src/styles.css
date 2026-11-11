@@ -629,37 +629,19 @@ pre {
   min-width: 0;
   width: 100%;
 }
-.start-model {
-  font-size: 11px;
-  color: var(--muted);
-  max-width: 160px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.start-model-select.ant-select {
+  min-width: 72px;
+  max-width: min(240px, 37vw);
+}
+.start-input-surface > .execution-context {
+  margin: 0 16px;
+  padding-top: 8px;
 }
 .start-send.ant-btn {
   border-radius: 8px;
   width: 32px;
   height: 32px;
   margin-left: auto;
-}
-.selected-project-context {
-  display: flex;
-  gap: 16px;
-  justify-content: space-between;
-  padding-top: 10px;
-  align-items: center;
-  font-size: 11px;
-  color: var(--muted);
-}
-.selected-project-path {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--code);
-}
-.project-settings-link {
-  flex-shrink: 0;
 }
 .project-mode-note {
   color: var(--muted);
@@ -699,16 +681,8 @@ pre {
   font-size: 12px;
   margin: 8px 0;
 }
-.project-revision,
 .composer-config {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   font-size: 12px;
-  color: var(--muted);
-}
-.composer-config {
-  justify-content: space-between;
   margin-bottom: 18px;
 }
 .composer-config a {
@@ -973,6 +947,9 @@ pre {
 }
 .session-body.with-inspector {
   grid-template-columns: minmax(0, 1fr) minmax(370px, 36%);
+}
+.session-body.with-inspector.with-wide-inspector {
+  grid-template-columns: minmax(280px, 1fr) minmax(550px, 68%);
 }
 .session-loading {
   padding: 40px;
@@ -1424,10 +1401,13 @@ pre {
 .inspector-overview > section {
   margin-top: 22px;
 }
-.inspector-files > section + section {
-  border-top: 1px solid var(--line);
-  padding-top: 22px;
-  margin-top: 26px;
+.inspector-files {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.inspector-files > .ant-segmented {
+  justify-self: start;
 }
 .session-drawer .ant-drawer-body {
   display: flex;
@@ -1643,8 +1623,15 @@ pre {
 .review-actions > .muted {
   width: 100%;
 }
-.local-execution-path {
+.project-review-details {
+  margin: 10px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
   overflow-wrap: anywhere;
+}
+.project-review-details summary {
+  width: fit-content;
+  cursor: pointer;
 }
 .project-review > p {
   font-size: 12px;
@@ -1656,23 +1643,52 @@ pre {
 .changed-files {
   list-style: none;
   padding: 0;
-  margin: 0 0 20px;
+  margin: 0;
 }
-.changed-files li {
+.changed-files li + li {
+  border-top: 1px solid var(--line);
+}
+.changed-files button {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+  gap: 8px;
+  width: 100%;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
   font-size: 12px;
 }
-.changed-files li > code {
+.changed-files button:hover,
+.changed-files button[aria-current='true'] {
+  background: var(--hover);
+}
+.changed-files button[aria-current='true'] {
+  color: var(--accent);
+}
+.changed-files button > code {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.changed-files li > .anticon {
+.changed-files button > .anticon {
   color: var(--muted);
+}
+.file-changes {
+  container-type: inline-size;
+}
+.file-changes-layout {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+@container (min-width: 560px) {
+  .file-changes-layout.has-file-list {
+    grid-template-columns: minmax(148px, 28%) minmax(0, 1fr);
+    align-items: start;
+  }
 }
 .file-status {
   flex-shrink: 0;
@@ -1691,18 +1707,16 @@ pre {
 .diff-preview {
   min-width: 0;
 }
+.diff-file-heading {
+  margin: 0 0 7px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .diff-file {
-  margin: 18px 0;
+  margin: 0 0 12px;
   border: 1px solid var(--line);
   border-radius: 7px;
   overflow: hidden;
-}
-.diff-file > summary {
-  cursor: pointer;
-  padding: 11px 12px;
-  font-size: 12px;
-  background: var(--raised);
-  overflow-wrap: anywhere;
 }
 .diff-scroll {
   overflow-x: auto;
@@ -2076,11 +2090,9 @@ pre {
     padding: 18px 17px 10px;
     font-size: 14px;
   }
-  .start-model {
-    display: none;
-  }
-  .selected-project-context {
-    gap: 12px;
+  .start-send-area {
+    gap: 4px;
+    flex-wrap: wrap;
   }
   .recent-history {
     margin-top: 36px;

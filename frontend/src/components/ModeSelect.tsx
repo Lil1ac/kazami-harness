@@ -8,6 +8,7 @@ interface ModeSelectProps {
   value: 'auto' | 'plan'; // auto 自动处理；plan 先生成待批准计划。
   onChange: (value: 'auto' | 'plan') => void; // 接收受控模式，不直接启动运行。
   label?: string; // 区分新建与下一轮的无障碍名称，默认工作模式。
+  disabled?: boolean; // 已提交待确认时锁定工作模式。
 }
 
 /** 返回新建与续聊共用的两项菜单；value 标记当前模式，onChange 只更新下一次提交。 */
@@ -15,6 +16,7 @@ export const ModeSelect = memo(function ModeSelect({
   value,
   onChange,
   label = '工作模式',
+  disabled,
 }: ModeSelectProps) {
   return (
     <Select
@@ -22,6 +24,7 @@ export const ModeSelect = memo(function ModeSelect({
       aria-label={label}
       value={value}
       onChange={onChange}
+      disabled={disabled}
       virtual={false}
       variant="borderless"
       size="small"

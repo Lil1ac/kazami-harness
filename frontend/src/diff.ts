@@ -12,6 +12,32 @@ export interface DiffFile {
   lines: DiffLine[]; // 包含头部和正文的原始顺序。
 }
 
+/** 将 Git 的带引号路径还原为 UTF-8 文件名；普通路径保持原样。 */
+function unquotePath(path: string): string {
+  if (!path.startsWith('"') || !path.endsWith('"')) return path;
+  return path.slice(1, -1).replace(
+    /(?:\\[0-7]{3})+|\\./g,
+    /* 解码连续的八进制 UTF-8 字节和 Git 的控制字符转义。 */ (escaped) => {
+      if (escaped.length > 2) {
+        const bytes = escaped
+          .match(/[0-7]{3}/g)!
+          .map(/* 单组始终是一个八进制字节。 */ (value) => Number.parseInt(value, 8));
+        return new TextDecoder().decode(Uint8Array.from(bytes));
+      }
+      const control: Record<string, string> = {
+        a: '\x07',
+        b: '\b',
+        f: '\f',
+        n: '\n',
+        r: '\r',
+        t: '\t',
+        v: '\v',
+      };
+      return control[escaped[1]] ?? escaped[1];
+    },
+  );
+}
+
 /** 解析 Git 或普通 unified diff 文本 content，返回按文件分组的有界预览；不执行正文、不访问文件。 */
 export function parseDiff(content: string): DiffFile[] {
   const files: DiffFile[] = [];
@@ -40,16 +66,21 @@ export function parseDiff(content: string): DiffFile[] {
     )
       current = undefined;
     if (!current) {
-      current = { path: gitHeader ? line.replace(/^diff --git .*? b\//, '') : '补丁', lines: [] };
+      const target = /^diff --git (?:"(?:[^"\\]|\\.)*"|a\/.+?) ("(?:[^"\\]|\\.)*"|b\/.+)$/.exec(
+        line,
+      )?.[1];
+      current = { path: target ? unquotePath(target).replace(/^b\//, '') : '补丁', lines: [] };
       files.push(current);
       oldRemaining = newRemaining = 0;
     }
     if (fileHeader) {
-      const target = lines[index + 1].slice(4).split('\t')[0];
-      current.path = (target === '/dev/null' ? line.slice(4).split('\t')[0] : target).replace(
-        /^[ab]\//,
-        '',
-      );
+      const target = unquotePath(lines[index + 1].slice(4).split('\t')[0]);
+      current.path = (
+        target === '/dev/null' ? unquotePath(line.slice(4).split('\t')[0]) : target
+      ).replace(/^[ab]\//, '');
+    }
+    if (!oldRemaining && !newRemaining && line.startsWith('rename to ')) {
+      current.path = unquotePath(line.slice('rename to '.length));
     }
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     const item: DiffLine = { content: line, kind: 'meta', oldNumber: null, newNumber: null };

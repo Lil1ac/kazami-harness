@@ -43,6 +43,8 @@ function jobDestination(job: JobView): string | null {
   if (['queued', 'preparing', 'needs_review'].includes(job.status) || job.execution_status === null)
     return null;
   const run = '/runs/' + job.run_id;
+  if (job.status === 'waiting_input' && job.wait_reason !== 'user_paused' && job.kind !== 'integration')
+    return run + '?decision=' + encodeURIComponent(job.run_id);
   return job.kind === 'integration'
     ? run + '?tab=files&integration=' + (job.result_integration_id || job.integration_id)
     : run;

@@ -74,38 +74,43 @@ export function ProjectReviewPanel({
           {reviewLabels[project.status]}
         </Tag>
       </div>
-      <dl className="compact-dl review-baseline">
-        <div>
-          <dt>项目</dt>
-          <dd>{project.project_label}</dd>
-        </div>
-        <div>
-          <dt>原始仓库</dt>
-          <dd>{project.repository}</dd>
-        </div>
-        <div>
-          <dt>提交基线</dt>
-          <dd>
-            <code>
-              {project.base_ref} · {project.base_commit}
-            </code>
-          </dd>
-        </div>
-        <div>
-          <dt>会话工作树</dt>
-          <dd>{project.worktree}</dd>
-        </div>
-      </dl>
-      <p className="muted">
-        {parentRunId ? (
-          <>
-            本轮复用会话目录，<Link to={`/runs/${parentRunId}?tab=files`}>前轮证据</Link>保持只读
-            ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
-          </>
-        ) : (
-          '任务从该提交开始，原目录中的未提交改动不带入任务。测试结果见“项目测试”，审阅决定由你完成。'
-        )}
-      </p>
+      <details className="project-review-details">
+        <summary>独立工作树与提交基线</summary>
+        <dl className="compact-dl review-baseline">
+          <div>
+            <dt>项目</dt>
+            <dd>{project.project_label}</dd>
+          </div>
+          <div>
+            <dt>原始仓库</dt>
+            <dd>{project.repository}</dd>
+          </div>
+          <div>
+            <dt>提交基线</dt>
+            <dd>
+              <code>
+                {project.base_ref === project.base_commit
+                  ? project.base_commit
+                  : project.base_ref + ' · ' + project.base_commit}
+              </code>
+            </dd>
+          </div>
+          <div>
+            <dt>会话工作树</dt>
+            <dd>{project.worktree}</dd>
+          </div>
+        </dl>
+        <p className="muted">
+          {parentRunId ? (
+            <>
+              本轮复用会话目录，<Link to={`/runs/${parentRunId}?tab=files`}>前轮证据</Link>保持只读
+              ，以下为相对会话原始基线的累计差异。测试与审阅结果属于本轮。
+            </>
+          ) : (
+            '本轮差异以该提交为基线。'
+          )}
+        </p>
+      </details>
       {project.source_dirty && (
         <Alert showIcon type="info" title="建立任务时原目录有未提交改动，未带入本次工作树。" />
       )}
@@ -149,6 +154,16 @@ export function ProjectReviewPanel({
           description={errorMessage(decision.error)}
         />
       )}
+      <FileChangesPanel
+        runId={project.run_id}
+        files={project.files}
+        ready={project.snapshot_status === 'ready'}
+        patchAvailable={project.patch_available}
+        active={active}
+        label="代码补丁预览"
+        downloadLabel="下载完整补丁"
+        emptyLabel="相对基线没有代码改动"
+      />
       {!canManage && (
         <Alert showIcon type="info" title="历史轮次只读，请在最新一轮管理会话工作树。" />
       )}
@@ -190,16 +205,6 @@ export function ProjectReviewPanel({
           <span className="muted">保留只保存工作树与补丁，不会自动提交或合并。</span>
         </div>
       ) : null}
-      <FileChangesPanel
-        runId={project.run_id}
-        files={project.files}
-        ready={project.snapshot_status === 'ready'}
-        patchAvailable={project.patch_available}
-        active={active}
-        label="代码补丁预览"
-        downloadLabel="下载完整补丁"
-        emptyLabel="相对基线没有代码改动"
-      />
       <Button
         disabled={active || project.snapshot_status !== 'ready'}
         onClick={

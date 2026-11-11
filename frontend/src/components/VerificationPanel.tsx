@@ -1,4 +1,5 @@
 import { Alert, Tag } from 'antd';
+import { useEffect, useRef } from 'react';
 import { artifactUrl } from '../api';
 import { duration } from '../format';
 import type { VerificationAttempt, VerificationResult } from '../types';
@@ -10,8 +11,16 @@ function resultLabel(detail: VerificationResult, project: boolean): string {
   return project ? '测试运行异常' : '验收运行异常';
 }
 
-/** 展示detail的真实进程输出；runId只用于该次已登记原始输出的受限下载。 */
-function CheckEvidence({ detail, runId }: { detail: VerificationResult; runId: string }) {
+/** 展示 detail 的真实输出；focusOutput 为真时展开错误流，runId 固定下载来源。 */
+function CheckEvidence({
+  detail,
+  runId,
+  focusOutput = false,
+}: {
+  detail: VerificationResult; // 此次检查的原始预览及输出引用。
+  runId: string; // 宿主校验下载归属的运行编号。
+  focusOutput?: boolean; // 从会话直接打开输出时优先显示错误流。
+}) {
   return (
     <>
       {detail.code_before && detail.code_after && detail.code_before !== detail.code_after && (
@@ -41,13 +50,21 @@ function CheckEvidence({ detail, runId }: { detail: VerificationResult; runId: s
         <Alert type="warning" title="下方输出预览已截断，可下载该次原始输出。" />
       )}
       {detail.stdout && (
-        <details open>
+        <details
+          open
+          data-check-output={focusOutput && !detail.stderr ? '' : undefined}
+          tabIndex={-1}
+        >
           <summary>标准输出</summary>
           <pre>{detail.stdout}</pre>
         </details>
       )}
       {detail.stderr && (
-        <details>
+        <details
+          open={focusOutput || undefined}
+          data-check-output={focusOutput ? '' : undefined}
+          tabIndex={-1}
+        >
           <summary>错误输出</summary>
           <pre>{detail.stderr}</pre>
         </details>
@@ -75,6 +92,7 @@ export function VerificationPanel({
   runId,
   active,
   project = false,
+  focusOutput = false,
 }: {
   detail: VerificationResult | null; // 当前代码的检查；未检查或修复中为空。
   attempts: VerificationAttempt[]; // 全部真实检查，按落盘顺序提供。
@@ -82,10 +100,32 @@ export function VerificationPanel({
   runId: string; // 原始输出所属运行，跨用户轮次不变更旧链接。
   active: boolean; // 模型、工具、测试及收尾仍在执行。
   project?: boolean; // 公开项目测试使用测试文案，其他使用独立验收文案。
+  focusOutput?: boolean; // 直接跳转时展开并聚焦该轮最新可用检查输出。
 }) {
   const previous = detail ? attempts.slice(0, -1) : attempts; // 当前详情单独展示，其余留作历史。
+  const section = useRef<HTMLElement>(null); // 只有显式的输出链接才改变详情阅读位置。
+  useEffect(
+    /* 等详情容器完成布局后定位错误流，若无可读输出则聚焦实际检查记录。 */ () => {
+      if (!focusOutput) return;
+      const frame = requestAnimationFrame(
+        /* 同一轮的证据保留在当前详情容器。 */ () => {
+          const target =
+            section.current?.querySelector<HTMLElement>('[data-check-output]') || section.current;
+          target?.focus({ preventScroll: true });
+          target?.scrollIntoView?.({ block: 'start' });
+        },
+      );
+      return /* 切走详情时取消尚未发生的定位。 */ () => cancelAnimationFrame(frame);
+    },
+    [runId, focusOutput],
+  );
   return (
-    <section className="verification-panel" aria-labelledby="verification-heading">
+    <section
+      className="verification-panel"
+      aria-labelledby="verification-heading"
+      ref={section}
+      tabIndex={-1}
+    >
       <div className="section-heading">
         <h2 id="verification-heading">{project ? '项目测试' : '独立验收'}</h2>
       </div>
@@ -111,22 +151,29 @@ export function VerificationPanel({
           <Tag color={detail.status === 'passed' ? 'success' : 'error'}>
             {resultLabel(detail, project)}
           </Tag>
-          <CheckEvidence detail={detail} runId={runId} />
+          <CheckEvidence detail={detail} runId={runId} focusOutput={focusOutput} />
         </>
       )}
       {previous.length > 0 && (
         <section aria-label="历史检查">
           <h3>历史检查</h3>
           {previous.map(
-            /* 以修复次数定位实际检查，末轮成功也保留先前失败的全部输出。 */ (attempt) => (
-              <details key={attempt.repair_attempt}>
+            /* 没有当前检查时定位最后一次固定的历史检查。 */ (attempt, index) => (
+              <details
+                key={attempt.repair_attempt}
+                open={(focusOutput && !detail && index === previous.length - 1) || undefined}
+              >
                 <summary>
                   {attempt.repair_attempt === 0
                     ? '首次检查'
                     : `第 ${attempt.repair_attempt} 次修复后`}{' '}
                   · {resultLabel(attempt.result, project)}
                 </summary>
-                <CheckEvidence detail={attempt.result} runId={runId} />
+                <CheckEvidence
+                  detail={attempt.result}
+                  runId={runId}
+                  focusOutput={focusOutput && !detail && index === previous.length - 1}
+                />
               </details>
             ),
           )}

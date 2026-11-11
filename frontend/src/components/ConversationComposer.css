@@ -86,6 +86,56 @@
 .run-indicator.is-active {
   background: var(--accent);
 }
+
+/* 会话只保留待处理入口，正文和决定在一个抽屉内阅读。 */
+.conversation-decision-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-drawer .ant-drawer-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.decision-feedback {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.decision-document {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 clamp(14px, 3vw, 24px) 16px;
+}
+
+.turn-delivery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.message-actions .turn-delivery button {
+  color: var(--accent);
+}
 /* 小屏保留消息去向、权限和发送入口；将触控高度与视觉密度分开。 */
 @media (max-width: 600px) {
   .conversation-composer .message-composer {

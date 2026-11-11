@@ -119,6 +119,7 @@ const conversation: ConversationView = {
       turn_index: ordinal,
       prompt: ordinal === 1 ? '修复导出逻辑' : '追加要求 ' + ordinal,
       final_answer: '已完成 ' + ordinal,
+      delivery: null,
       execution_status: 'completed',
       validation_status: 'unverified',
       created_at: '2026-10-24T01:00:00Z',

@@ -1,17 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
 import { Alert, Button, Checkbox, Form, Input, Select } from 'antd';
-import { ArrowUpOutlined, BranchesOutlined, SettingOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, SettingOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
 import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
-import { modelChoices, modelChoiceValue, modelLabel, modelProviderName } from '../modelSelection';
+import { modelChoices, modelChoiceValue, modelLabel } from '../modelSelection';
 import { SkillSelector } from './SkillSelector';
 import { McpSelector } from './McpSelector';
 import { ProjectSelector } from './ProjectSelector';
 import { ModeSelect } from './ModeSelect';
 import { PermissionSelect } from './PermissionPanel';
+import { ExecutionContext } from './ExecutionContext';
 
 /** 新任务的可编辑内容；项目来源由用户明确选择，不从示例默认推断。 */
 interface TaskValues {
@@ -96,25 +97,33 @@ export function TaskForm({
   const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 自动也允许Agent主动进入规划。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
-  const [selectedModel, setSelectedModel] = useState<string>(); // 未显式选择时使用设置默认值。
-  const modelProviders = options.model_providers;
-  const availableModels = modelChoices(modelProviders);
-  const selectedChoice = availableModels.find((choice) => choice.value === selectedModel)
-    ?? availableModels.find((choice) => choice.value === modelChoiceValue(config))
-    ?? availableModels[0];
-  const model = selectedChoice?.selection;
-  const modelConnection = model && modelProviders[model.provider];
-  const modelReady = modelConnection?.enabled && (modelConnection.auth === 'none' || modelConnection.key_configured);
-  const navigate = useNavigate();
-  const cache = useQueryClient();
   const pendingSubmission = useRef<PendingNewSubmission | null>(readPendingSubmission(draftKey)); // 网络未知时固定原载荷及编号。
   const [confirmingSubmission, setConfirmingSubmission] = useState(
     Boolean(pendingSubmission.current),
   ); // 刷新后保留确认提示。
+  const frozen = confirmingSubmission ? pendingSubmission.current?.body : undefined;
+  const [selectedModel, setSelectedModel] = useState<string>(); // 未显式选择时使用设置默认值。
+  const modelProviders = options.model_providers;
+  const availableModels = modelChoices(modelProviders);
+  const selectedChoice =
+    availableModels.find((choice) => choice.value === selectedModel) ??
+    availableModels.find((choice) => choice.value === modelChoiceValue(config)) ??
+    availableModels[0];
+  const model =
+    frozen?.config?.provider && frozen.config.requested_model
+      ? { provider: frozen.config.provider, requested_model: frozen.config.requested_model }
+      : selectedChoice?.selection;
+  const modelConnection = model && modelProviders[model.provider];
+  const modelReady =
+    modelConnection?.enabled && (modelConnection.auth === 'none' || modelConnection.key_configured);
+  const navigate = useNavigate();
+  const cache = useQueryClient();
   const choices = options.recent_projects;
+  const targetId = frozen?.project_id || frozen?.workspace_id || selectedId;
   const selected =
-    choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === selectedId) ||
-    (opened?.id === selectedId ? opened : undefined);
+    choices.find(/* 以当前宿主记录核对本机目录。 */ (item) => item.id === targetId) ||
+    (opened?.id === targetId ? opened : undefined);
+  const isolated = frozen ? frozen.execution_mode === 'isolated' : createWorktree;
   const repairAvailable = selected?.kind === 'project' && Boolean(selected.test_argv?.length); // 只使用已保存的公开测试，不取未保存的命令草稿。
   useEffect(
     /* 换项目必须重新选择，避免把旧项目的自动修复授权带到其他目录。 */ () => {
@@ -191,6 +200,10 @@ export function TaskForm({
   }
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
+    if (frozen) {
+      mutation.mutate(frozen);
+      return;
+    }
     if (!selected || !model || !modelReady) return;
     const versions: Record<string, string> = {};
     for (const choice of [model, ...Object.values(config.role_models)]) {
@@ -222,14 +235,12 @@ export function TaskForm({
       <div className="task-start-heading">
         <h1 id="new-task-heading">新建对话</h1>
       </div>
-      {!modelReady && (
+      {!modelReady && !frozen && (
         <Alert
           type="warning"
           showIcon
           title={model ? '所选模型服务缺少 API Key' : '请先添加模型服务'}
-          description={
-            <Link to="/settings#model-services">前往模型服务</Link>
-          }
+          description={<Link to="/settings#model-services">前往模型服务</Link>}
         />
       )}
       {activeRunIds.length > 0 && (
@@ -237,10 +248,7 @@ export function TaskForm({
           type="info"
           title={`有 ${activeRunIds.length} 项工作正在执行`}
           description={
-            <Button
-              type="link"
-              onClick={/* 打开现有任务，不重复发送。 */ () => navigate('/jobs')}
-            >
+            <Button type="link" onClick={/* 打开现有任务，不重复发送。 */ () => navigate('/jobs')}>
               查看运行队列
             </Button>
           }
@@ -256,6 +264,7 @@ export function TaskForm({
         projects={choices}
         value={selected}
         pickerAvailable={options.folder_picker_available}
+        disabled={confirmingSubmission || mutation.isPending}
         onChange={acceptProject}
         onBusyChange={setProjectBusy}
       />
@@ -272,11 +281,58 @@ export function TaskForm({
         className="start-form"
       >
         <div className="start-input-surface">
+          {selected && (
+            <ExecutionContext
+              project={selected.label}
+              path={selected.path}
+              mode={isolated ? 'isolated' : 'local'}
+              onModeChange={
+                selected.kind === 'project'
+                  ? /* 独立工作树只由本次明确选择创建。 */ (value) =>
+                      setCreateWorktree(value === 'isolated')
+                  : undefined
+              }
+              disabled={projectBusy || mutation.isPending || confirmingSubmission}
+              details={
+                <>
+                  <p>
+                    {isolated
+                      ? '从提交基线创建工作树。原目录的未提交改动不会带入。'
+                      : '在所选目录执行，文件直接保存到该目录。'}
+                  </p>
+                  {selected.kind === 'project' && (
+                    <>
+                      {selected.branch && (
+                        <p>
+                          {selected.branch} · {selected.head_commit?.slice(0, 8)}
+                        </p>
+                      )}
+                      {isolated &&
+                        (frozen ? (
+                          <p>
+                            提交基线 <code>{frozen.base_ref || 'HEAD'}</code>
+                          </p>
+                        ) : (
+                          <Form.Item label="提交基线" name="base_ref">
+                            <Input placeholder="HEAD" maxLength={200} />
+                          </Form.Item>
+                        ))}
+                    </>
+                  )}
+                  <Link to={'/projects/' + encodeURIComponent(selected.id) + '?settings=1'}>
+                    项目设置
+                  </Link>
+                </>
+              }
+            />
+          )}
           <Form.Item
             label="任务描述"
             name="prompt"
             className="start-prompt"
-            rules={[{ required: true, whitespace: true, message: '请描述要完成的任务' }]}
+            rules={
+              frozen ? [] : [{ required: true, whitespace: true, message: '请描述要完成的任务' }]
+            }
           >
             <Input.TextArea
               autoSize={{ minRows: 4, maxRows: 10 }}
@@ -286,24 +342,40 @@ export function TaskForm({
           </Form.Item>
           <div className="start-input-toolbar">
             <div className="start-send-area">
-              <ModeSelect value={mode} onChange={setMode} />
-              <PermissionSelect value={config.permission_mode} onChange={/* 只覆盖新任务公开模式。 */ permission_mode => setDraft({ ...draft, permission_mode })} disabled={confirmingSubmission} />
-              {model && <Select
-                aria-label="会话模型"
-                value={selectedChoice.value}
-                size="small"
-                variant="borderless"
-                virtual={false}
-                popupMatchSelectWidth={false}
-                disabled={confirmingSubmission}
-                options={availableModels}
-                labelRender={/* 窄屏保留供应商入口，完整模型名称仍在选项内。 */ () => (
-                  <span title={model.requested_model}>
-                    {modelProviderName(model.provider, modelConnection?.name)}<span className="start-model">{' · ' + model.requested_model}</span>
-                  </span>
-                )}
-                onChange={setSelectedModel}
-              />}
+              <ModeSelect
+                value={frozen ? frozen.mode || 'auto' : mode}
+                onChange={setMode}
+                disabled={confirmingSubmission || mutation.isPending}
+              />
+              <PermissionSelect
+                value={frozen?.config?.permission_mode || config.permission_mode}
+                onChange={
+                  /* 只覆盖新任务公开模式。 */ (permission_mode) =>
+                    setDraft({ ...draft, permission_mode })
+                }
+                disabled={confirmingSubmission || mutation.isPending}
+              />
+              {model && (
+                <Select
+                  aria-label="会话模型"
+                  className="start-model-select"
+                  value={modelChoiceValue(model)}
+                  size="small"
+                  variant="borderless"
+                  virtual={false}
+                  popupMatchSelectWidth={false}
+                  disabled={confirmingSubmission || mutation.isPending}
+                  options={availableModels}
+                  labelRender={
+                    /* 发送区保留实际模型 ID，完整连接信息可从下拉选项读取。 */ () => (
+                      <span title={modelLabel(model, undefined, modelConnection?.name)}>
+                        {model.requested_model}
+                      </span>
+                    )
+                  }
+                  onChange={setSelectedModel}
+                />
+              )}
               <Button
                 type="primary"
                 htmlType="submit"
@@ -312,10 +384,8 @@ export function TaskForm({
                 icon={<ArrowUpOutlined />}
                 loading={mutation.isPending}
                 disabled={
-                  !selected ||
-                  selected.available === false ||
-                  !modelReady ||
-                  projectBusy
+                  !frozen &&
+                  (!selected || selected.available === false || !modelReady || projectBusy)
                 }
               />
             </div>
@@ -324,13 +394,8 @@ export function TaskForm({
         {selected?.available === false && (
           <Alert type="error" title={selected.error || '项目暂不可用，请检查目录与 Git 状态。'} />
         )}
-        {selected && (
-          <p className="project-mode-note">
-            {config.planning_policy === 'required' && '宿主要求先批准计划，批准前只能读取项目。'}
-            {createWorktree
-              ? '在独立 Git 工作树中执行，原目录的未提交改动不会带入，修改不会写回原目录。'
-              : '在所选目录执行，文件直接保存到该目录。'}
-          </p>
+        {selected && config.planning_policy === 'required' && (
+          <p className="project-mode-note">宿主要求先批准计划，批准前只能读取项目。</p>
         )}
         <details className="task-advanced">
           <summary>
@@ -338,36 +403,16 @@ export function TaskForm({
             {config.skills?.length ? ' · ' + config.skills.length + ' 个技能' : ''}
           </summary>
           <div className="task-advanced-body">
-            <McpSelector options={options.mcp_tools || []} selected={config.mcp_tools || []} onChange={/* 选择绑定当前定义，不增加连接信任。 */ mcp_tools => setDraft({ ...draft, mcp_tools })} disabled={confirmingSubmission} />
-            {selected?.kind === 'project' && (
-              <p className="project-revision">
-                <BranchesOutlined /> {selected.branch || 'Git 项目'}
-                {selected.head_commit && (
-                  <code title={'当前提交 ' + selected.head_commit}>
-                    {selected.head_commit.slice(0, 8)}
-                  </code>
-                )}
-              </p>
-            )}
-            {selected?.kind === 'project' && (
-              <Form.Item label="执行目录" htmlFor="execution-directory">
-                <Select
-                  id="execution-directory"
-                  value={createWorktree ? 'worktree' : 'local'}
-                  virtual={false}
-                  onChange={
-                    /* 创建工作树会更换实际执行目录，必须本次明确选择。 */ (value) =>
-                      setCreateWorktree(value === 'worktree')
-                  }
-                  options={[
-                    { value: 'local', label: '使用所选目录' },
-                    { value: 'worktree', label: '创建独立 Git 工作树（更换目录）' },
-                  ]}
-                />
-              </Form.Item>
-            )}
+            <McpSelector
+              options={options.mcp_tools || []}
+              selected={config.mcp_tools || []}
+              onChange={
+                /* 选择绑定当前定义，不增加连接信任。 */ (mcp_tools) =>
+                  setDraft({ ...draft, mcp_tools })
+              }
+              disabled={confirmingSubmission}
+            />
             <div className="composer-config">
-              <span>{model ? modelLabel(model, undefined, modelConnection?.name) : '未配置模型'}</span>
               <Link to="/settings">调整模型与预算</Link>
             </div>
             <Checkbox
@@ -394,23 +439,18 @@ export function TaskForm({
             >
               允许提出记忆候选
             </Checkbox>
-            {((options.skills?.length || 0) > 0 || (config.skills?.length || 0) > 0 || config.skill_auto) && (
+            {((options.skills?.length || 0) > 0 ||
+              (config.skills?.length || 0) > 0 ||
+              config.skill_auto) && (
               <SkillSelector
                 options={options.skills || []}
                 selected={config.skills || []}
                 onChange={/* 选名仍由宿主映射正文。 */ (skills) => setDraft({ ...draft, skills })}
                 automatic={config.skill_auto}
-                onAutomaticChange={/* 仅作用于当前任务配置。 */ (skill_auto) => setDraft({ ...draft, skill_auto })}
+                onAutomaticChange={
+                  /* 仅作用于当前任务配置。 */ (skill_auto) => setDraft({ ...draft, skill_auto })
+                }
               />
-            )}
-            {selected?.kind === 'project' && createWorktree && (
-              <Form.Item
-                label="提交基线"
-                name="base_ref"
-                extra="默认 HEAD；原目录的未提交改动不会带入。"
-              >
-                <Input placeholder="HEAD" maxLength={200} />
-              </Form.Item>
             )}
             {selected?.kind === 'project' && (
               <Checkbox

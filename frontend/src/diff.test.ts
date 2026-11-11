@@ -1,6 +1,17 @@
 import { expect, it } from 'vitest';
 import { parseDiff } from './diff';
 
+it('Git 八进制路径与纯重命名可用宿主清单的 UTF-8 路径定位', () => {
+  const path = '"b/\\346\\226\\207\\344\\273\\266.txt"'; // Git 默认按 UTF-8 字节转义中文。
+  const patch = [
+    'diff --git a/old.txt ' + path,
+    'similarity index 100%',
+    'rename from old.txt',
+    'rename to ' + path.replace('b/', ''),
+  ].join('\n');
+  expect(parseDiff(patch)[0].path).toBe('文件.txt');
+});
+
 it('普通补丁按中文文件分组并保留增删两侧行号和删除文件名', () => {
   // 覆盖原目录的 difflib 输出及删除文件，避免只支持 Git 补丁。
   const sections = parseDiff(

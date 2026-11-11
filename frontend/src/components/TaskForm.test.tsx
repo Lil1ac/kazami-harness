@@ -184,7 +184,7 @@ it('选择已有项目保留草稿并重置隔离执行与自动修复授权', a
   fireEvent.click(screen.getByText(/高级设置/));
   // 旧项目的执行方式只是前置状态；保留下面切换项目和提交的完整用户交互。
   fireEvent.mouseDown(screen.getByLabelText('执行目录'));
-  fireEvent.click(await screen.findByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
+  fireEvent.click(await screen.findByRole('option', { name: '创建独立 Git 工作树' }));
   // 预置旧项目的授权与文字，核心切换和发送仍使用完整用户交互；避免把前置输入耗时混进本例。
   fireEvent.click(screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' }));
   fireEvent.change(screen.getByLabelText('任务描述'), { target: { value: '保留切换前的要求' } });
@@ -281,11 +281,12 @@ it('空要求不提交；发送失败后仍保留任务要求', async () => {
 it('隔离Git提交使用用户指定基线，执行方式与来源一并发送', async () => {
   // 基线提交与保存设置各有独立副作用，分别验证，避免一个用例串行过多操作而超时。
   const user = setup({ recent_projects: [gitProject] });
-  await user.click(screen.getByText(/高级设置/));
+  expect(screen.getByLabelText('执行目录')).toBeVisible();
   await user.click(screen.getByLabelText('执行目录'));
-  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树（更换目录）' }));
+  await user.click(screen.getByRole('option', { name: '创建独立 Git 工作树' }));
   await user.click(screen.getByLabelText('任务描述'));
   await user.paste('修复代码');
+  await user.click(screen.getByText(gitProject.label, { selector: '.execution-location strong' }));
   await user.click(screen.getByLabelText('提交基线'));
   await user.keyboard('{Control>}a{/Control}');
   await user.paste('main');

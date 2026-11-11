@@ -1,4 +1,21 @@
-import type { ConversationTurn, ConversationView, RunView } from './types';
+import type { ConversationDelivery, ConversationTurn, ConversationView, RunView } from './types';
+
+/** 从实时 run 投影同一交付索引；运行中返回空值，避免与终态快照混用。 */
+export function runDelivery(run: RunView): ConversationDelivery | null {
+  if (run.active) return null;
+  const changedFiles = run.local_changes
+    ? run.local_changes.status === 'ready'
+      ? run.local_changes.files.length
+      : null
+    : run.project?.snapshot_status === 'ready'
+      ? run.project.files.length
+      : null;
+  return {
+    changed_files: changedFiles,
+    artifacts: run.result.artifacts.length,
+    has_verification: Boolean(run.result.verification || run.result.verification_attempts.length),
+  };
+}
 
 /** 将已确认运行并入对应用户轮；重复确认不增消息，迟到确认不倒退最新轮次。 */
 export function mergeConfirmedRun(current: ConversationView, view: RunView): ConversationView {
@@ -26,6 +43,7 @@ export function mergeConfirmedRun(current: ConversationView, view: RunView): Con
     validation_status: view.result.validation_status,
     created_at: view.created_at,
     interrupted: view.interrupted,
+    delivery: runDelivery(view),
   };
   return {
     ...current,
@@ -41,4 +59,11 @@ export function mergeConfirmedRun(current: ConversationView, view: RunView): Con
         )
       : [...current.turns, updated],
   };
+}
+/** 取 run 当前真正等待的决定入口；暂无待处理快照时返回 null。 */
+export function pendingDecisionLabel(run?: RunView): string | null {
+  if (run?.result.permissions.pending) return '审阅动作';
+  const request = run?.result.planning.pending;
+  if (!request) return null;
+  return request.kind === 'question' ? '回答问题' : '审阅计划';
 }

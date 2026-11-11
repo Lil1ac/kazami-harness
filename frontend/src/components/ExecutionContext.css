@@ -1,0 +1,88 @@
+/* 发送区上方用一条分隔线标识实际目标，展开路径时选择器保持原位。 */
+.execution-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+  padding: 0 4px 7px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.execution-location {
+  min-width: 0;
+  max-width: min(100%, 300px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.execution-location::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  margin-inline-end: 3px;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.execution-location[aria-expanded='true']::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.execution-location strong,
+.execution-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-location strong {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.execution-location > :not(strong),
+.execution-location::after {
+  flex-shrink: 0;
+}
+
+.execution-location-details {
+  flex-basis: 100%;
+  min-width: 0;
+  padding: 2px 4px 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.execution-location-details p {
+  margin: 6px 0;
+}
+
+.execution-location-details .ant-form-item {
+  max-width: 300px;
+  margin: 8px 0;
+}
+
+.execution-mode.ant-select {
+  max-width: 100%;
+  min-width: 114px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.execution-model {
+  min-width: 0;
+  flex: 1 1 88px;
+  line-height: 28px;
+  color: var(--muted);
+  text-align: end;
+}

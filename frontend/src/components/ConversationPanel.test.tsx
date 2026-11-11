@@ -61,6 +61,7 @@ function conversation(overrides: Partial<ConversationView> = {}): ConversationVi
         turn_index: 1,
         prompt: '第一次修复',
         final_answer: '修复已完成。',
+        delivery: null,
         execution_status: 'completed',
         validation_status: 'passed',
         created_at: null,
@@ -98,6 +99,7 @@ function show(run = makeRun(), review = false) {
           events={[]}
           onInspect={onInspect}
           onConfirmed={onConfirmed}
+          decisionOpen={Boolean(current.result.planning.pending)}
         />
         {review && (
           <ProjectReviewPanel project={current.project!} active={current.active} canManage />

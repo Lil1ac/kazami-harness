@@ -17,7 +17,7 @@ from agent_harness.storage.sessions import SessionError, SessionStore, history_m
 from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.storage.runs import StorageError
 from agent_harness.work.planning import PlanningError, continue_planning, planning_from_history
-from agent_harness.web.schemas import ConversationTurn, ConversationView, FollowupRequest
+from agent_harness.web.schemas import ConversationDelivery, ConversationTurn, ConversationView, FollowupRequest, RunView
 from agent_harness.permissions.models import PermissionResume
 from agent_harness.permissions.store import PermissionStore
 from agent_harness.work.tasks import TaskError
@@ -25,6 +25,23 @@ from agent_harness.work.tasks import TaskError
 if TYPE_CHECKING:
     from agent_harness.web.service import WebRunManager
     from agent_harness.storage.runs import RunHistory
+
+
+def _delivery(view: RunView) -> ConversationDelivery | None:
+    """从 view 已有的快照投影文件数和检查入口；运行未结束时返回 None，不重新扫描目录。"""
+    if view.active:
+        return None
+    changed_files = None
+    if view.local_changes is not None:
+        if view.local_changes.status == "ready":
+            changed_files = len(view.local_changes.files)
+    elif view.project is not None and view.project.snapshot_status == "ready":
+        changed_files = len(view.project.files)
+    return ConversationDelivery(
+        changed_files=changed_files,
+        artifacts=len(view.result.artifacts),
+        has_verification=bool(view.result.verification or view.result.verification_attempts),
+    )
 
 
 class ConversationService:
@@ -104,6 +121,7 @@ class ConversationService:
                     stop_reason=view.result.stop_reason,
                     validation_status=view.result.validation_status,
                     created_at=view.created_at, interrupted=view.interrupted,
+                    delivery=_delivery(view),
                 )
                 if identifier == record.run_ids[-1]:
                     latest_history = history

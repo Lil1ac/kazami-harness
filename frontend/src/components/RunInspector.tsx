@@ -54,6 +54,8 @@ function InspectorPanels({
   const { planning } = useRunPlanning(run, historical);
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
   const workSection = ['tasks', 'plan', 'agents'].includes(tab) ? tab : null; // URL 保持细分入口，顶部只显示一个工作标签。
+  const focusVerification = tab === 'verification'; // 交付摘要可以从任意轮直达真实检查输出。
+  const showArtifacts = tab === 'artifacts'; // 文件与产物共用分类，差异视图有自己的阅读空间。
   const pendingPlan = !historical && planning?.pending; // 历史等待状态属于旧快照，不能跳到当前审批。
   const pendingAction = !historical && run.result.permissions.pending;
   const showVerification = Boolean(
@@ -66,14 +68,16 @@ function InspectorPanels({
   useLayoutEffect(
     /* 切换分类或轮次时从顶部阅读；事件刷新保持位置，不把文件区的滚动带入诊断。 */ () => {
       const body = container.current?.querySelector('.ant-tabs-body-holder');
-      if (body && !(tab === 'output' && commandCallId)) body.scrollTop = 0;
+      if (body && !focusVerification && !(tab === 'output' && commandCallId)) body.scrollTop = 0;
     },
-    [run.run_id, tab, commandCallId],
+    [run.run_id, tab, commandCallId, focusVerification],
   );
   return (
     <div className="inspector-panels" ref={container}>
       <Tabs
-        activeKey={workSection ? 'work' : tab}
+        activeKey={
+          workSection ? 'work' : focusVerification ? 'result' : showArtifacts ? 'files' : tab
+        }
         onChange={
           /* 工作组默认从任务列表开始，其余入口保持原分类。 */ (value) =>
             onTab(value === 'work' ? 'tasks' : value)
@@ -116,6 +120,7 @@ function InspectorPanels({
                     repairAttempts={run.result.repair_attempts}
                     runId={run.run_id}
                     active={run.active}
+                    focusOutput={focusVerification}
                     project={
                       run.verification_kind === 'project_tests' ||
                       Boolean(run.project) ||
@@ -147,7 +152,23 @@ function InspectorPanels({
             label: '文件',
             children: (
               <div className="inspector-files">
-                {run.local_changes ? (
+                <Segmented
+                  aria-label="文件内容"
+                  value={showArtifacts ? 'artifacts' : 'files'}
+                  onChange={onTab}
+                  options={[
+                    { label: '代码改动', value: 'files' },
+                    { label: '产物', value: 'artifacts' },
+                  ]}
+                />
+                {showArtifacts ? (
+                  <ArtifactPanel
+                    runId={run.run_id}
+                    artifacts={run.result.artifacts}
+                    status={run.result.artifact_status}
+                    warnings={run.result.artifact_warnings}
+                  />
+                ) : run.local_changes ? (
                   <LocalChangesPanel
                     runId={run.run_id}
                     workspace={run.workspace}
@@ -165,13 +186,9 @@ function InspectorPanels({
                     active={run.active}
                     parentRunId={run.parent_run_id}
                   />
-                ) : null}
-                <ArtifactPanel
-                  runId={run.run_id}
-                  artifacts={run.result.artifacts}
-                  status={run.result.artifact_status}
-                  warnings={run.result.artifact_warnings}
-                />
+                ) : (
+                  <p className="muted">本轮没有保存代码差异。</p>
+                )}
               </div>
             ),
           },

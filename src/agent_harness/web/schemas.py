@@ -87,8 +87,17 @@ class FollowupRequest(DataModel):
         return self
 
 
-# 连续对话使用精简逐轮视图；完整事件、测试和差异仍通过每轮详情查看。
+class ConversationDelivery(DataModel):
+    """会话消息所需的固定交付索引，完整证据仍由指定运行读取。"""
+
+    changed_files: int | None = Field(default=None, ge=0)  # 固化差异的文件数；尚未核实时为None。
+    artifacts: int = Field(ge=0)  # 已登记的文件与输出引用数。
+    has_verification: bool  # 有当前或历史检查证据时可定位该轮输出。
+
+
 class ConversationTurn(DataModel):
+    """用户要求及其独立执行结果，供连续会话显示。"""
+
     stop_reason: str | None = None  # 区分规划结束、拒绝和实际开发完成，缺少可信终态时为None。
     run_id: UUID  # 本轮独立运行编号。
     parent_run_id: UUID | None  # 首轮为空。
@@ -99,6 +108,7 @@ class ConversationTurn(DataModel):
     validation_status: str | None = None  # 未读取到本轮结果时不猜测通过。
     created_at: datetime | None = None  # 可信清单创建时间；准备遗留时未知。
     interrupted: bool = False  # 本轮因服务中断缺少可信终态；缺省为False。
+    delivery: ConversationDelivery | None = None  # 正在运行或无法读取时没有固定交付索引。
 
 
 class ConversationSource(DataModel):

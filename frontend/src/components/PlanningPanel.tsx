@@ -1,5 +1,4 @@
 import { useId, useState } from 'react';
-import type { ReactNode } from 'react';
 import { Button, Input, Radio } from 'antd';
 import {
   ArrowRightOutlined,
@@ -91,15 +90,13 @@ function PlanContent({ plan }: { plan: PlanRevision }) {
   );
 }
 
-/** 将 plan 呈现为计划块；runId 固定导出来源，actions 缺省时只提供阅读和导出。 */
+/** 将 plan 呈现为计划文档；runId 固定导出来源，决定按钮由规划区单独承载。 */
 function PlanCard({
   runId,
   plan,
-  actions,
 }: {
   runId: string; // 当前快照所属运行，导出不跟随会话最新轮自动切换。
   plan: PlanRevision; // 要审阅或回看的版本及固定进度。
-  actions?: ReactNode; // 仅当前待批准请求提供操作区，历史不传。
 }) {
   const [expanded, setExpanded] = useState(plan.status === 'pending'); // 待批准展开全文，批准后切换为紧凑进度。
   const contentId = useId(); // 折叠按钮与阅读区的稳定关联，不含运行授权信息。
@@ -170,7 +167,6 @@ function PlanCard({
       >
         <PlanContent plan={plan} />
       </div>
-      {actions}
     </article>
   );
 }
@@ -334,90 +330,89 @@ export function PlanningPanel({
 }) {
   const plan = state.plans.at(-1);
   const request = state.pending;
+  const canReview =
+    request?.kind === 'plan_approval' &&
+    request.plan_version === plan?.version &&
+    plan?.status === 'pending' &&
+    onDecision;
   if (!plan && !request && state.phase !== 'planning') return null;
   return (
-    <section className="planning-panel" aria-label="规划与决策">
-      {plan && (
-        <PlanCard
-          key={`${plan.version}:${plan.status}`}
-          runId={runId}
-          plan={plan}
-          actions={
-            request?.kind === 'plan_approval' &&
-            request.plan_version === plan.version &&
-            plan.status === 'pending' &&
-            onDecision ? (
-              <PlanDecisions
-                key={request.id}
-                request={request}
-                disabled={disabled}
-                onDecision={onDecision}
-              />
-            ) : undefined
-          }
-        />
-      )}
-      {!plan && !request && (
-        <p className="planning-placeholder" role="status">
-          尚未提交计划 · {state.reason || '等待形成可审阅方案'}
-        </p>
-      )}
-      {request?.kind === 'question' &&
-        (onDecision ? (
-          <QuestionForm
-            key={request.id}
-            request={request}
-            disabled={disabled}
-            onDecision={onDecision}
-          />
-        ) : (
-          <div className="planning-question">
-            <div className="plan-eyebrow">当时的问题</div>
-            <MarkdownMessage text={request.question} />
-          </div>
-        ))}
-      {state.plans.length > 1 && (
-        <details className="plan-history">
-          <summary>
-            历史版本<span>{state.plans.length - 1}</span>
-          </summary>
-          {state.plans.slice(0, -1).map(
-            /* 历史方案只读，不能复用当前版本的决定入口。 */ (previous) => (
-              <details key={previous.version} className="plan-history-version">
-                <summary>
-                  v{previous.version} · {previous.title}
-                  <span>{planLabels[previous.status]}</span>
-                </summary>
-                <a
-                  className="plan-export"
-                  href={planMarkdownUrl(runId, previous.version)}
-                  download
-                  aria-label={`导出历史计划 v${previous.version} 为 Markdown`}
-                >
-                  导出 Markdown
-                </a>
-                <PlanContent plan={previous} />
-              </details>
-            ),
-          )}
-        </details>
-      )}
-      {!!state.decisions.length && (
-        <details className="plan-history">
-          <summary>
-            决定记录<span>{state.decisions.length}</span>
-          </summary>
-          <ul className="plan-decision-log">
-            {state.decisions.map(
-              /* 决定原文仅按文本呈现，不重放或解释其指令。 */ (decision, index) => (
-                <li key={index}>
-                  {decision.plan_version ? <span>v{decision.plan_version}</span> : null}
-                  {decision.text}
-                </li>
+    <section
+      className={'planning-panel' + (canReview ? ' is-plan-review' : '')}
+      aria-label="规划与决策"
+    >
+      <div className="planning-document">
+        {plan && <PlanCard key={`${plan.version}:${plan.status}`} runId={runId} plan={plan} />}
+        {!plan && !request && (
+          <p className="planning-placeholder" role="status">
+            尚未提交计划 · {state.reason || '等待形成可审阅方案'}
+          </p>
+        )}
+        {request?.kind === 'question' &&
+          (onDecision ? (
+            <QuestionForm
+              key={request.id}
+              request={request}
+              disabled={disabled}
+              onDecision={onDecision}
+            />
+          ) : (
+            <div className="planning-question">
+              <div className="plan-eyebrow">当时的问题</div>
+              <MarkdownMessage text={request.question} />
+            </div>
+          ))}
+        {state.plans.length > 1 && (
+          <details className="plan-history">
+            <summary>
+              历史版本<span>{state.plans.length - 1}</span>
+            </summary>
+            {state.plans.slice(0, -1).map(
+              /* 历史方案只读，不能复用当前版本的决定入口。 */ (previous) => (
+                <details key={previous.version} className="plan-history-version">
+                  <summary>
+                    v{previous.version} · {previous.title}
+                    <span>{planLabels[previous.status]}</span>
+                  </summary>
+                  <a
+                    className="plan-export"
+                    href={planMarkdownUrl(runId, previous.version)}
+                    download
+                    aria-label={`导出历史计划 v${previous.version} 为 Markdown`}
+                  >
+                    导出 Markdown
+                  </a>
+                  <PlanContent plan={previous} />
+                </details>
               ),
             )}
-          </ul>
-        </details>
+          </details>
+        )}
+        {!!state.decisions.length && (
+          <details className="plan-history">
+            <summary>
+              决定记录<span>{state.decisions.length}</span>
+            </summary>
+            <ul className="plan-decision-log">
+              {state.decisions.map(
+                /* 决定原文仅按文本呈现，不重放或解释其指令。 */ (decision, index) => (
+                  <li key={index}>
+                    {decision.plan_version ? <span>v{decision.plan_version}</span> : null}
+                    {decision.text}
+                  </li>
+                ),
+              )}
+            </ul>
+          </details>
+        )}
+      </div>
+      {canReview && request && onDecision && (
+        <PlanDecisions
+          key={request.id}
+          request={request}
+          disabled={disabled}
+          onDecision={onDecision}
+        />
       )}
     </section>
   );

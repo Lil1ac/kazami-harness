@@ -203,7 +203,7 @@ export function useConversationSend(
       );
       onConfirmed(view);
     },
-    onError: /* 确定未接纳的4xx清除待确认编号；网络/不确定结果保留原编号供明确重试。 */ (error) => {
+    onError: /* 确定未接纳的4xx清除待确认编号；网络/不确定结果保留原编号供明确重试。 */ (error, submission) => {
       const detail = error as { status?: number; code?: string };
       if (
         detail.status &&
@@ -212,6 +212,10 @@ export function useConversationSend(
         detail.code !== 'request_uncertain'
       ) {
         setPending(null);
+        setQueuedJob(null);
+        if (submission.body.decision || submission.body.action_decision) {
+          void cache.invalidateQueries({ queryKey: ['run', submission.parentId] });
+        }
       }
       void cache.invalidateQueries({ queryKey: ['conversation', sessionId] });
       void cache.invalidateQueries({ queryKey: ['permissions'] });

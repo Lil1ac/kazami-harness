@@ -1,7 +1,7 @@
 import { makeConversationManagement } from '../test/fixtures';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
 import {
@@ -60,6 +60,7 @@ function turn(run: RunView): ConversationTurn {
     run_id: run.run_id,
     parent_run_id: run.parent_run_id || null,
     turn_index: run.turn_index || 1,
+    delivery: null,
     prompt: run.prompt,
     final_answer: run.result.final_answer,
     execution_status: run.result.execution_status,
@@ -92,6 +93,7 @@ function show(initialPath = '/runs/run-a') {
     <QueryClientProvider client={client}>
       <ConfigDraftProvider>
         <MemoryRouter initialEntries={[initialPath]}>
+          <LocationSnapshot />
           <Routes>
             <Route path="/runs/:runId" element={<RunDetailPage />} />
           </Routes>
@@ -100,6 +102,12 @@ function show(initialPath = '/runs/run-a') {
     </QueryClientProvider>,
   );
   return client;
+}
+
+/** 暴露实际路由路径与查询串，验证关闭和确认决定后的刷新入口。 */
+function LocationSnapshot() {
+  const { pathname, search } = useLocation();
+  return <output aria-label="当前查询参数" data-path={pathname}>{search}</output>;
 }
 
 beforeEach(
@@ -185,13 +193,47 @@ it('普通入口默认收起详情，展开和关闭检查器保留同一输入�
   await user.click(trigger);
   expect(screen.getByRole('complementary', { name: '运行详情' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '收起详情' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByLabelText('当前查询参数')).toHaveTextContent('tab=result');
   await user.click(screen.getByRole('button', { name: '关闭详情' }));
+  expect(screen.getByLabelText('当前查询参数')).toBeEmptyDOMElement();
   expect(screen.queryByRole('complementary', { name: '运行详情' })).not.toBeInTheDocument();
   expect(trigger).toHaveFocus();
   expect(screen.getByLabelText('输入消息')).toBe(input);
   expect(screen.getByRole('log', { name: '会话消息' })).toBe(log);
   expect(input).toHaveValue('保留这条要求');
   expect(createFollowup).not.toHaveBeenCalled();
+});
+
+it('确认待处理决定后关闭抽屉并跳到新轮，旧查询串不会覆盖新地址', async () => {
+  // 直接打开待处理决定，确认后新轮写入同一会话缓存，再由路由指向新轮。
+  const root = runs.get('run-a')!;
+  root.result.planning = {
+    phase: 'planning',
+    reason: '需要选择',
+    plans: [],
+    decisions: [],
+    pending: {
+      id: 'question-1',
+      kind: 'question',
+      question: '采用哪个方案？',
+      options: ['方案 A'],
+      plan_version: null,
+    },
+  };
+  root.result.execution_status = 'waiting_input';
+  const user = userEvent.setup();
+  show('/runs/run-a?decision=run-a');
+  await user.click(await screen.findByRole('radio', { name: '方案 A' }));
+  await user.click(screen.getByRole('button', { name: '回答并继续' }));
+  await waitFor(
+    /* 新轮地址与决定抽屉的退出应出现在同一次确认流程。 */ () => {
+      const location = screen.getByLabelText('当前查询参数');
+      expect(location).toHaveAttribute('data-path', '/runs/run-b');
+      expect(location).toBeEmptyDOMElement();
+    },
+  );
+  expect(await screen.findByText('已处理：方案 A')).toBeVisible();
+  expect(createFollowup).toHaveBeenCalledTimes(1);
 });
 
 it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', async () => {

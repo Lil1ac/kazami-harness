@@ -826,8 +826,16 @@ export interface FollowupRequest {
   config?: ConfigOverrides; // 默认沿用前轮，可用当前配置草稿覆盖。
 }
 
+/** 交付索引由该轮固定证据生成，点击后才加载完整差异和输出。 */
+export interface ConversationDelivery {
+  changed_files: number | null; // 仅差异快照完整时计数，空值表示未知。
+  artifacts: number; // 已登记的产物和输出数。
+  has_verification: boolean; // 是否有可以定位的实际检查记录。
+}
+
 /** 连续对话的一轮；详细测试、事件与差异仍在独立运行详情。 */
 export interface ConversationTurn {
+  delivery: ConversationDelivery | null; // 执行中或记录不可读时为空。
   stop_reason?: string | null; // 区分规划收尾、拒绝与开发结果；未建立终态时未知。
   run_id: string; // 本轮运行编号。
   parent_run_id: string | null; // 前轮编号。

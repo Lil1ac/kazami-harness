@@ -3,18 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Drawer, Skeleton } from 'antd';
 import {
   ArrowLeftOutlined,
+  AuditOutlined,
   CloseOutlined,
+  CompressOutlined,
+  ExpandOutlined,
   LayoutOutlined,
   LeftOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { ApiError } from '../api';
 import { cancelRun, errorMessage, getConversation, getOptions, getRun } from '../api';
 import { ConversationActions } from '../components/ConversationActions';
 import { ConversationRecovery } from '../components/ConversationRecovery';
 import { useRunEvents } from '../hooks/useRunEvents';
-import { mergeConfirmedRun } from '../conversation';
+import { mergeConfirmedRun, pendingDecisionLabel } from '../conversation';
 import { RunStatus } from '../components/RunStatus';
 import { ConversationPanel } from '../components/ConversationPanel';
 import { RunInspector } from '../components/RunInspector';
@@ -44,9 +47,27 @@ function useNarrowWorkspace(): boolean {
 /** 校验详情分类；空值或未知标签回到结果，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
   return value &&
-    ['tasks', 'plan', 'agents', 'result', 'output', 'files', 'diagnostics'].includes(value)
+    [
+      'tasks',
+      'plan',
+      'agents',
+      'result',
+      'verification',
+      'output',
+      'files',
+      'artifacts',
+      'diagnostics',
+    ].includes(value)
     ? value
     : 'result';
+}
+
+/** 从 params 移除查看状态，返回可继续保留其他会话查询参数的副本。 */
+function clearInspection(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  for (const key of ['inspect', 'tab', 'command', 'integration', 'wide', 'decision'])
+    next.delete(key);
+  return next;
 }
 
 /** 读取路由运行后，以稳定session_id挂载工作区；新轮导航不会重建对话与输入。 */
@@ -112,6 +133,7 @@ function SessionWorkspace({
 }) {
   const cache = useQueryClient();
   const navigate = useNavigate();
+  const locationKey = useLocation().key;
   const [params, setParams] = useSearchParams();
   const narrow = useNarrowWorkspace();
   const requestedSelection = params.get('inspect') || routeRun.run_id;
@@ -121,13 +143,17 @@ function SessionWorkspace({
     ? requestedSelection
     : conversation.latest_run_id;
   const tab = inspectorTab(params.get('tab'));
-  const [panelOpen, setPanelOpen] = useState(params.has('tab') || params.has('inspect')); // 普通入口优先阅读消息；显式详情深链接保留查看意图。
-  const previousNarrow = useRef(narrow); // 只在真正跨断点时收起详情，不覆盖首屏深链接。
+  const panelOpen = !params.has('decision') && (params.has('tab') || params.has('inspect')); // URL 同时用于直达和关闭后刷新。
+  const wide = !narrow && panelOpen && tab === 'files' && params.get('wide') === '1'; // 宽屏展开复用同一个差异视图。
   const inspectorHeading = useRef<HTMLDivElement>(null); // 桌面侧栏从标题开始键盘阅读。
   const inspectorToggle = useRef<HTMLButtonElement>(null); // 直接打开深链接时的关闭焦点回退。
   const inspectorTrigger = useRef<HTMLElement | null>(null); // 用户打开详情的入口，用于关闭后恢复焦点。
-  const decision = useRef<HTMLDivElement>(null); // 当前轮待批准或待回答的唯一操作区。
-  const focusAfterClose = useRef<{ target: HTMLElement; reveal: boolean } | null>(null); // 抽屉退出动画后再恢复或定位。
+  const decisionToggle = useRef<HTMLButtonElement>(null); // 队列直达审批关闭时的焦点回退。
+  const decisionTrigger = useRef<HTMLElement | null>(null); // 会话内实际打开审批的按钮。
+  const confirmedFrom = useRef<string | null>(null); // 已发起新轮跳转的位置键，用于跳过旧地址的异步清理。
+  const focusAfterClose = useRef<{ target: HTMLElement; surface: 'detail' | 'decision' } | null>(
+    null,
+  ); // 只有退出的面板可以恢复自己的焦点。
   const query = useQuery({
     queryKey: ['run', conversation.latest_run_id],
     queryFn: /* 最新轮快照决定运行状态，查看旧轮时继续跟踪最新执行。 */ ({ signal }) =>
@@ -138,6 +164,8 @@ function SessionWorkspace({
       state.state.data?.active ? 1500 : false,
   });
   const latest = query.data;
+  const decisionLabel = pendingDecisionLabel(latest);
+  const decisionOpen = Boolean(decisionLabel && params.get('decision') === latest?.run_id);
   const options = useQuery({
     queryKey: ['options'],
     queryFn: /* 只读当前可选技能，不依据目录重建历史快照。 */ ({ signal }) => getOptions(signal),
@@ -160,12 +188,12 @@ function SessionWorkspace({
       cache.setQueryData(['run', view.run_id], view),
   });
   useEffect(
-    /* 跨屏幕断点收起详情，让消息优先；初次挂载保留URL的详情意图。 */ () => {
-      if (previousNarrow.current === narrow) return;
-      previousNarrow.current = narrow;
-      setPanelOpen(false);
+    /* 过期队列链接回到会话；确认跳转会自行清理原地址，避免两个 replace 竞争。 */ () => {
+      if (latest && params.has('decision') && !decisionOpen && confirmedFrom.current !== locationKey) {
+        setParams(clearInspection(params), { replace: true });
+      }
     },
-    [narrow],
+    [latest, decisionOpen, locationKey, params, setParams],
   );
 
   /** 查看 runId 的分类 value；commandCallId 只用于该轮输出定位，不重建对话。 */
@@ -174,43 +202,61 @@ function SessionWorkspace({
       inspectorTrigger.current = document.activeElement;
     }
     const next = new URLSearchParams(params);
+    next.delete('decision');
+    if (value !== 'files') next.delete('wide');
+    if (runId !== selectedId) next.delete('integration');
     next.set('inspect', runId);
     next.set('tab', value);
     if (value === 'output' && commandCallId) next.set('command', commandCallId);
     else next.delete('command');
     setParams(next, { replace: true });
-    setPanelOpen(true);
   }
 
-  /** 关闭详情并记录下一焦点；审批跳转显式传入对话目标，其余关闭返回触发按钮。 */
-  function closePanel(
-    target = inspectorTrigger.current || inspectorToggle.current,
-    reveal = false,
-  ): void {
-    focusAfterClose.current = target ? { target, reveal } : null;
-    setPanelOpen(false);
+  /** 关闭详情并清除深链接，随后把焦点还给消息入口。 */
+  function closePanel(): void {
+    const target = inspectorTrigger.current || inspectorToggle.current;
+    focusAfterClose.current = target ? { target, surface: 'detail' } : null;
+    inspectorTrigger.current = null;
+    setParams(clearInspection(params), { replace: true });
   }
 
-  /** 关闭动画结束后恢复焦点；目标已被新一轮移除时无需处理。 */
-  function restoreFocus(): void {
+  /** 打开当前运行的决定；trigger 缺省时使用顶栏入口作为关闭后的焦点。 */
+  function showDecision(trigger?: HTMLElement): void {
+    if (!latest || !decisionLabel) return;
+    decisionTrigger.current = trigger ?? null;
+    const next = clearInspection(params);
+    next.set('decision', latest.run_id);
+    setParams(next, { replace: true });
+  }
+
+  /** 关闭审批阅读，恢复原入口，保留尚未发送的会话草稿。 */
+  function closeDecision(): void {
+    const target = decisionTrigger.current || decisionToggle.current;
+    focusAfterClose.current = target ? { target, surface: 'decision' } : null;
+    decisionTrigger.current = null;
+    setParams(clearInspection(params), { replace: true });
+  }
+
+  /** surface 关闭后恢复其焦点；目标已被新一轮移除时无需处理。 */
+  function restoreFocus(surface: 'detail' | 'decision'): void {
     const pending = focusAfterClose.current;
+    if (pending?.surface !== surface) return;
     focusAfterClose.current = null;
-    if (!pending?.target.isConnected) return;
-    pending.target.focus({ preventScroll: true });
-    if (pending.reveal) pending.target.scrollIntoView?.({ block: 'nearest' });
+    if (pending.target.isConnected) pending.target.focus({ preventScroll: true });
   }
 
   useLayoutEffect(
     /* 桌面侧栏即时卸载；窄屏抽屉等退出完成再移动焦点。 */ () => {
       if (narrow) return;
       if (panelOpen) inspectorHeading.current?.focus({ preventScroll: true });
-      else restoreFocus();
+      else restoreFocus('detail');
     },
     [narrow, panelOpen],
   );
 
   /** 用POST已确认的真实视图补入会话后再刷新；保留同一DOM与输入状态。 */
   function confirmed(view: RunView): void {
+    confirmedFrom.current = locationKey;
     cache.setQueryData(['run', view.run_id], view);
     cache.setQueryData<ConversationView>(
       ['conversation', conversation.session_id],
@@ -264,9 +310,7 @@ function SessionWorkspace({
       commandCallId={tab === 'output' ? params.get('command') || undefined : undefined}
       onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
       readOnly={conversation.management.state !== 'active'}
-      onShowDecision={
-        /* 跳到对话中当前待处理决定，关闭窄屏遮罩。 */ () => closePanel(decision.current, true)
-      }
+      onShowDecision={/* 打开同一个决定抽屉，详情视图退出。 */ () => showDecision()}
     />
   ) : null;
   return (
@@ -293,12 +337,6 @@ function SessionWorkspace({
             <span>·</span>
             {conversation.turns.length} 轮对话
           </p>
-          {latest?.execution_mode && (
-            <p className="session-directory" title={latest.workspace}>
-              <span>{latest.execution_mode === 'local' ? '所选目录' : '独立 Git 工作树'}</span>
-              <code>{latest.workspace}</code>
-            </p>
-          )}
           {conversation.management.assigned_project_id !== conversation.source?.id &&
             conversation.source && (
               <p className="session-directory">
@@ -316,7 +354,21 @@ function SessionWorkspace({
               }
             }
           />
-          {latest && <RunStatus run={latest} />}
+          {decisionLabel ? (
+            <Button
+              ref={decisionToggle}
+              size="small"
+              icon={<AuditOutlined />}
+              onClick={
+                /* 打开阅读区后还需要用户明确做决定。 */ (event) =>
+                  showDecision(event.currentTarget)
+              }
+            >
+              {decisionLabel}
+            </Button>
+          ) : (
+            latest && <RunStatus run={latest} />
+          )}
           <Button
             ref={inspectorToggle}
             type="text"
@@ -328,7 +380,7 @@ function SessionWorkspace({
                 if (panelOpen) closePanel();
                 else {
                   inspectorTrigger.current = event.currentTarget;
-                  setPanelOpen(true);
+                  inspect(selectedId);
                 }
               }
             }
@@ -348,7 +400,13 @@ function SessionWorkspace({
           description={errorMessage(cancellation.error || refreshError || query.error)}
         />
       )}
-      <div className={`session-body ${!narrow && panelOpen ? 'with-inspector' : ''}`}>
+      <div
+        className={
+          'session-body' +
+          (!narrow && panelOpen ? ' with-inspector' : '') +
+          (wide ? ' with-wide-inspector' : '')
+        }
+      >
         <ConversationPanel
           run={latest}
           conversation={conversation}
@@ -356,7 +414,10 @@ function SessionWorkspace({
           skills={options.data?.skills || []}
           mcpTools={options.data?.mcp_tools || []}
           onInspect={inspect}
-          decisionRef={decision}
+          decisionOpen={decisionOpen}
+          onShowDecision={showDecision}
+          onCloseDecision={closeDecision}
+          onDecisionClosed={/* 审批退出后回到它的入口。 */ () => restoreFocus('decision')}
           onConfirmed={confirmed}
           onStop={
             /* 用户明确停止当前轮，草稿与已有输出保持可读。 */ () =>
@@ -377,6 +438,24 @@ function SessionWorkspace({
             <div className="inspector-heading" ref={inspectorHeading} tabIndex={-1}>
               <strong>{detailTitle}</strong>
               {turnNavigation}
+              {tab === 'files' && (
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={wide ? '收起宽差异视图' : '展开宽差异视图'}
+                  title={wide ? '收起宽差异视图' : '展开宽差异视图'}
+                  aria-pressed={wide}
+                  icon={wide ? <CompressOutlined /> : <ExpandOutlined />}
+                  onClick={
+                    /* 保留同一文件选择和聊天草稿，只调整详情宽度。 */ () => {
+                      const next = new URLSearchParams(params);
+                      if (wide) next.delete('wide');
+                      else next.set('wide', '1');
+                      setParams(next, { replace: true });
+                    }
+                  }
+                />
+              )}
               <button
                 type="button"
                 aria-label="关闭详情"
@@ -403,10 +482,13 @@ function SessionWorkspace({
           onClose={/* 关闭抽屉回到原消息位置。 */ () => closePanel()}
           afterOpenChange={
             /* 等待遮罩释放焦点后再定位对话。 */ (open) => {
-              if (!open) restoreFocus();
+              if (!open) restoreFocus('detail');
             }
           }
-          styles={{ wrapper: { width: 'min(100vw, 420px)' }, body: { padding: 0 } }}
+          styles={{
+            wrapper: { width: tab === 'files' ? '100vw' : 'min(100vw, 420px)' },
+            body: { padding: 0 },
+          }}
         >
           {inspector}
         </Drawer>

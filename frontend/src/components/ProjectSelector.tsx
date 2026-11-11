@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Form, Input, Modal, Select } from 'antd';
 import { FolderOpenOutlined, PlusOutlined } from '@ant-design/icons';
-import { Link } from 'react-router';
 import { createProject, errorMessage, openProject, pickProject } from '../api';
 import { cacheProject } from '../projects';
 import type { LocalProjectOption, ProjectSelection } from '../types';
@@ -12,12 +11,14 @@ export function ProjectSelector({
   projects,
   value,
   pickerAvailable,
+  disabled,
   onChange,
   onBusyChange,
 }: {
   projects: LocalProjectOption[]; // 当前宿主登记，按最近打开排序。
   value?: LocalProjectOption; // 未选择时为空，不能据此发起任务。
   pickerAvailable?: boolean; // false时解释原生选择不可用，undefined允许尝试。
+  disabled?: boolean; // 原提交待确认时锁定项目，避免展示不同执行目标。
   onChange: (project: LocalProjectOption) => void; // 成功后选择项目，不清除任务文字。
   onBusyChange: (busy: boolean) => void; // 弹窗或切换请求期间禁止向旧项目发送任务。
 }) {
@@ -84,7 +85,7 @@ export function ProjectSelector({
           showSearch={{ optionFilterProp: 'search' }}
           virtual={false}
           loading={opening.isPending}
-          disabled={opening.isPending}
+          disabled={disabled || opening.isPending}
           onChange={/* 切换只重新核验已登记项目，不重新弹目录选择框。 */ (id) => opening.mutate(id)}
           options={choices.map(
             /* 同名项目通过绑定路径区分，路径也参与搜索。 */ (project) => ({
@@ -112,24 +113,12 @@ export function ProjectSelector({
           aria-label="新建项目"
           icon={<PlusOutlined />}
           onClick={showCreate}
-          disabled={opening.isPending}
+          disabled={disabled || opening.isPending}
         >
           新建项目
         </Button>
       </div>
-      {value ? (
-        <div className="selected-project-context">
-          <span className="selected-project-path" title={value.path}>
-            <FolderOpenOutlined /> {value.path}
-          </span>
-          <Link
-            className="project-settings-link"
-            to={'/projects/' + encodeURIComponent(value.id) + '?settings=1'}
-          >
-            项目设置
-          </Link>
-        </div>
-      ) : (
+      {!value && (
         <p className="project-selection-empty">选择一个项目，或新建项目并绑定文件夹。</p>
       )}
       {opening.error && (

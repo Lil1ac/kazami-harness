@@ -145,6 +145,15 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
     <section className="integration-panel" aria-labelledby={headingId}>
       <div className="section-heading">
         <h3 id={headingId}>成果采纳</h3>
+        {history.data && (
+          <Tag>
+            {current
+              ? current.status === 'needs_review' && current.last_job?.recovery_kind === 'process'
+                ? '检查进程待核对'
+                : labels[current.status]
+              : '尚未准备采纳候选'}
+          </Tag>
+        )}
         <Link to="/jobs">运行队列</Link>
       </div>
       {(targets.error || history.error || create.error || action.error || resolution.error) && (
@@ -199,11 +208,6 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
       {current && (
         <>
           <div className="integration-target">
-            <Tag>
-              {current.status === 'needs_review' && current.last_job?.recovery_kind === 'process'
-                ? '检查进程待核对'
-                : labels[current.status]}
-            </Tag>
             {current.target && (
               <>
                 <strong>{current.target.path}</strong>

@@ -23,6 +23,7 @@ function original(): ConversationView {
         turn_index: 1,
         prompt: '继续',
         final_answer: null,
+        delivery: null,
         execution_status: 'running',
         validation_status: 'unverified',
         created_at: null,

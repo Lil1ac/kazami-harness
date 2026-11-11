@@ -148,6 +148,12 @@ def test_file_followup_inherits_history_and_code_without_rewriting_parent(config
             assert stale.status_code == 409 and stale.json()['error']['code'] == 'session_stale_parent'
             conversation = (await client.get(f'/api/runs/{first["run_id"]}/conversation')).json()
             assert len(conversation['turns']) == 2 and conversation['latest_run_id'] == second['run_id'] and conversation['can_continue']
+            for turn, run in zip(conversation['turns'], (first, second), strict=True):
+                assert turn['delivery'] == {
+                    'changed_files': len(run['local_changes']['files']),
+                    'artifacts': len(run['result']['artifacts']),
+                    'has_verification': False,
+                }
     asyncio.run(scenario())
 
 

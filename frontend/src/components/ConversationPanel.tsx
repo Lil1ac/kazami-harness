@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Input, Select, Popover, Tooltip } from 'antd';
+import { Alert, Button, Checkbox, Drawer, Input, Select, Popover, Tooltip } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -29,6 +29,9 @@ import { PermissionPanel, PermissionSelect } from './PermissionPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
+import { pendingDecisionLabel, runDelivery } from '../conversation';
+import { modelLabel } from '../modelSelection';
+import { ExecutionContext } from './ExecutionContext';
 
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
@@ -38,7 +41,10 @@ interface ConversationPanelProps {
   events: RunEvent[]; // 最新轮共享订阅，不为每条消息创建SSE。
   skills?: SkillOption[]; // 当前宿主目录仅用于下一条的选择，不改写旧轮证据。
   onInspect: (runId: string, tab?: string, commandCallId?: string) => void; // 查看某轮详情或命令，不更改追加父轮。
-  decisionRef?: React.Ref<HTMLDivElement>; // 详情跳回待处理决定时，用于定位对话内唯一审批区。
+  decisionOpen?: boolean; // 当前会话的 URL 是否指向实际待处理决定。
+  onShowDecision?: (trigger: HTMLElement) => void; // 从消息摘要进入审批，记住触发位置。
+  onCloseDecision?: () => void; // 关闭审批并清理路由选择。
+  onDecisionClosed?: () => void; // 抽屉退出后恢复键盘焦点。
   onConfirmed: (run: RunView) => void; // 服务确认新运行后原地更新会话与路由。
   onStop?: () => void; // 用户点击停止后由宿主取消当前运行；缺省不提供停止入口。
   stopping?: boolean; // 宿主正在清理或取消请求尚未返回。
@@ -96,6 +102,10 @@ function TurnMessage({
   const selected = turn.run_id === run?.run_id;
   const answer = selected && run?.active ? null : turn.final_answer; // 宿主检查和自动修复结束前，文字仍属于过程。
   const interrupted = turn.interrupted ?? (selected && Boolean(run?.interrupted));
+  const delivery = selected && run ? runDelivery(run) : turn.delivery;
+  const execution = selected && run ? run.result.execution_status : turn.execution_status;
+  const validation = selected && run ? run.result.validation_status : turn.validation_status;
+  const reason = selected && run ? run.result.stop_reason : turn.stop_reason;
   return (
     <div className="assistant-message">
       <div className="assistant-content">
@@ -118,8 +128,9 @@ function TurnMessage({
           phase={phaseLabel(run?.phase || 'created')}
           finalAnswer={answer}
           onReveal={onRevealActivity}
-          onOpenOutput={/* 工具调用只定位本轮日志，不会重放命令。 */ (callId) =>
-            onInspect(turn.run_id, 'output', callId)
+          onOpenOutput={
+            /* 工具调用只定位本轮日志，不会重放命令。 */ (callId) =>
+              onInspect(turn.run_id, 'output', callId)
           }
           onInspect={
             /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () =>
@@ -139,32 +150,61 @@ function TurnMessage({
           </p>
         )}
         <div className="message-actions">
-          {answer && !readOnly && <SaveMemoryButton runId={turn.run_id} text={answer} />}
           {(!selected || !run?.active) && (
-            <span>
-              {turnStatus(
-                turn.execution_status,
-                turn.validation_status,
-                interrupted,
-                turn.stop_reason,
+            <div className="turn-delivery" role="group" aria-label="本轮交付">
+              <span>{turnStatus(execution, validation, interrupted, reason)}</span>
+              {(delivery && (delivery.changed_files ?? 0) > 0) || (selected && run?.project) ? (
+                <button
+                  type="button"
+                  onClick={
+                    /* 文件数来自本轮快照，点击只读取该轮差异。 */ () =>
+                      onInspect(turn.run_id, 'files')
+                  }
+                >
+                  {delivery?.changed_files == null
+                    ? '查看工作树'
+                    : '代码改动 · ' + delivery.changed_files + ' 个文件'}
+                </button>
+              ) : (
+                delivery?.changed_files === 0 &&
+                execution === 'completed' && <span>变更文件 0</span>
               )}
-            </span>
+              {delivery?.has_verification && (
+                <button
+                  type="button"
+                  onClick={
+                    /* 打开该轮实际验收，不切换到其他轮的输出。 */ () =>
+                      onInspect(turn.run_id, 'verification')
+                  }
+                >
+                  {validation === 'failed' || validation === 'error'
+                    ? '查看检查输出'
+                    : '查看验收记录'}
+                </button>
+              )}
+              {delivery && delivery.artifacts > 0 && (
+                <button
+                  type="button"
+                  onClick={
+                    /* 产物来自固定记录，不重新读取项目目录。 */ () =>
+                      onInspect(turn.run_id, 'artifacts')
+                  }
+                >
+                  产物 {delivery.artifacts}
+                </button>
+              )}
+            </div>
           )}
-          {selected && (run.project || Boolean(run.local_changes?.files.length)) && (
-            <button
-              type="button"
-              onClick={/* 代码差异和审阅属于所选轮。 */ () => onInspect(turn.run_id, 'files')}
-            >
-              代码改动
-            </button>
-          )}
+          {answer && !readOnly && <SaveMemoryButton runId={turn.run_id} text={answer} />}
         </div>
         <RuntimePanel
           runId={turn.run_id}
           active={Boolean(selected && run?.active)}
           readOnly={readOnly || !selected}
           display="conversation"
-          onOpenOutput={/* 当轮只有命令摘要，完整日志在输出页。 */ () => onInspect(turn.run_id, 'output')}
+          onOpenOutput={
+            /* 当轮只有命令摘要，完整日志在输出页。 */ () => onInspect(turn.run_id, 'output')
+          }
         />
       </div>
     </div>
@@ -177,7 +217,10 @@ export function ConversationPanel({
   conversation,
   events,
   onInspect,
-  decisionRef,
+  decisionOpen = false,
+  onShowDecision,
+  onCloseDecision,
+  onDecisionClosed,
   onConfirmed,
   onStop,
   stopping = false,
@@ -187,6 +230,11 @@ export function ConversationPanel({
   const send = useConversationSend(conversation.session_id, run, conversation, onConfirmed);
   const runtime = useRuntimeControl(run?.run_id, Boolean(run?.active));
   const { tasks, planning } = useRunPlanning(run);
+  const decisionLabel = pendingDecisionLabel(run);
+  const decisionVisible = decisionOpen && Boolean(decisionLabel);
+  const pendingAction = run?.result.permissions.pending;
+  const executionMode = run?.execution_mode ?? conversation.source?.execution_mode;
+  const executionProject = conversation.source?.label || run?.project?.project_label || '执行目录';
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
   const content = useRef<HTMLDivElement>(null); // 仅在跟随时用尺寸变化补偿流式内容或字体加载。
   const atBottom = useRef(true); // 用户上翻后关闭跟随，不打断历史阅读。
@@ -349,18 +397,18 @@ export function ConversationPanel({
           {run?.context?.memory?.proposals?.length ? (
             <MemoryPanel runId={run.run_id} readOnly={conversation.management.state !== 'active'} />
           ) : null}
-          {run && (planning?.pending || run.result.permissions.pending) && (
-            <div ref={decisionRef} className="conversation-decisions" tabIndex={-1} aria-label="待处理决定">
-              {planning?.pending && (
-                <PlanningPanel runId={run.run_id} state={planning} disabled={!send.canDecide} onDecision={send.decide} />
-              )}
-              {run.result.permissions.pending && (
-                <PermissionPanel
-                  run={run}
-                  disabled={!send.canDecide || conversation.management.state !== 'active'}
-                  onDecision={send.decideAction}
-                />
-              )}
+          {decisionLabel && (
+            <div className="conversation-decision-entry">
+              <span>等待你的决定</span>
+              <Button
+                size="small"
+                onClick={
+                  /* 只打开当前待处理内容，授权仍需单独确认。 */ (event) =>
+                    onShowDecision?.(event.currentTarget)
+                }
+              >
+                {decisionLabel}
+              </Button>
             </div>
           )}
         </div>
@@ -381,7 +429,7 @@ export function ConversationPanel({
           {runtime.pending && !runtime.sending && (
             <p role="status">运行中输入尚未确认，重试会核对原内容。</p>
           )}
-          {send.error && (
+          {send.error && !decisionVisible && (
             <Alert
               type="error"
               showIcon
@@ -389,7 +437,7 @@ export function ConversationPanel({
               description={send.error}
             />
           )}
-          {send.confirming && !send.error && (
+          {send.confirming && !send.error && !decisionVisible && (
             <p className="composer-notice" role="status">
               上一条发送尚未确认。点击“重试确认”核对原请求，草稿不会自动发送。
             </p>
@@ -471,6 +519,27 @@ export function ConversationPanel({
             </div>
           )}
           <form className="message-composer" onSubmit={submit}>
+            {run && executionMode && (
+              <ExecutionContext
+                project={executionProject}
+                path={run.workspace}
+                mode={executionMode}
+                model={modelLabel(
+                  run.config,
+                  undefined,
+                  run.config.provider
+                    ? run.config.custom_providers?.[run.config.provider]?.name
+                    : undefined,
+                )}
+                details={
+                  run.project && (
+                    <p>
+                      提交基线 <code>{run.project.base_commit}</code>
+                    </p>
+                  )
+                }
+              />
+            )}
             <Input.TextArea
               aria-label="输入消息"
               placeholder={run?.active ? '补充要求，或安排接下来的工作…' : '描述接下来要做的事…'}
@@ -511,7 +580,11 @@ export function ConversationPanel({
                 <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
               )}
               <PermissionSelect
-                value={send.permissionMode}
+                value={
+                  run?.active
+                    ? run.config.permission_mode
+                    : send.pending?.body.config?.permission_mode || send.permissionMode
+                }
                 onChange={send.setPermissionMode}
                 disabled={
                   send.permissionBlocked ||
@@ -641,6 +714,52 @@ export function ConversationPanel({
           </form>
         </div>
       </div>
+      <Drawer
+        title={decisionLabel || '待处理决定'}
+        className="decision-drawer"
+        open={decisionVisible}
+        focusable={{ focusTriggerAfterClose: false }}
+        onClose={onCloseDecision}
+        afterOpenChange={
+          /* 遮罩退出后将键盘交还给原入口。 */ (visible) => {
+            if (!visible) onDecisionClosed?.();
+          }
+        }
+        styles={{ wrapper: { width: 'min(100vw, 760px)' }, body: { padding: 0 } }}
+      >
+        {(send.error || send.confirming || send.queuedJob) && (
+          <div className="decision-feedback">
+            {send.error && <Alert type="error" showIcon title={send.error} />}
+            {send.confirming && (
+              <Button onClick={send.send} disabled={!send.canSend}>
+                重试确认
+              </Button>
+            )}
+            {send.queuedJob && (
+              <Link to={'/jobs/' + send.queuedJob.id}>决定已接纳 · 查看排队详情</Link>
+            )}
+          </div>
+        )}
+        <div className="decision-document">
+          {run &&
+            (pendingAction ? (
+              <PermissionPanel
+                run={run}
+                disabled={!send.canDecide || conversation.management.state !== 'active'}
+                onDecision={send.decideAction}
+              />
+            ) : (
+              planning?.pending && (
+                <PlanningPanel
+                  runId={run.run_id}
+                  state={planning}
+                  disabled={!send.canDecide}
+                  onDecision={send.decide}
+                />
+              )
+            ))}
+        </div>
+      </Drawer>
     </section>
   );
 }

@@ -16,12 +16,16 @@ export function LocalChangesPanel({
 }) {
   return (
     <section className="project-review" aria-labelledby="local-changes-heading">
-      <h3 id="local-changes-heading">本轮文件变化</h3>
-      <p>修改已在原目录生效。</p>
-      <p className="local-execution-path">
+      <h3 id="local-changes-heading">
+        {changes.status === 'ready' && changes.files.length > 0
+          ? '改动已在原目录生效'
+          : '原目录执行'}
+      </h3>
+      <details className="project-review-details">
+        <summary>执行目录与差异范围</summary>
         <code>{workspace}</code>
-      </p>
-      <p className="muted">相对本轮开始时的文件。</p>
+        <p className="muted">相对本轮开始时的文件。</p>
+      </details>
       {changes.warnings.map(
         /* 明确差异采集失败，不把执行完成当作完整证据。 */ (warning, index) => (
           <Alert key={index} type="warning" title={warning} />

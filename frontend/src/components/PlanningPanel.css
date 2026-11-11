@@ -8,15 +8,6 @@
 .plan-card {
   padding: 0;
 }
-.plan-card-pending {
-  display: flex;
-  flex-direction: column;
-  max-height: min(760px, calc(100svh - 330px));
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0 22px;
-  background: var(--surface);
-}
 .plan-eyebrow,
 .plan-overview {
   display: flex;
@@ -124,25 +115,6 @@
 }
 .plan-reading[hidden] {
   display: none;
-}
-.conversation-content .plan-reading {
-  max-height: 55vh;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding-right: 12px;
-}
-/* 审阅容器内部消化长正文，标题和决定区不随正文滚走。 */
-.conversation-content .plan-card-pending .plan-reading {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-}
-.plan-card-pending > .review-heading,
-.plan-card-pending > .plan-title,
-.plan-card-pending > .plan-overview,
-.plan-card-pending > .review-footer {
-  flex-shrink: 0;
 }
 .plan-section + .plan-section {
   margin-top: 28px;
@@ -335,17 +307,9 @@
   margin-right: 8px;
 }
 @media (max-width: 600px) {
-  /* 手机阅读区为决定按钮预留空间，避免正文和输入栏同时挤压操作区。 */
-  .conversation-content .plan-reading {
-    max-height: 32vh;
-  }
   .plan-buttons .ant-btn {
     min-height: 40px;
     padding-inline: 10px;
-  }
-  .plan-card-pending {
-    max-height: calc(100svh - 370px);
-    padding: 0 16px;
   }
   .plan-title {
     font-size: 18px;
@@ -355,25 +319,38 @@
   }
 }
 
-/* 计划沿用统一标题与决定区，正文独立滚动。 */
+/* 审批抽屉只滚动文档，决定区留在底部。历史计划仍随详情页滚动。 */
 .plan-card > .review-heading {
   margin-bottom: 20px;
   padding-inline: 0;
 }
-.plan-card-pending > .review-heading {
-  margin-inline: -22px;
-  padding-inline: 20px;
-}
-.plan-card-pending > .review-footer {
-  margin: 0 -22px;
-  border-radius: 0 0 10px 10px;
-}
-.plan-card-pending > .review-footer > .review-buttons {
+.is-plan-review > .review-footer > .review-buttons {
   display: block;
 }
-@media (max-width: 600px) {
-  .plan-card-pending > .review-heading,
-  .plan-card-pending > .review-footer {
-    margin-inline: -16px;
-  }
+
+.decision-document:has(.is-plan-review) {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+}
+
+.decision-document .is-plan-review {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  margin: 0;
+}
+
+.decision-document .is-plan-review .planning-document {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 clamp(16px, 3vw, 28px) 20px;
+}
+
+.decision-document .is-plan-review > .review-footer {
+  flex-shrink: 0;
 }

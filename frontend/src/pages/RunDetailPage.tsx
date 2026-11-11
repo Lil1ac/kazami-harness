@@ -20,8 +20,11 @@ import { ConversationRecovery } from '../components/ConversationRecovery';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { mergeConfirmedRun, pendingDecisionLabel } from '../conversation';
 import { conversationListFrom } from '../conversationNavigation';
+import { parseOutputTarget } from '../runOutput';
+import type { FailureEvidence, OutputTarget } from '../runOutput';
 import { RunStatus } from '../components/RunStatus';
 import { ConversationPanel } from '../components/ConversationPanel';
+import type { ConversationComposerHandle } from '../components/ConversationPanel';
 import { RunInspector } from '../components/RunInspector';
 import type { ConversationView, RunView } from '../types';
 
@@ -49,17 +52,9 @@ function useNarrowWorkspace(): boolean {
 /** 校验详情分类；空值或未知标签回到结果，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
   return value &&
-    [
-      'tasks',
-      'plan',
-      'agents',
-      'result',
-      'verification',
-      'output',
-      'files',
-      'artifacts',
-      'diagnostics',
-    ].includes(value)
+    ['tasks', 'plan', 'agents', 'result', 'output', 'files', 'artifacts', 'diagnostics'].includes(
+      value,
+    )
     ? value
     : 'result';
 }
@@ -67,7 +62,7 @@ function inspectorTab(value: string | null): string {
 /** 从 params 移除查看状态，返回可继续保留其他会话查询参数的副本。 */
 function clearInspection(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(params);
-  for (const key of ['inspect', 'tab', 'command', 'integration', 'wide', 'decision'])
+  for (const key of ['inspect', 'tab', 'output', 'integration', 'wide', 'decision'])
     next.delete(key);
   return next;
 }
@@ -147,7 +142,9 @@ function SessionWorkspace({
     : conversation.latest_run_id;
   const tab = inspectorTab(params.get('tab'));
   const panelOpen = !params.has('decision') && (params.has('tab') || params.has('inspect')); // URL 同时用于直达和关闭后刷新。
-  const wide = !narrow && panelOpen && tab === 'files' && params.get('wide') === '1'; // 宽屏展开复用同一个差异视图。
+  const expandable = tab === 'files' || tab === 'output'; // 代码差异和日志需要更多横向空间。
+  const wide = !narrow && panelOpen && expandable && params.get('wide') === '1';
+  const composer = useRef<ConversationComposerHandle>(null); // 持续会话复用同一输入框与草稿。
   const inspectorHeading = useRef<HTMLDivElement>(null); // 桌面侧栏从标题开始键盘阅读。
   const inspectorToggle = useRef<HTMLButtonElement>(null); // 直接打开深链接时的关闭焦点回退。
   const inspectorTrigger = useRef<HTMLElement | null>(null); // 用户打开详情的入口，用于关闭后恢复焦点。
@@ -183,6 +180,7 @@ function SessionWorkspace({
     /* 终态后核对执行、验收与快照事实。 */ () => {
       void cache.invalidateQueries({ queryKey: ['run', conversation.latest_run_id] });
       void cache.invalidateQueries({ queryKey: ['conversation', conversation.session_id] });
+      void cache.invalidateQueries({ queryKey: ['runtime', conversation.latest_run_id] });
 
       void cache.invalidateQueries({ queryKey: ['conversations'] });
       void cache.invalidateQueries({ queryKey: ['options'] });
@@ -207,28 +205,36 @@ function SessionWorkspace({
     [latest, decisionOpen, locationKey, params, routeState, setParams],
   );
 
-  /** 查看 runId 的分类 value；commandCallId 只用于该轮输出定位，不重建对话。 */
-  function inspect(runId: string, value = 'result', commandCallId?: string): void {
+  /** 查看 runId 的分类 value，output 可指定该轮日志，不重建对话。 */
+  function inspect(runId: string, value = 'result', output?: OutputTarget): void {
     if (!panelOpen && document.activeElement instanceof HTMLElement) {
       inspectorTrigger.current = document.activeElement;
     }
     const next = new URLSearchParams(params);
     next.delete('decision');
-    if (value !== 'files') next.delete('wide');
+    if (value !== 'files' && value !== 'output') next.delete('wide');
     if (runId !== selectedId) next.delete('integration');
     next.set('inspect', runId);
     next.set('tab', value);
-    if (value === 'output' && commandCallId) next.set('command', commandCallId);
-    else next.delete('command');
+    if (value === 'output' && output) next.set('output', output);
+    else next.delete('output');
     setParams(next, { replace: true, state: routeState });
   }
 
-  /** 关闭详情并清除深链接，随后把焦点还给消息入口。 */
-  function closePanel(): void {
-    const target = inspectorTrigger.current || inspectorToggle.current;
+  /** 关闭详情并清除深链接；focus 缺省时回到打开入口，指定时聚焦对应输入。 */
+  function closePanel(focus?: HTMLTextAreaElement): void {
+    const target = focus || inspectorTrigger.current || inspectorToggle.current;
     focusAfterClose.current = target ? { target, surface: 'detail' } : null;
     inspectorTrigger.current = null;
     setParams(clearInspection(params), { replace: true, state: routeState });
+  }
+
+  /** 追加选中的实际失败证据；成功退出详情，失败时返回应在输出区显示的原因。 */
+  function continueFromError(evidence: FailureEvidence): string | undefined {
+    const target = composer.current?.appendFailure(evidence);
+    if (typeof target === 'string') return target;
+    if (!target) return '会话输入框尚未就绪。';
+    closePanel(target);
   }
 
   /** 打开当前运行的决定；trigger 缺省时使用顶栏入口作为关闭后的焦点。 */
@@ -259,7 +265,13 @@ function SessionWorkspace({
     const pending = focusAfterClose.current;
     if (pending?.surface !== surface) return;
     focusAfterClose.current = null;
-    if (pending.target.isConnected) pending.target.focus({ preventScroll: true });
+    if (pending.target.isConnected) {
+      pending.target.focus({ preventScroll: true });
+      if (pending.target instanceof HTMLTextAreaElement) {
+        const end = pending.target.value.length;
+        pending.target.setSelectionRange(end, end);
+      }
+    }
   }
 
   useLayoutEffect(
@@ -290,6 +302,7 @@ function SessionWorkspace({
     /* 标题使用所选轮次，旧测试和新运行分别展示。 */ (turn) => turn.run_id === selectedId,
   );
   const selectedTurn = conversation.turns[selectedIndex];
+  const widthLabel = (wide ? '收起宽' : '展开宽') + (tab === 'output' ? '日志视图' : '差异视图');
   const detailTitle = '第 ' + (selectedTurn?.turn_index || '—') + ' 轮详情';
   const previous = conversation.turns[selectedIndex - 1];
   const next = selectedIndex < 0 ? undefined : conversation.turns[selectedIndex + 1];
@@ -324,8 +337,20 @@ function SessionWorkspace({
       latest={latest}
       liveEvents={events}
       tab={tab}
-      commandCallId={tab === 'output' ? params.get('command') || undefined : undefined}
-      onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
+      outputTarget={tab === 'output' ? parseOutputTarget(params.get('output')) : undefined}
+      onTab={
+        /* 分类或输出选择保持同一轮与会话。 */ (value, output) => inspect(selectedId, value, output)
+      }
+      onContinueFromError={
+        selectedId === latest.run_id &&
+        conversation.can_continue &&
+        conversation.management.state === 'active' &&
+        !latest.active &&
+        latest.result.stop_reason !== 'user_paused' &&
+        !decisionLabel
+          ? continueFromError
+          : undefined
+      }
       readOnly={conversation.management.state !== 'active'}
       onShowDecision={/* 打开同一个决定抽屉，详情视图退出。 */ () => showDecision()}
     />
@@ -446,6 +471,7 @@ function SessionWorkspace({
         }
       >
         <ConversationPanel
+          ref={composer}
           run={latest}
           conversation={conversation}
           events={events.timeline}
@@ -478,16 +504,16 @@ function SessionWorkspace({
             <div className="inspector-heading" ref={inspectorHeading} tabIndex={-1}>
               <strong>{detailTitle}</strong>
               {turnNavigation}
-              {tab === 'files' && (
+              {expandable && (
                 <Button
                   type="text"
                   size="small"
-                  aria-label={wide ? '收起宽差异视图' : '展开宽差异视图'}
-                  title={wide ? '收起宽差异视图' : '展开宽差异视图'}
+                  aria-label={widthLabel}
+                  title={widthLabel}
                   aria-pressed={wide}
                   icon={wide ? <CompressOutlined /> : <ExpandOutlined />}
                   onClick={
-                    /* 保留同一文件选择和聊天草稿，只调整详情宽度。 */ () => {
+                    /* 保留所选记录与聊天草稿，只调整详情宽度。 */ () => {
                       const next = new URLSearchParams(params);
                       if (wide) next.delete('wide');
                       else next.set('wide', '1');
@@ -526,7 +552,7 @@ function SessionWorkspace({
             }
           }
           styles={{
-            wrapper: { width: tab === 'files' ? '100vw' : 'min(100vw, 420px)' },
+            wrapper: { width: expandable ? '100vw' : 'min(100vw, 420px)' },
             body: { padding: 0 },
           }}
         >

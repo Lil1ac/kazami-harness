@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFollowup, errorMessage, getJob, getRun, getPermissions } from '../api';
 import { useConfigDraft } from '../config';
+import { maxFollowupLength } from '../conversation';
 import type { McpToolSelection } from '../mcpTypes';
 import type {
   ActionDecision,
@@ -45,7 +46,7 @@ function readDraft(sessionId: string): SavedDraft {
     if (value && typeof value.text === 'string') {
       const pending = value.pending;
       return {
-        text: value.text.slice(0, 65536),
+        text: value.text.slice(0, maxFollowupLength),
         pending:
           pending &&
           typeof pending.parentId === 'string' &&

@@ -1,5 +1,7 @@
 import type { ConversationDelivery, ConversationTurn, ConversationView, RunView } from './types';
 
+export const maxFollowupLength = 65_536; // 续轮正文的宿主上限，草稿恢复与输入使用同一值。
+
 /** 从实时 run 投影同一交付索引；运行中返回空值，避免与终态快照混用。 */
 export function runDelivery(run: RunView): ConversationDelivery | null {
   if (run.active) return null;

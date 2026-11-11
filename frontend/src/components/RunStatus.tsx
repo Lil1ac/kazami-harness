@@ -23,14 +23,14 @@ const validationLabels: Record<ValidationStatus, string> = {
   unverified: '未验收',
   passed: '验收通过',
   failed: '验收未通过',
-  error: '验收异常',
+  error: '验收运行异常',
 };
 /** 项目测试的独立文案；通过测试不代表人工已经接受代码改动。 */
 const testLabels: Record<ValidationStatus, string> = {
   unverified: '未测试',
   passed: '测试通过',
   failed: '测试未通过',
-  error: '测试异常',
+  error: '测试运行异常',
 };
 const cleanupLabels: Record<CleanupStatus, string> = {
   not_needed: '无需清理',

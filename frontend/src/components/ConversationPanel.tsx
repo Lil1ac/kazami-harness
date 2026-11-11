@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import type { Ref } from 'react';
 import { Alert, Button, Checkbox, Drawer, Input, Select, Popover, Tooltip } from 'antd';
 import {
   ArrowDownOutlined,
@@ -30,20 +31,28 @@ import { PermissionPanel, PermissionSelect } from './PermissionPanel';
 import { MemoryPanel, SaveMemoryButton } from './MemoryPanel';
 import { Link } from 'react-router';
 import type { ConversationTurn, ConversationView, RunEvent, RunView, SkillOption } from '../types';
-import { pendingDecisionLabel, runDelivery } from '../conversation';
+import { maxFollowupLength, pendingDecisionLabel, runDelivery } from '../conversation';
+import { failureDraft } from '../runOutput';
+import type { FailureEvidence, OutputTarget } from '../runOutput';
 import { modelLabel } from '../modelSelection';
 import { ExecutionContext } from './ExecutionContext';
 import { ConversationSearch } from './ConversationSearch';
 import { HistoricalFileReferences, ProjectReferences } from './ProjectReferences';
 
+/** 详情把失败证据交给同一会话的编辑器；成功返回可聚焦的输入，失败返回说明。 */
+export interface ConversationComposerHandle {
+  appendFailure: (evidence: FailureEvidence) => HTMLTextAreaElement | string; // 只更新草稿，必须属于可续轮的最新运行。
+}
+
 /** 对话工作区输入；run始终为最新轮，查看旧轮通过onInspect单独选择右侧记录。 */
 interface ConversationPanelProps {
+  ref?: Ref<ConversationComposerHandle>; // 详情可把失败记录追加到现有输入。
   mcpTools?: McpToolOption[]; // 仅供下一轮选择，不覆盖当轮历史。
   run?: RunView; // 最新快照暂缺时保留消息与编辑，确认旧请求之外禁止新提交。
   conversation: ConversationView; // 当前会话的有序消息与继续条件。
   events: RunEvent[]; // 最新轮共享订阅，不为每条消息创建SSE。
   skills?: SkillOption[]; // 当前宿主目录仅用于下一条的选择，不改写旧轮证据。
-  onInspect: (runId: string, tab?: string, commandCallId?: string) => void; // 查看某轮详情或命令，不更改追加父轮。
+  onInspect: (runId: string, tab?: string, output?: OutputTarget) => void; // 查看某轮详情或指定输出，不更改追加父轮。
   decisionOpen?: boolean; // 当前会话的 URL 是否指向实际待处理决定。
   onShowDecision?: (trigger: HTMLElement) => void; // 从消息摘要进入审批，记住触发位置。
   onCloseDecision?: () => void; // 关闭审批并清理路由选择。
@@ -80,7 +89,7 @@ function turnStatus(
   const checks: Record<string, string> = {
     passed: '检查通过',
     failed: '检查未通过',
-    error: '检查异常',
+    error: '检查运行异常',
     unverified: '未验收',
   };
   return `${interrupted ? '运行已中断' : status ? labels[status] || status : '记录待确认'}${validation ? ` · ${checks[validation] || validation}` : ''}`;
@@ -135,7 +144,7 @@ function TurnMessage({
           onReveal={onRevealActivity}
           onOpenOutput={
             /* 工具调用只定位本轮日志，不会重放命令。 */ (callId) =>
-              onInspect(turn.run_id, 'output', callId)
+              onInspect(turn.run_id, 'output', `call:${callId}`)
           }
           onInspect={
             /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () =>
@@ -180,13 +189,13 @@ function TurnMessage({
                 <button
                   type="button"
                   onClick={
-                    /* 打开该轮实际验收，不切换到其他轮的输出。 */ () =>
-                      onInspect(turn.run_id, 'verification')
+                    /* 最新检查定位仍使用该轮自己的固定记录。 */ () =>
+                      onInspect(turn.run_id, 'output', 'check:latest')
                   }
                 >
                   {validation === 'failed' || validation === 'error'
-                    ? '查看检查输出'
-                    : '查看验收记录'}
+                    ? '查看错误'
+                    : '查看检查输出'}
                 </button>
               )}
               {delivery && delivery.artifacts > 0 && (
@@ -208,9 +217,8 @@ function TurnMessage({
           runId={turn.run_id}
           active={Boolean(selected && run?.active)}
           readOnly={readOnly || !selected}
-          display="conversation"
           onOpenOutput={
-            /* 当轮只有命令摘要，完整日志在输出页。 */ () => onInspect(turn.run_id, 'output')
+            /* 从会话摘要直达该轮实际命令。 */ (target) => onInspect(turn.run_id, 'output', target)
           }
         />
       </div>
@@ -220,6 +228,7 @@ function TurnMessage({
 
 /** 持续展示同一session的消息和底部输入栏；只在用户位于底部时跟随真实新内容。 */
 export function ConversationPanel({
+  ref,
   run,
   conversation,
   events,
@@ -261,9 +270,39 @@ export function ConversationPanel({
   const executionProject = conversation.source?.label || run?.project?.project_label || '执行目录';
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
   const content = useRef<HTMLDivElement>(null); // 仅在跟随时用尺寸变化补偿流式内容或字体加载。
+  const composerForm = useRef<HTMLFormElement>(null); // 返回输入元素给详情的焦点恢复逻辑。
   const atBottom = useRef(true); // 用户上翻后关闭跟随，不打断历史阅读。
   const composing = useRef(false); // 中文输入法选字期间不能把Enter当发送。
   const [showJump, setShowJump] = useState(false); // 上翻后提供明确回到底部操作。
+
+  useImperativeHandle(
+    ref,
+    /* 写入同一份持久化草稿，沿用发送、权限与文件引用的原状态。 */ () => ({
+      /** 核对 evidence 对应的运行仍可续轮，返回输入节点或可展示的失败原因。 */
+      appendFailure(evidence) {
+        if (
+          !run ||
+          evidence.runId !== run.run_id ||
+          run.run_id !== conversation.latest_run_id ||
+          !conversation.can_continue ||
+          conversation.management.state !== 'active' ||
+          run.active ||
+          run.result.stop_reason === 'user_paused' ||
+          decisionLabel ||
+          send.pending ||
+          send.queuedJob ||
+          runtime.pending ||
+          send.permissionBlocked
+        ) return '当前会话暂时无法继续，请先处理待确认事项。';
+        const input = composerForm.current?.querySelector('textarea');
+        if (!input) return '未找到会话输入框。';
+        const draft = failureDraft(send.text, evidence);
+        if (draft.length > maxFollowupLength) return '草稿空间不足，请缩短草稿后再添加错误记录。';
+        send.setText(draft);
+        return input;
+      },
+    }),
+  );
 
   /** 将消息区域移到最新位置；只改变浏览器滚动，不重新读取或执行任务。 */
   function jumpToLatest(): void {
@@ -565,7 +604,7 @@ export function ConversationPanel({
               </div>
             </div>
           )}
-          <form className="message-composer" onSubmit={submit}>
+          <form className="message-composer" ref={composerForm} onSubmit={submit}>
             {run && executionMode && (
               <ExecutionContext
                 project={executionProject}
@@ -591,7 +630,7 @@ export function ConversationPanel({
               aria-label="输入消息"
               placeholder={run?.active ? '补充要求，或安排接下来的工作…' : '描述接下来要做的事…'}
               value={send.text}
-              maxLength={65536}
+              maxLength={maxFollowupLength}
               autoSize={{ minRows: 2, maxRows: 6 }}
               onChange={
                 /* 执行期间也能预写下一条，切换检查轮次不会清空。 */ (event) =>

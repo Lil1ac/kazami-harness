@@ -159,7 +159,7 @@ export function retractRuntimeInput(runId: string, messageId: string): Promise<R
   });
 }
 
-/** 读取 runId 中 commandId 的 owner/stream 增量输出，offset 为原始字节游标。 */
+/** 读取 runId 中 commandId 的 owner/stream 输出，offset 为原始字节游标，每页至多 32 KiB。 */
 export function getCommandOutput(
   runId: string,
   commandId: string,
@@ -168,7 +168,7 @@ export function getCommandOutput(
   offset: number,
 ): Promise<CommandOutput> {
   return request(
-    `/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(commandId)}/output?owner_run_id=${encodeURIComponent(owner)}&stream=${stream}&offset=${offset}`,
+    `/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(commandId)}/output?owner_run_id=${encodeURIComponent(owner)}&stream=${stream}&offset=${offset}&max_bytes=32768`,
   );
 }
 

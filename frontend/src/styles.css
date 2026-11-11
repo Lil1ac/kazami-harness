@@ -1318,11 +1318,13 @@ pre {
 .inspector-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   padding: 12px 16px 8px 20px;
   flex-shrink: 0;
   font-size: 14px;
+}
+.inspector-heading > strong {
+  margin-inline-end: auto;
 }
 .inspector-heading > button {
   border: 0;
@@ -1343,6 +1345,9 @@ pre {
 }
 .inspector-turn-navigation {
   margin-inline-start: auto;
+}
+.inspector-heading .inspector-turn-navigation {
+  margin-inline-start: 0;
 }
 .inspector-panels {
   min-height: 0;
@@ -1394,9 +1399,6 @@ pre {
 }
 .inspector-overview > .inspector-decision {
   margin-top: 14px;
-}
-.inspector-panels .runtime-panel {
-  margin: 0;
 }
 .inspector-overview > section {
   margin-top: 22px;
@@ -1589,11 +1591,6 @@ pre {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.verification-panel details,
-.diagnostic-section {
-  margin: 16px 0;
-}
-.verification-panel summary,
 .diagnostic-section > summary {
   cursor: pointer;
   font-size: 12px;
@@ -1608,11 +1605,6 @@ pre {
 .diagnostic-section > summary {
   font-size: 13px;
   margin-bottom: 6px;
-}
-.verification-panel a {
-  color: var(--accent);
-  display: inline-block;
-  margin-right: 12px;
 }
 .review-actions {
   display: flex;

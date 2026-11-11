@@ -7,6 +7,7 @@ import type {
   RunEvent,
   RunView,
   JobView,
+  VerificationResult,
 } from '../types';
 
 export const jobRuns = new Map<string, RunView>(); // 作业确认后可读取的真实运行夹具。
@@ -130,6 +131,28 @@ export function makeRun(overrides: Partial<RunView> = {}): RunView {
       usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
       usage_complete: true,
     },
+    ...overrides,
+  };
+}
+
+/** 构造独立检查快照，status 决定默认原因和退出码，overrides 可提供真实形状的输出。 */
+export function makeVerification(
+  status: VerificationResult['status'],
+  overrides: Partial<VerificationResult> = {},
+): VerificationResult {
+  return {
+    status,
+    reason: { passed: 'checks_passed', failed: 'assertion_failed', error: 'verifier_exit_error' }[status],
+    exit_code: { passed: 0, failed: 1, error: 7 }[status],
+    stdout: '',
+    stderr: '',
+    elapsed_ms: 12,
+    timed_out: false,
+    cancelled: false,
+    output_limit_exceeded: false,
+    cleanup_status: 'not_needed',
+    truncated: false,
+    artifacts: [],
     ...overrides,
   };
 }

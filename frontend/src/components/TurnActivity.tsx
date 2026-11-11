@@ -180,7 +180,7 @@ export function TurnActivity({
                         className="text-button activity-output-link"
                         onClick={/* 命令归属由运行记录核对，不使用命令文本定位。 */ () => onOpenOutput(step.id)}
                       >
-                        查看输出
+                        {step.state === 'failed' ? '查看错误' : '查看输出'}
                       </button>
                     )}
                     <details className="activity-payload">

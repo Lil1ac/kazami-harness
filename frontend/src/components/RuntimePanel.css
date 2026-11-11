@@ -5,92 +5,6 @@
   gap: 10px;
   min-width: 0;
 }
-.runtime-command {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.runtime-command summary {
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  list-style: none;
-  cursor: pointer;
-}
-.runtime-command summary:hover {
-  background: var(--hover);
-}
-.runtime-command summary::-webkit-details-marker {
-  display: none;
-}
-.runtime-chevron {
-  color: var(--muted);
-  font-size: 10px;
-  transform: rotate(-90deg);
-}
-.runtime-command[open] > summary .runtime-chevron {
-  transform: none;
-}
-.runtime-command summary code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.runtime-command-status {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.runtime-command-status[data-status='failed'] {
-  color: var(--danger);
-}
-.runtime-command-body {
-  min-width: 0;
-  padding: 0 10px 10px;
-}
-.runtime-command-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.runtime-command-meta code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  flex: 1 1 140px;
-}
-.runtime-command-issue {
-  color: var(--danger);
-}
-.runtime-command pre {
-  margin: 8px 0 0;
-  max-height: min(40vh, 340px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  white-space: pre;
-  padding: 10px 12px;
-  background: var(--code-bg);
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.65;
-}
-.runtime-stream {
-  margin-top: 10px;
-}
-.runtime-log-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
-}
 .runtime-output-link {
   justify-self: start;
   border: 1px solid var(--line);
@@ -101,6 +15,9 @@
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
+}
+.runtime-output-link[data-failed='true'] {
+  color: var(--danger);
 }
 .runtime-output-link:hover {
   background: var(--hover);
@@ -130,7 +47,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.runtime-command p,
 .runtime-message p {
   margin: 6px 0;
   font-size: 12px;

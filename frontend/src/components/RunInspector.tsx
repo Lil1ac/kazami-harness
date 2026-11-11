@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLayoutEffect, useRef } from 'react';
 import { Alert, Button, Segmented, Skeleton, Tabs } from 'antd';
-import { getRun, errorMessage } from '../api';
-import { duration, phaseLabel } from '../format';
+import { getRun, getRuntime, errorMessage } from '../api';
+import { duration, modelFailureLabel, phaseLabel } from '../format';
 import { modelLabel } from '../modelSelection';
+import { checkAttempts, checkReason, lastFailedCommand, usesProjectChecks } from '../runOutput';
+import type { OutputTarget } from '../runOutput';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { useRunPlanning } from '../hooks/useRunPlanning';
 import { StateBreakdown } from './RunStatus';
-import { VerificationPanel } from './VerificationPanel';
+import { RunOutputPanel } from './RunOutputPanel';
+import type { ContinueFromError } from './RunOutputPanel';
 import { ProjectReviewPanel } from './ProjectReviewPanel';
 import { LocalChangesPanel } from './LocalChangesPanel';
 import { ArtifactPanel } from './ArtifactPanel';
@@ -22,7 +25,6 @@ import { PermissionPanel } from './PermissionPanel';
 import { RunHooks } from './HooksPanel';
 import { McpEvidence } from './McpEvidence';
 import { LifecycleDiagnostics } from './LifecycleDiagnostics';
-import { RuntimePanel } from './RuntimePanel';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -33,8 +35,9 @@ interface InspectorPanelsProps {
   run: RunView; // 所选轮次的服务端快照。
   events: RunEventView; // 对应该轮次的事件，不重复订阅最新轮。
   tab: string; // 当前查看分类；任务、计划与 Agent 归在工作组。
-  onTab: (value: string) => void; // 只更新查看位置，不改变执行目标。
-  commandCallId?: string; // 输出深链接定位到当前轮的工具调用。
+  onTab: (value: string, output?: OutputTarget) => void; // 更新分类和可选的输出记录定位。
+  outputTarget?: OutputTarget; // 输出页的实际命令或检查深链接。
+  onContinueFromError?: ContinueFromError; // 最新可继续轮可把失败证据写入草稿。
   onShowDecision?: () => void; // 把阅读焦点交回对话内待审批或待回答区。
   historical?: boolean; // true 表示历史只读，即使缓存仍保留过去的最新轮状态。
   readOnly?: boolean; // 归档会话可查看所有内容，不提供任务修改操作。
@@ -46,7 +49,8 @@ function InspectorPanels({
   events,
   tab,
   onTab,
-  commandCallId,
+  outputTarget,
+  onContinueFromError,
   onShowDecision,
   historical = false,
   readOnly = false,
@@ -54,30 +58,36 @@ function InspectorPanels({
   const { planning } = useRunPlanning(run, historical);
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
   const workSection = ['tasks', 'plan', 'agents'].includes(tab) ? tab : null; // URL 保持细分入口，顶部只显示一个工作标签。
-  const focusVerification = tab === 'verification'; // 交付摘要可以从任意轮直达真实检查输出。
   const showArtifacts = tab === 'artifacts'; // 文件与产物共用分类，差异视图有自己的阅读空间。
   const pendingPlan = !historical && planning?.pending; // 历史等待状态属于旧快照，不能跳到当前审批。
   const pendingAction = !historical && run.result.permissions.pending;
+  const { execution_status, verification, repair_attempts, stop_reason } = run.result;
+  const checks = checkAttempts(run.result);
+  const lastCheck = checks.at(-1);
+  const projectChecks = usesProjectChecks(run);
   const showVerification = Boolean(
-    run.result.verification ||
-    run.result.verification_attempts.length ||
-    run.result.repair_attempts ||
-    run.phase === 'verification',
+    checks.length || repair_attempts || run.phase === 'verification',
   );
+  const failedExecution = ['failed', 'timed_out', 'limit_exceeded'].includes(execution_status);
+  const runtime = useQuery({
+    queryKey: ['runtime', run.run_id],
+    queryFn: /* 结果页只用已保存的命令状态提供错误入口。 */ () => getRuntime(run.run_id),
+    enabled: tab === 'result',
+    retry: false,
+  });
+  const failedCommand = runtime.data && lastFailedCommand(runtime.data.commands);
   const container = useRef<HTMLDivElement>(null); // 仅定位详情滚动区，不触碰会话消息与草稿。
   useLayoutEffect(
     /* 切换分类或轮次时从顶部阅读；事件刷新保持位置，不把文件区的滚动带入诊断。 */ () => {
       const body = container.current?.querySelector('.ant-tabs-body-holder');
-      if (body && !focusVerification && !(tab === 'output' && commandCallId)) body.scrollTop = 0;
+      if (body) body.scrollTop = 0;
     },
-    [run.run_id, tab, commandCallId, focusVerification],
+    [run.run_id, tab],
   );
   return (
     <div className="inspector-panels" ref={container}>
       <Tabs
-        activeKey={
-          workSection ? 'work' : focusVerification ? 'result' : showArtifacts ? 'files' : tab
-        }
+        activeKey={workSection ? 'work' : showArtifacts ? 'files' : tab}
         onChange={
           /* 工作组默认从任务列表开始，其余入口保持原分类。 */ (value) =>
             onTab(value === 'work' ? 'tasks' : value)
@@ -113,20 +123,69 @@ function InspectorPanels({
                     <Alert key={index} type="warning" title={warning} />
                   ),
                 )}
+                {failedExecution && (
+                  <section className="run-check-summary" aria-label="执行错误">
+                    {modelFailureLabel(stop_reason) && <p>{modelFailureLabel(stop_reason)}</p>}
+                    <Button
+                      size="small"
+                      onClick={/* 执行结束原因与实际事件保存在诊断。 */ () => onTab('diagnostics')}
+                    >
+                      查看执行错误
+                    </Button>
+                  </section>
+                )}
+                {failedCommand && (
+                  <section className="run-check-summary" aria-label="命令错误">
+                    <h2>命令失败</h2>
+                    <p>
+                      <code title={failedCommand.argv.join(' ')}>
+                        {failedCommand.argv.join(' ')}
+                      </code>
+                    </p>
+                    <Button
+                      size="small"
+                      onClick={
+                        /* 选择实际失败的命令。 */ () =>
+                          onTab('output', `command:${failedCommand.id}`)
+                      }
+                    >
+                      查看命令错误
+                    </Button>
+                  </section>
+                )}
                 {showVerification && (
-                  <VerificationPanel
-                    detail={run.result.verification}
-                    attempts={run.result.verification_attempts}
-                    repairAttempts={run.result.repair_attempts}
-                    runId={run.run_id}
-                    active={run.active}
-                    focusOutput={focusVerification}
-                    project={
-                      run.verification_kind === 'project_tests' ||
-                      Boolean(run.project) ||
-                      run.source_kind === 'project'
-                    }
-                  />
+                  <section className="run-check-summary">
+                    <h2>{projectChecks ? '项目测试' : '独立验收'}</h2>
+                    {repair_attempts > 0 && (
+                      <p className="muted" role="status">
+                        {run.active && !verification ? '正在进行' : '已进行'}第 {repair_attempts} /
+                        2 次自动修复
+                      </p>
+                    )}
+                    {verification && checkReason(verification) && (
+                      <p>{checkReason(verification)}</p>
+                    )}
+                    {!verification && (
+                      <p className="muted">
+                        {run.phase === 'verification' ? '正在检查' : '当前代码尚无检查结果'}
+                      </p>
+                    )}
+                    {lastCheck && (
+                      <Button
+                        size="small"
+                        onClick={
+                          /* 固定到已选检查，后台得到新结果时保留当前阅读。 */ () =>
+                            onTab('output', `check:${lastCheck.repair_attempt}`)
+                        }
+                      >
+                        {verification && verification.status !== 'passed'
+                          ? '查看错误'
+                          : verification
+                            ? '查看检查输出'
+                            : '查看历史检查'}
+                      </Button>
+                    )}
+                  </section>
                 )}
                 {Boolean(run.config.mcp_tools?.length) && (
                   <McpEvidence runId={run.run_id} active={run.active && !historical} />
@@ -138,12 +197,13 @@ function InspectorPanels({
             key: 'output',
             label: '输出',
             children: (
-              <RuntimePanel
-                runId={run.run_id}
+              <RunOutputPanel
+                run={run}
                 active={run.active && !historical}
                 readOnly={readOnly || historical}
-                display="output"
-                commandCallId={commandCallId}
+                target={outputTarget}
+                onSelect={/* 记录选择可随 URL 保留。 */ (target) => onTab('output', target)}
+                onContinue={onContinueFromError}
               />
             ),
           },
@@ -259,6 +319,30 @@ function InspectorPanels({
                 />
                 <RunHooks snapshot={run.result.hooks} events={events.events} />
                 <LifecycleDiagnostics snapshot={run.lifecycle} live={events.lifecycle} />
+                {checks.length > 0 && (
+                  <details className="diagnostic-section">
+                    <summary>检查原因与清理记录</summary>
+                    <dl className="compact-dl">
+                      {checks.map(
+                        /* 诊断保留每次检查的原始原因码及进程清理状态。 */ ({
+                          repair_attempt,
+                          result,
+                        }) => (
+                          <div key={repair_attempt}>
+                            <dt>
+                              {repair_attempt ? '第 ' + repair_attempt + ' 次修复后' : '首次检查'}
+                            </dt>
+                            <dd>
+                              <code>
+                                {result.reason} · {result.cleanup_status}
+                              </code>
+                            </dd>
+                          </div>
+                        ),
+                      )}
+                    </dl>
+                  </details>
+                )}
                 <details className="diagnostic-section" open>
                   <summary>执行轨迹</summary>
                   <EventTrail {...events} />
@@ -380,12 +464,12 @@ function HistoricalInspector({
   runId,
   tab,
   onTab,
-  commandCallId,
+  outputTarget,
 }: {
   runId: string; // 已接纳的历史运行编号。
   tab: string; // 历史检查器的当前分类。
-  onTab: (value: string) => void; // 切换分类，不改变继续发送目标。
-  commandCallId?: string; // 查看历史日志时按真实调用编号定位。
+  onTab: InspectorPanelsProps['onTab']; // 切换分类，不改变继续发送目标。
+  outputTarget?: OutputTarget; // 查看历史日志时定位当轮实际记录。
 }) {
   const query = useQuery({
     queryKey: ['run', runId],
@@ -402,7 +486,7 @@ function HistoricalInspector({
       events={events}
       tab={tab}
       onTab={onTab}
-      commandCallId={commandCallId}
+      outputTarget={outputTarget}
       historical
     />
   );
@@ -416,16 +500,18 @@ export function RunInspector({
   tab,
   onTab,
   readOnly = false,
-  commandCallId,
+  outputTarget,
+  onContinueFromError,
   onShowDecision,
 }: {
   selectedId: string; // 所选运行；与最新轮不同时只读固定快照。
   latest: RunView; // 最新轮快照，保留运行控制的归属。
   liveEvents: RunEventView; // 对话已建立的唯一实时事件视图。
   tab: string; // 当前分类。
-  onTab: (value: string) => void; // 更新详情分类，不执行任务。
+  onTab: InspectorPanelsProps['onTab']; // 更新详情分类及对应输出，不执行任务。
   readOnly?: boolean; // 归档会话仅提供查看，不允许任务修改。
-  commandCallId?: string; // 指向当前轮某个命令工具调用。
+  outputTarget?: OutputTarget; // 当前轮的命令、工具调用或检查次数。
+  onContinueFromError?: ContinueFromError; // 仅最新可继续轮提供，历史面板不接收。
   onShowDecision?: () => void; // 当前审批或问题跳回对话中的处理区。
 }) {
   return selectedId === latest.run_id ? (
@@ -436,7 +522,8 @@ export function RunInspector({
       tab={tab}
       onTab={onTab}
       readOnly={readOnly}
-      commandCallId={commandCallId}
+      outputTarget={outputTarget}
+      onContinueFromError={onContinueFromError}
       onShowDecision={onShowDecision}
     />
   ) : (
@@ -445,7 +532,7 @@ export function RunInspector({
       runId={selectedId}
       tab={tab}
       onTab={onTab}
-      commandCallId={commandCallId}
+      outputTarget={outputTarget}
     />
   );
 }

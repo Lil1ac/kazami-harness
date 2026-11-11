@@ -1,0 +1,157 @@
+.run-output {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+.run-output-records {
+  display: grid;
+  gap: 2px;
+  max-height: 170px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.run-output-records > button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 37px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+.run-output-records > button > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-output-records > button > .anticon,
+.run-output-status {
+  color: var(--muted);
+}
+.run-output-status {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.run-output-status[data-failed='true'] {
+  color: var(--danger);
+}
+.run-output-records > button:hover {
+  background: var(--hover);
+}
+.run-output-records > button[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+.run-output-records > button[aria-pressed='true'] > .anticon {
+  color: var(--accent);
+}
+.run-output-detail {
+  display: grid;
+  /* 长路径和单行日志都由自身容器处理，不能撑开窄屏详情。 */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+.run-output-meta,
+.run-output-toolbar,
+.run-output-continue {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.run-output-meta,
+.run-output-toolbar > a,
+.run-output-note,
+.run-output-continue > p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.run-output-meta > code {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-output-toolbar > a {
+  color: var(--accent);
+}
+.run-output-note,
+.run-output-continue > p {
+  margin: 0;
+}
+.run-output-continue {
+  justify-content: flex-end;
+}
+.run-output-continue > p {
+  flex-basis: 100%;
+  color: var(--danger);
+  text-align: end;
+}
+.run-output .run-output-log {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 70px;
+  max-height: min(42dvh, 420px);
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+}
+.run-output-log:focus-visible,
+.run-output-records > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.run-check-summary {
+  display: grid;
+  gap: 6px;
+}
+.run-check-summary h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.run-check-summary p {
+  margin: 0;
+  font-size: 13px;
+}
+.run-check-summary p > code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-check-summary .ant-btn {
+  justify-self: start;
+}
+@media (max-width: 600px) {
+  .run-output-records {
+    max-height: 148px;
+  }
+  .run-output-records > button {
+    min-height: 42px;
+  }
+  .run-output .run-output-log {
+    max-height: min(37dvh, 360px);
+  }
+}

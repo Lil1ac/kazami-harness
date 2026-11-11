@@ -11,11 +11,12 @@ import {
   getConversationManagement,
   getOptions,
   getRun,
+  getRuntime,
   getTasks,
   manageConversation,
 } from '../api';
 import { ConfigDraftProvider } from '../config';
-import { makeRun, options } from '../test/fixtures';
+import { makeRun, makeVerification, options } from '../test/fixtures';
 import { makeJob } from '../test/fixtures';
 import type { ConversationTurn, ConversationView, RunView } from '../types';
 import { RunDetailPage } from './RunDetailPage';
@@ -24,6 +25,7 @@ vi.mock(
   '../api',
   /* HTTP替身保留真实会话工作区、输入、路由、Markdown和检查器组件。 */ () => ({
     getRun: vi.fn(),
+    getRuntime: vi.fn(),
     getTasks: vi.fn(),
     getOptions: vi.fn(),
     getConversation: vi.fn(),
@@ -118,6 +120,7 @@ beforeEach(
   /* 每个用例从同一可信首轮开始，不共享草稿或前例的请求。 */ () => {
     vi.resetAllMocks();
     vi.mocked(getTasks).mockResolvedValue({ revision: 0, items: [] });
+    vi.mocked(getRuntime).mockResolvedValue({ active: false, commands: [], state: null });
     vi.mocked(getOptions).mockResolvedValue(options);
     sessionStorage.clear();
     runs.clear();
@@ -207,6 +210,70 @@ it('普通入口默认收起详情，展开和关闭检查器保留同一输入�
   expect(input).toHaveValue('保留这条要求');
   expect(createFollowup).not.toHaveBeenCalled();
 });
+
+it('从检查失败添加证据会保留草稿、聚焦输入，发送后旧轮仍只读', /* 运行确认前不改变会话轮次。 */ async () => {
+  const user = userEvent.setup();
+  const root = runs.get('run-a')!;
+  const failed = makeVerification('error', { stdout: 'setup ok', stderr: 'missing executable' });
+  root.verification_kind = 'project_tests';
+  root.result.validation_status = 'error';
+  root.result.verification = failed;
+  root.result.verification_attempts = [{ repair_attempt: 0, result: failed }];
+  show();
+  const input = await screen.findByLabelText('输入消息');
+  await user.type(input, '保留这些要求');
+  await user.click(screen.getByRole('button', { name: '查看错误' }));
+  expect(screen.getByLabelText('当前查询参数')).toHaveTextContent('tab=output');
+  expect(screen.getByLabelText('错误输出', { selector: 'pre' })).toHaveTextContent(
+    'missing executable',
+  );
+  await user.click(screen.getByRole('button', { name: '带错误继续' }));
+  expect(screen.getByLabelText('当前查询参数')).toBeEmptyDOMElement();
+  expect(input).toHaveFocus();
+  expect((input as HTMLTextAreaElement).value).toContain('保留这些要求\n\n【失败证据】');
+  expect((input as HTMLTextAreaElement).value).toContain(
+    '退出码 7\n错误输出摘录\nmissing executable',
+  );
+  expect(createFollowup).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(
+    /* 由原续轮入口提交，父轮及失败内容均准确。 */ () =>
+      expect(createFollowup).toHaveBeenCalledWith(
+        'run-a',
+        expect.objectContaining({ prompt: expect.stringContaining('missing executable') }),
+      ),
+  );
+  await user.click(await screen.findByRole('button', { name: '查看第 1 轮详情' }));
+  await user.click(await screen.findByRole('button', { name: '查看错误' }));
+  expect(screen.getByLabelText('错误输出', { selector: 'pre' })).toHaveTextContent(
+    'missing executable',
+  );
+  expect(screen.queryByRole('button', { name: '带错误继续' })).not.toBeInTheDocument();
+});
+
+it.each([true, false])(
+  '修复中或停止后仍可查看旧失败，当前尚无检查结果（active=%s）',
+  /* 旧检查结论只属于当时的代码。 */ async (active) => {
+    const root = runs.get('run-a')!;
+    root.active = active;
+    root.verification_kind = 'project_tests';
+    root.result.repair_attempts = 1;
+    root.result.verification_attempts = [
+      { repair_attempt: 0, result: makeVerification('failed', { stderr: 'first failed' }) },
+    ];
+    show('/runs/run-a?tab=result');
+    expect(await screen.findByText('当前代码尚无检查结果')).toBeInTheDocument();
+    expect(
+      screen.getByText((active ? '正在进行' : '已进行') + '第 1 / 2 次自动修复'),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '查看历史检查' }));
+    expect(screen.getByLabelText('错误输出', { selector: 'pre' })).toHaveTextContent(
+      'first failed',
+    );
+    expect(screen.queryByRole('button', { name: '带错误继续' })).not.toBeInTheDocument();
+  },
+);
 
 it('查找可以在旧轮提问与回答间跳转，并保留最新轮草稿与关闭焦点', async () => {
   // 同一关键词命中旧轮提问和回答，切换只改变消息定位。

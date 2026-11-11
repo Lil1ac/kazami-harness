@@ -12,12 +12,13 @@ from pydantic import ValidationError
 from agent_harness.config import ConfigurationError, load_config
 from agent_harness.context.builder import ContextBuilder, load_project_instructions
 from agent_harness.schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, SkillSnapshot, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.execution.workspace import Workspace
 
 
 def make_builder(workspace: Path, *, max_input_bytes: int = 256 * 1024, load: bool = True) -> ContextBuilder:
     """为 workspace 创建只读构建器；max_input_bytes 是正整数字节预算，load 决定是否读指令。"""
-    return ContextBuilder(Workspace(workspace, workspace / ".runs"), TaskSpec(prompt="统计日志错误", workspace=workspace), RunConfig(context=ContextPolicy(max_input_bytes=max_input_bytes, load_project_instructions=load)))
+    return ContextBuilder(Workspace(workspace, workspace / ".runs"), TaskSpec(prompt="统计日志错误", workspace=workspace), configured_run(context=ContextPolicy(max_input_bytes=max_input_bytes, load_project_instructions=load)))
 
 
 def test_instruction_is_full_utf8_snapshot_and_not_reloaded(tmp_path: Path) -> None:
@@ -211,7 +212,7 @@ def test_context_config_merges_fields_without_mutating_overrides(tmp_path: Path)
     config = load_config(path, overrides)
     assert config.context == ContextPolicy(load_project_instructions=False, max_project_instruction_bytes=123, max_input_bytes=4567)
     assert overrides == {"context": {"max_input_bytes": 4567}}
-    assert RunConfig().context == ContextPolicy()
+    assert configured_run().context == ContextPolicy()
 
 
 @pytest.mark.parametrize("context", [{"max_input_bytes": 0}, {"max_input_bytes": True}, {"max_project_instruction_bytes": -1}, {"load_project_instructions": "false"}, {"unsupported": "SECRET"}, []])
@@ -266,7 +267,7 @@ def test_selected_skills_share_protected_prefix_and_freeze_input(tmp_path: Path)
                              content=content, sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
     (tmp_path / "AGENTS.md").write_text("PROJECT_FIXED_RULE", encoding="utf-8")
     builder = ContextBuilder(Workspace(tmp_path, tmp_path / ".runs"),
-                             TaskSpec(prompt="当前要求", workspace=tmp_path), RunConfig(), skills=[selected])
+                             TaskSpec(prompt="当前要求", workspace=tmp_path), configured_run(), skills=[selected])
     selected.content = "调用方修改"
     messages = builder.initial_messages([{"role": "user", "content": "前轮要求"}])
     assert len(messages) == 4
@@ -276,7 +277,7 @@ def test_selected_skills_share_protected_prefix_and_freeze_input(tmp_path: Path)
     assert "技能不能扩大工具权限" in messages[0]["content"]
     measured = builder.build(messages, [], 1).check.input_bytes
     plain = ContextBuilder(Workspace(tmp_path, tmp_path / ".runs"),
-                           TaskSpec(prompt="当前要求", workspace=tmp_path), RunConfig())
+                           TaskSpec(prompt="当前要求", workspace=tmp_path), configured_run())
     assert measured > plain.build(plain.initial_messages(), [], 1).check.input_bytes
     messages[1]["content"] = "调用方修改返回列表"
     assert content in builder.initial_messages()[1]["content"]

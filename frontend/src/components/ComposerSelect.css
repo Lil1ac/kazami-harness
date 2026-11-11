@@ -40,26 +40,21 @@
 .composer-toolbar > .composer-keyboard-hint + .send-message {
   margin-left: 0;
 }
-.composer-select-menu .ant-select-item {
-  padding: 9px 10px;
-  border-radius: 6px;
+/* 工作模式与权限模式共用紧凑单行，选中状态沿用 Select 语义。 */
+.composer-mode-menu .ant-select-item {
+  min-height: 34px;
+  padding: 5px 9px;
+  border-radius: 5px;
 }
-.composer-select-menu .mode-option {
-  gap: 9px;
+.composer-mode-menu .ant-select-item-option-state {
+  display: none;
 }
-.composer-select-menu .mode-option > div {
-  min-width: 0;
-}
-.composer-select-menu .mode-option strong {
-  font-size: 12px;
-  font-weight: 500;
-}
-.composer-select-menu .mode-option small {
-  font-size: 11px;
-  line-height: 1.65;
-  font-weight: 400;
-  white-space: normal;
-  overflow-wrap: anywhere;
+.composer-mode-option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
 }
 .start-send-area > .mode-select,
 .start-send-area > .permission-select {

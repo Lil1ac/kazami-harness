@@ -1,5 +1,5 @@
 import { makeConversationManagement } from '../test/fixtures';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
@@ -203,18 +203,16 @@ it('执行中可以补充约束并安全暂停，重复确认保持原正文与�
   vi.mocked(getConversation).mockResolvedValue(
     conversation({ can_continue: false, blocked_code: 'run_busy', blocked_reason: '任务运行中' }),
   );
-  vi.mocked(sendRuntimeInput)
-    .mockRejectedValueOnce(new Error('响应丢失'))
-    .mockResolvedValue({
-      id: 'receipt',
-      prompt: '不要修改配置',
-      delivery: 'steer',
-      status: 'received',
-      created_at: '',
-      consumers: {},
-      job_id: null,
-      error: null,
-    });
+  vi.mocked(sendRuntimeInput).mockRejectedValueOnce(new Error('响应丢失')).mockResolvedValue({
+    id: 'receipt',
+    prompt: '不要修改配置',
+    delivery: 'steer',
+    status: 'received',
+    created_at: '',
+    consumers: {},
+    job_id: null,
+    error: null,
+  });
   vi.mocked(pauseRuntime).mockResolvedValue({
     run_id: 'run-a',
     session_id: 'run-a',
@@ -310,7 +308,7 @@ it('下一轮公开测试设置可关闭继承的自动修复，发送时使用�
     }),
   );
   const user = userEvent.setup();
-  await user.click(await screen.findByText(/下一轮设置/));
+  await user.click(await screen.findByRole('button', { name: '下一轮设置' }));
   const checkbox = screen.getByRole('checkbox', { name: '测试失败自动修复（最多2次）' });
   expect(checkbox).toBeChecked();
   await user.click(checkbox);
@@ -527,4 +525,63 @@ it('尚无子执行时已能打开团队，工作栏统计稳定成员数', asyn
   await user.click(await screen.findByRole('button', { name: /团队.*2/ }));
   expect(onInspect).toHaveBeenCalledWith('run-a', 'agents');
   expect(createFollowup).not.toHaveBeenCalled();
+});
+
+it('运行控制在表单外，排队选择改变按钮文案和真实投递意图', async () => {
+  // 通过真实 Select 与发送 Hook 验证布局重组没有改变消息去向。
+  const user = userEvent.setup();
+  const run = makeRun({ active: true, phase: 'model' });
+  vi.mocked(sendRuntimeInput).mockResolvedValue({
+    id: 'queued-one',
+    prompt: '完成后再补测试',
+    delivery: 'next',
+    status: 'queued',
+    created_at: '',
+    consumers: {},
+    job_id: null,
+    error: null,
+  });
+  show(run);
+  const input = await screen.findByLabelText('输入消息');
+  const form = input.closest('form')!;
+  expect(within(form).queryByRole('button', { name: '暂停' })).toBeNull();
+  expect(screen.getByRole('button', { name: '暂停' })).toBeVisible();
+  expect(screen.queryByText('下一轮设置 · 未选择')).toBeNull();
+  await user.click(screen.getByRole('combobox', { name: '运行中消息生效时机' }));
+  await user.click(await screen.findByText('排到下一轮'));
+  expect(screen.getByRole('button', { name: '发送消息' })).toHaveTextContent('排队');
+  await user.type(input, '完成后再补测试');
+  await user.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(
+    /* 只检查宿主实际收到的固定载荷。 */ () =>
+      expect(sendRuntimeInput).toHaveBeenCalledWith(
+        'run-a',
+        expect.objectContaining({ prompt: '完成后再补测试', delivery: 'next' }),
+      ),
+  );
+  expect(createFollowup).not.toHaveBeenCalled();
+});
+
+it('安全暂停过程中禁用再次暂停和发送，仍保留用户草稿', async () => {
+  // 宿主收尾期间不能将状态行误当作已暂停或继续接纳输入。
+  vi.mocked(getRuntime).mockResolvedValue({
+    active: true,
+    commands: [],
+    state: {
+      run_id: 'run-a',
+      session_id: 'run-a',
+      status: 'pausing',
+      messages: [],
+      checkpoint: null,
+      finished_at: null,
+    },
+  });
+  const user = userEvent.setup();
+  show(makeRun({ active: true }));
+  expect(await screen.findByText('正在安全暂停…')).toBeVisible();
+  await user.type(screen.getByLabelText('输入消息'), '保留这份草稿');
+  expect(screen.getByRole('button', { name: '暂停' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: '恢复执行' })).toBeNull();
+  expect(sendRuntimeInput).not.toHaveBeenCalled();
 });

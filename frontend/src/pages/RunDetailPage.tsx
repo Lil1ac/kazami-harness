@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Drawer, Skeleton } from 'antd';
-import { ArrowLeftOutlined, CloseOutlined, LayoutOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CloseOutlined,
+  LayoutOutlined,
+  LeftOutlined,
+  RightOutlined,
+} from '@ant-design/icons';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { ApiError } from '../api';
 import { cancelRun, errorMessage, getConversation, getOptions, getRun } from '../api';
@@ -37,7 +43,8 @@ function useNarrowWorkspace(): boolean {
 
 /** 校验详情分类；空值或未知标签回到结果，不改变持续会话。 */
 function inspectorTab(value: string | null): string {
-  return value && ['tasks', 'plan', 'agents', 'result', 'files', 'diagnostics'].includes(value)
+  return value &&
+    ['tasks', 'plan', 'agents', 'result', 'output', 'files', 'diagnostics'].includes(value)
     ? value
     : 'result';
 }
@@ -58,7 +65,9 @@ export function RunDetailPage() {
     enabled: !!run.data,
     retry: false,
     refetchInterval: /* 准备、执行与快照占槽时更新继续条件，终态停止轮询。 */ (state) =>
-      state.state.data?.active_run_ids.length || state.state.data?.blocked_code === 'run_busy' ? 1500 : false,
+      state.state.data?.active_run_ids.length || state.state.data?.blocked_code === 'run_busy'
+        ? 1500
+        : false,
   });
   const accessError = run.error || conversation.error;
   const deletedError = accessError as ApiError | null;
@@ -114,6 +123,11 @@ function SessionWorkspace({
   const tab = inspectorTab(params.get('tab'));
   const [panelOpen, setPanelOpen] = useState(params.has('tab') || params.has('inspect')); // 普通入口优先阅读消息；显式详情深链接保留查看意图。
   const previousNarrow = useRef(narrow); // 只在真正跨断点时收起详情，不覆盖首屏深链接。
+  const inspectorHeading = useRef<HTMLDivElement>(null); // 桌面侧栏从标题开始键盘阅读。
+  const inspectorToggle = useRef<HTMLButtonElement>(null); // 直接打开深链接时的关闭焦点回退。
+  const inspectorTrigger = useRef<HTMLElement | null>(null); // 用户打开详情的入口，用于关闭后恢复焦点。
+  const decision = useRef<HTMLDivElement>(null); // 当前轮待批准或待回答的唯一操作区。
+  const focusAfterClose = useRef<{ target: HTMLElement; reveal: boolean } | null>(null); // 抽屉退出动画后再恢复或定位。
   const query = useQuery({
     queryKey: ['run', conversation.latest_run_id],
     queryFn: /* 最新轮快照决定运行状态，查看旧轮时继续跟踪最新执行。 */ ({ signal }) =>
@@ -154,14 +168,46 @@ function SessionWorkspace({
     [narrow],
   );
 
-  /** 查看目标轮和分类，只更新URL检查状态，不切换或重建对话。 */
-  function inspect(runId: string, value = 'result'): void {
+  /** 查看 runId 的分类 value；commandCallId 只用于该轮输出定位，不重建对话。 */
+  function inspect(runId: string, value = 'result', commandCallId?: string): void {
+    if (!panelOpen && document.activeElement instanceof HTMLElement) {
+      inspectorTrigger.current = document.activeElement;
+    }
     const next = new URLSearchParams(params);
     next.set('inspect', runId);
     next.set('tab', value);
+    if (value === 'output' && commandCallId) next.set('command', commandCallId);
+    else next.delete('command');
     setParams(next, { replace: true });
     setPanelOpen(true);
   }
+
+  /** 关闭详情并记录下一焦点；审批跳转显式传入对话目标，其余关闭返回触发按钮。 */
+  function closePanel(
+    target = inspectorTrigger.current || inspectorToggle.current,
+    reveal = false,
+  ): void {
+    focusAfterClose.current = target ? { target, reveal } : null;
+    setPanelOpen(false);
+  }
+
+  /** 关闭动画结束后恢复焦点；目标已被新一轮移除时无需处理。 */
+  function restoreFocus(): void {
+    const pending = focusAfterClose.current;
+    focusAfterClose.current = null;
+    if (!pending?.target.isConnected) return;
+    pending.target.focus({ preventScroll: true });
+    if (pending.reveal) pending.target.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  useLayoutEffect(
+    /* 桌面侧栏即时卸载；窄屏抽屉等退出完成再移动焦点。 */ () => {
+      if (narrow) return;
+      if (panelOpen) inspectorHeading.current?.focus({ preventScroll: true });
+      else restoreFocus();
+    },
+    [narrow, panelOpen],
+  );
 
   /** 用POST已确认的真实视图补入会话后再刷新；保留同一DOM与输入状态。 */
   function confirmed(view: RunView): void {
@@ -177,10 +223,37 @@ function SessionWorkspace({
     void cache.invalidateQueries({ queryKey: ['options'] });
     void navigate(`/runs/${view.run_id}`, { replace: true });
   }
-  const selectedTurn = conversation.turns.find(
+  const selectedIndex = conversation.turns.findIndex(
     /* 标题使用所选轮次，旧测试和新运行分别展示。 */ (turn) => turn.run_id === selectedId,
   );
+  const selectedTurn = conversation.turns[selectedIndex];
   const detailTitle = '第 ' + (selectedTurn?.turn_index || '—') + ' 轮详情';
+  const previous = conversation.turns[selectedIndex - 1];
+  const next = selectedIndex < 0 ? undefined : conversation.turns[selectedIndex + 1];
+  const turnNavigation = conversation.turns.length > 1 && (
+    <div className="inspector-turn-navigation" aria-label="切换查看轮次">
+      <Button
+        type="text"
+        size="small"
+        icon={<LeftOutlined />}
+        aria-label="上一轮"
+        title="上一轮"
+        disabled={!previous}
+        onClick={
+          /* 保持所选分类，清除旧轮的命令定位。 */ () => previous && inspect(previous.run_id, tab)
+        }
+      />
+      <Button
+        type="text"
+        size="small"
+        icon={<RightOutlined />}
+        aria-label="下一轮"
+        title="下一轮"
+        disabled={!next}
+        onClick={/* 只移动详情，不改变执行目标。 */ () => next && inspect(next.run_id, tab)}
+      />
+    </div>
+  );
   const title = conversation.title; // 所有入口共享后端有效标题，改名不改原消息。
   const inspector = latest ? (
     <RunInspector
@@ -188,8 +261,12 @@ function SessionWorkspace({
       latest={latest}
       liveEvents={events}
       tab={tab}
+      commandCallId={tab === 'output' ? params.get('command') || undefined : undefined}
       onTab={/* 分类切换保持所选轮与会话。 */ (value) => inspect(selectedId, value)}
       readOnly={conversation.management.state !== 'active'}
+      onShowDecision={
+        /* 跳到对话中当前待处理决定，关闭窄屏遮罩。 */ () => closePanel(decision.current, true)
+      }
     />
   ) : null;
   return (
@@ -210,7 +287,7 @@ function SessionWorkspace({
         </Link>
         <div className="session-heading">
           <h1 title={title}>{title}</h1>
-            {latest?.automation && <Link to="/automations">来自自动化 · 查看规则与触发历史</Link>}
+          {latest?.automation && <Link to="/automations">来自自动化 · 查看规则与触发历史</Link>}
           <p>
             {conversation.management.assigned_project?.label || '未分组'}
             <span>·</span>
@@ -241,11 +318,20 @@ function SessionWorkspace({
           />
           {latest && <RunStatus run={latest} />}
           <Button
+            ref={inspectorToggle}
             type="text"
             aria-label={panelOpen ? '收起详情' : '查看详情'}
             title={panelOpen ? '收起详情' : '查看详情'}
             aria-expanded={panelOpen}
-            onClick={/* 查看区域独立于会话输入与执行。 */ () => setPanelOpen(!panelOpen)}
+            onClick={
+              /* 查看区域独立于会话输入与执行。 */ (event) => {
+                if (panelOpen) closePanel();
+                else {
+                  inspectorTrigger.current = event.currentTarget;
+                  setPanelOpen(true);
+                }
+              }
+            }
             icon={<LayoutOutlined />}
           />
         </div>
@@ -270,6 +356,7 @@ function SessionWorkspace({
           skills={options.data?.skills || []}
           mcpTools={options.data?.mcp_tools || []}
           onInspect={inspect}
+          decisionRef={decision}
           onConfirmed={confirmed}
           onStop={
             /* 用户明确停止当前轮，草稿与已有输出保持可读。 */ () =>
@@ -278,13 +365,22 @@ function SessionWorkspace({
           stopping={Boolean(latest?.cancelling || cancellation.isPending)}
         />
         {!narrow && panelOpen && (
-          <aside className="session-inspector" aria-label="运行详情">
-            <div className="inspector-heading">
+          <aside
+            className="session-inspector"
+            aria-label="运行详情"
+            onKeyDown={
+              /* 子菜单可先消费 Escape，侧栏自身再响应。 */ (event) => {
+                if (event.key === 'Escape' && !event.defaultPrevented) closePanel();
+              }
+            }
+          >
+            <div className="inspector-heading" ref={inspectorHeading} tabIndex={-1}>
               <strong>{detailTitle}</strong>
+              {turnNavigation}
               <button
                 type="button"
                 aria-label="关闭详情"
-                onClick={/* 收起检查器不影响消息阅读。 */ () => setPanelOpen(false)}
+                onClick={/* 收起检查器不影响消息阅读。 */ () => closePanel()}
               >
                 <CloseOutlined />
               </button>
@@ -295,10 +391,21 @@ function SessionWorkspace({
       </div>
       {narrow && (
         <Drawer
-          title={detailTitle}
+          title={
+            <div className="inspector-drawer-heading">
+              <span>{detailTitle}</span>
+              {turnNavigation}
+            </div>
+          }
           className="session-drawer"
           open={panelOpen}
-          onClose={/* 关闭抽屉回到原消息位置。 */ () => setPanelOpen(false)}
+          focusable={{ focusTriggerAfterClose: false }}
+          onClose={/* 关闭抽屉回到原消息位置。 */ () => closePanel()}
+          afterOpenChange={
+            /* 等待遮罩释放焦点后再定位对话。 */ (open) => {
+              if (!open) restoreFocus();
+            }
+          }
           styles={{ wrapper: { width: 'min(100vw, 420px)' }, body: { padding: 0 } }}
         >
           {inspector}

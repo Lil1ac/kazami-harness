@@ -20,7 +20,7 @@ def git(root: Path, *arguments: str) -> bytes:
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch) -> WebConfig:
     """创建固定Git基线和真实宿主测试，并保留源仓库dirty文件供隔离断言。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-continuation-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-continuation-key")
     root = tmp_path / "source"
     root.mkdir()
     (root / "app.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")

@@ -11,6 +11,7 @@ from agent_harness.memory.service import (MemoryChange, MemoryContent, MemoryCon
                                   MemoryGet, MemorySearch, MemoryService, MemoryStore, ranked, encode)
 from tests.helpers.memory import fact_content
 from agent_harness.schemas import MemoryPolicy, RunConfig, RunManifest, RunOrigin, TaskSpec
+from tests.helpers.models import configured_run
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def change(service: MemoryService, item: dict, action: str, **options) -> dict:
 def controller(service: MemoryService, *, workspace: Path | None = None, policy: MemoryPolicy | None = None) -> MemoryController:
     """用 service 来源创建独立 Run 读取集；workspace 可模拟隔离目录，policy=None 沿用默认。"""
     manifest = RunManifest(run_id=uuid4(), task=TaskSpec(workspace=workspace or service.workspace, prompt="修改接口兼容字段"),
-                           config=RunConfig(memory=policy or MemoryPolicy()),
+                           config=configured_run(memory=policy or MemoryPolicy()),
                            origin=RunOrigin(kind="project", preset_id="test", registered_path=service.source, execution_mode="isolated"))
 
     def emit(kind, payload):

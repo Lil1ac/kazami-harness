@@ -7,6 +7,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from agent_harness.context.archive import ContextArchive, ReadContextArguments
+from agent_harness.context.skill_runtime import SKILL_TOOLS, SkillRuntime
+from agent_harness.context.skills import SkillError
 from agent_harness.execution.processes import ProcessRunner
 from agent_harness.hooks.controller import HookPending
 from agent_harness.work.planning import PLANNING_TOOLS, PlanningController, PlanningError
@@ -27,6 +29,7 @@ from agent_harness.tools.files import (EditFileArguments, ReadFileArguments, Sea
 
 
 _TOOL_SPECS = {
+    **SKILL_TOOLS,
     **COMMAND_TOOLS,
     **TEAM_TOOLS,
     **SUBAGENT_TOOLS,
@@ -86,6 +89,7 @@ class ToolExecutor:
         self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
         self.commands = None  # Runner 绑定的统一命令生命周期，独立工具测试为空。
         self.mcp = None  # Agent 绑定的固定 MCP 目录，未选择工具时不连接服务。
+        self.skill_runtime: SkillRuntime | None = None  # 仅交互主运行可绑定已核验的技能读入口。
 
     def bind_planning(self, planning: PlanningController) -> None:
         """绑定当前Run的planning权限与事件入口；返回None，不改变已配置的文件工具集合。"""
@@ -125,6 +129,8 @@ class ToolExecutor:
             return sorted(self.readonly)
         if self.delegation_tools is not None:
             return sorted(self.delegation_tools | (frozenset(COMMAND_TOOLS) if self.commands is not None and "run_command" in self.delegation_tools else frozenset()))
+        if self.skill_runtime is not None:
+            names.extend(self.skill_runtime.names)
         if self.commands is not None and "run_command" in names:
             names.extend(COMMAND_TOOLS)
         if self.config.context.compression != "off":
@@ -309,6 +315,10 @@ class ToolExecutor:
                 ok = data.get("accepted", False) or child is None or (child["status"] == "completed" and not child["report"]["partial"])
                 return {"ok": ok, "data": data, "error": None if ok else {"code": "subagent_not_completed", "message": "子研究未完成，请核对状态和轨迹。"},
                         "truncated": not data.get("eof", True)}
+            if name in SKILL_TOOLS and self.skill_runtime is not None:
+                data = (self.skill_runtime.activate(arguments.name) if name == "activate_skill"
+                        else self.skill_runtime.read(arguments.name, arguments.path))
+                return {"ok": True, "data": data, "error": None, "truncated": False}
             if name == "read_context":
                 if self.context_archive is None:
                     return _error("context_not_ready", "历史证据尚未绑定。")
@@ -367,6 +377,8 @@ class ToolExecutor:
         except SubagentError as error:
             return _error(error.code, error.message)
         except MemoryError as error:
+            return _error(error.code, error.message)
+        except SkillError as error:
             return _error(error.code, error.message)
         except TaskError as error:
             result = _error(error.code, error.message)

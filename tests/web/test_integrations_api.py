@@ -27,7 +27,7 @@ async def action(client, value: dict, operation: str, request_id: str | None = N
 
 def test_queue_conflict_checks_apply_history_and_undo(project_config, monkeypatch):
     """人工解决真实冲突，候选与目标分别检查；重复批准不重写，暂存区和来源模型计数保持。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-integration")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-integration")
 
     async def scenario():
         """执行桌面与Web共用HTTP链路并核对实际文件、队列、审批、历史及撤销预览。"""
@@ -140,7 +140,7 @@ def test_queue_conflict_checks_apply_history_and_undo(project_config, monkeypatc
 
 def test_concurrent_prepare_cancel_permissions_and_stale_approval(project_config, monkeypatch):
     """并发准备幂等、排队取消撤权、宿主禁止不能绕过；批准后目标变化也不会写回。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-integration")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-integration")
     project_config.projects[0].test_argv = []
 
     async def scenario():

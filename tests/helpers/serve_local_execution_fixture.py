@@ -9,7 +9,7 @@ import sys
 import uvicorn
 
 from agent_harness.projects import ProjectPreset
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from serve_navigation_fixture import NavigationModel
@@ -40,9 +40,9 @@ def main() -> None:
             for argv in (['init', '-q'], ['config', 'core.autocrlf', 'false'], ['add', '.'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@invalid', 'commit', '-qm', 'baseline']):
                 subprocess.run(['git', *argv], cwd=source, check=True, capture_output=True, timeout=15)
         (source / 'local.txt').write_text('用户当前未提交文件保持。\n', encoding='utf-8')
-    os.environ['DEEPSEEK_API_KEY'] = 'offline-local-browser'
+    os.environ['HARNESS_TEST_MODEL_KEY'] = 'offline-local-browser'
     config = WebConfig(project_dir=project, worktrees_root=root / 'copies', frontend_dist=project / 'frontend/dist', projects=[ProjectPreset(id='local-code', label=git_root.name, path=git_root, test_argv=[sys.executable, '-m', 'pytest', '-q'])], workspaces=[WebWorkspace(id='local-files', label=files_root.name, path=files_root)])
-    app = create_app(config, RunConfig(tools=['read_file', 'write_file']), root / 'runs', model_client=NavigationModel())
+    app = create_app(config, configured_run(tools=['read_file', 'write_file']), root / 'runs', model_client=NavigationModel())
     app.state.manager.catalog.register(git_root)  # 普通目录用显式测试预设；本夹具位于父Git仓库内，不冒充原生选择结果。
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', timeout_graceful_shutdown=2)
 

@@ -35,7 +35,7 @@ def test_public_repair_and_followup_choice_survive_restart(project_config, monke
     """mode覆盖原目录与会话工作树；首次修复通过、重启关闭再开启，旧检查及文件字节保持。"""
     config = project_config
     config.projects[0].test_argv = [sys.executable, '-c', CHECK_CODE]
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-repair')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-repair')
     records = config.project_dir / 'records'
     original_index = (config.projects[0].path / '.git/index').read_bytes()
     original_source = (config.projects[0].path / 'src/app.py').read_bytes()
@@ -86,7 +86,7 @@ def test_auto_repair_without_public_tests_rejected_before_model(project_config, 
     """未配公开项目测试时明确拒绝，不创建Runner记录或调用模型。"""
     config = project_config
     config.projects[0].test_argv = []
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-repair')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-repair')
     model = RepairModel(['bad'])
 
     async def scenario():
@@ -105,7 +105,7 @@ def test_interrupted_repair_keeps_check_history_and_can_continue_without_replay(
     """修复阶段丢失终态后重启，公开检查及流仍可读；只有用户追加要求才启动新运行。"""
     config = project_config
     config.projects[0].test_argv = [sys.executable,'-c',CHECK_CODE]
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-repair')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-repair')
     records = config.project_dir / 'records'
 
     async def scenario():

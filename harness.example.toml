@@ -1,25 +1,29 @@
 # 当前切片支持读、搜、写、局部编辑、命令五类工具；命令只用于可信本地任务，配置会保存为运行快照。
-provider = "deepseek" # 选 qwen 时使用阿里云百炼北京地域。
-requested_model = "deepseek-flash" # 选择 qwen 时可填 qwen-plus，也可省略此项使用供应商默认。
+# 登记连接后可指定默认服务商和模型。省略时选首个启用服务商的默认模型。
+# provider = "custom-local"
+# requested_model = "your-model-id"
 
 # 配置段可放在文件末尾；没有配置的探索、审阅角色继承父会话。
 # [role_models.review]
-# provider = "qwen"
-# requested_model = "qwen-plus"
+# provider = "custom-local"
+# requested_model = "your-other-model-id"
 
 # 自定义服务商的配置段放在文件末尾。选择该服务商时用 --provider custom-local。
 # [custom_providers.custom-local]
 # name = "本机兼容服务"
 # base_url = "http://127.0.0.1:11434/v1"
-# default_model = "your-local-model"
+# default_model = "your-model-id"
+# models = ["your-other-model-id"]
 # auth = "none"
 # enabled = true
 tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"]
 
-# 宿主技能集合：相对本配置文件解析；网页只能选择名称，不能改路径。
+# 宿主技能集合相对本配置文件解析。页面导入的副本存入运行数据目录。
 skill_roots = ["examples/skills"]
-# CLI 可在自定义配置中填写技能名；空列表表示不加载。
+# CLI 可在自定义配置中填写技能名。空列表表示不手选。
 skills = []
+# 交互主运行可按任务匹配已启用的技能，默认由用户手选。
+skill_auto = false
 # 外部工具默认不选择；CLI 可填写同一运行根已审核目录返回的 name/fingerprint 对，详见 docs/MCP.md。
 mcp_tools = []
 

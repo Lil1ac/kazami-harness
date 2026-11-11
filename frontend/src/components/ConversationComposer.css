@@ -1,0 +1,109 @@
+/* 对话输入采用单一发送区；覆盖通用按钮布局，运行控制独立于表单。 */
+.conversation-composer .message-composer {
+  padding: 10px 12px;
+  border-color: var(--line);
+  border-radius: 16px;
+  box-shadow: none;
+}
+.conversation-composer .message-composer:focus-within {
+  border-color: var(--strong-line);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.conversation-composer .message-composer textarea.ant-input {
+  padding: 4px 4px 10px;
+  min-height: 64px;
+}
+.conversation-composer .composer-toolbar {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.composer-send-area {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+.composer-delivery.ant-select {
+  width: 126px;
+  height: 30px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-send-area .send-message.ant-btn {
+  height: 32px;
+  border-radius: 10px;
+  padding-inline: 11px;
+  font-size: 12px;
+  box-shadow: none;
+}
+.composer-settings-trigger.ant-btn {
+  height: 28px;
+  min-width: 28px;
+  padding-inline: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer-settings {
+  width: min(340px, calc(100vw - 64px));
+  max-height: min(420px, 55dvh);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.composer-settings .skill-selector {
+  margin: 0;
+}
+.composer-run-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 0 4px 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-run-label,
+.composer-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.composer-run-actions .ant-btn {
+  color: var(--muted);
+  font-size: 12px;
+}
+.run-indicator {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.run-indicator.is-active {
+  background: var(--accent);
+}
+/* 小屏保留消息去向、权限和发送入口；将触控高度与视觉密度分开。 */
+@media (max-width: 600px) {
+  .conversation-composer .message-composer {
+    padding: 8px;
+    border-radius: 14px;
+  }
+  .conversation-composer .composer-toolbar {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .composer-send-area {
+    gap: 2px;
+  }
+  .composer-delivery.ant-select {
+    width: 120px;
+  }
+  .composer-settings-trigger.ant-btn,
+  .composer-run-actions .ant-btn {
+    height: 32px;
+  }
+}

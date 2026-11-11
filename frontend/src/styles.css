@@ -431,6 +431,15 @@ pre {
   border-top: 1px solid var(--line);
   padding-top: 10px;
 }
+.sidebar-queue-indicator {
+  margin-inline-start: auto;
+  color: var(--accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.sidebar-queue-indicator[data-paused='true'] {
+  color: var(--warning);
+}
 /* 外观是本地显示偏好，直接切换；紧凑分段控件与侧栏导航保持同一层级。 */
 .appearance-control {
   display: flex;
@@ -717,28 +726,6 @@ pre {
   gap: 7px;
   font-size: 12px;
 }
-.mode-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 7px 3px;
-}
-.mode-option > .anticon {
-  margin-top: 3px;
-  font-size: 15px;
-  color: var(--muted);
-}
-.mode-option strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 550;
-}
-.mode-option small {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
 /* 会话列表与设置用稳定列和细分隔表达信息层级。 */
 .recent-history {
   margin-top: 46px;
@@ -840,17 +827,8 @@ pre {
 .conversation-row-meta .ant-tag {
   margin: 0;
 }
-.settings-workspace {
-  max-width: 1020px;
-  margin: auto;
-}
 .page-heading p {
   margin: 0;
-}
-.settings-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 230px;
-  gap: 50px;
 }
 .settings-section {
   margin-bottom: 30px;
@@ -883,20 +861,6 @@ pre {
 .applied-note {
   color: var(--success);
   font-size: 12px;
-}
-.settings-aside {
-  border-left: 1px solid var(--line);
-  padding-left: 24px;
-}
-.settings-aside h2 {
-  font-size: 12px;
-}
-.settings-aside code {
-  display: block;
-  margin: 0 0 18px;
-}
-.settings-aside .ant-alert {
-  background: transparent;
 }
 .project-settings-form .ant-form-item {
   margin-top: 24px;
@@ -1109,8 +1073,15 @@ pre {
   font-weight: 600;
 }
 .assistant-heading > span {
-  font-size: 10px;
-  color: var(--subtle);
+  font-size: 12px;
+  color: var(--muted);
+}
+.turn-inspect {
+  margin-left: auto;
+  min-height: 28px;
+}
+.turn-inspect:hover {
+  text-decoration: underline;
 }
 .message-waiting {
   font-size: 12px;
@@ -1131,20 +1102,25 @@ pre {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
-  margin-top: 16px;
-  font-size: 10px;
+  gap: 6px 14px;
+  margin-top: 12px;
+  font-size: 12px;
   color: var(--muted);
 }
 .message-actions button {
   background: transparent;
   border: 0;
-  font-size: 11px;
+  font-size: 12px;
+  min-height: 28px;
   padding: 3px 0;
   color: var(--muted);
 }
 .message-actions button:hover {
   color: var(--text);
+}
+.activity-output-link {
+  display: inline-block;
+  margin-inline-start: 10px;
 }
 .conversation-composer {
   position: relative;
@@ -1198,20 +1174,6 @@ pre {
   border-radius: 20px;
   font-size: 11px;
   box-shadow: var(--shadow);
-}
-.composer-skills {
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 9px;
-  max-height: 220px;
-  overflow: auto;
-}
-.composer-skills > summary {
-  cursor: pointer;
-  padding: 3px 0;
-}
-.composer-skills .skill-selector {
-  margin: 12px 0;
 }
 /* 过程由真实文本和操作行组成；载荷只有主动展开才占用阅读空间。 */
 .turn-activity {
@@ -1381,20 +1343,29 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px 10px;
+  padding: 12px 16px 8px 20px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 14px;
 }
-.inspector-heading button {
+.inspector-heading > button {
   border: 0;
   background: none;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   color: var(--muted);
   border-radius: 5px;
 }
-.inspector-heading button:hover {
+.inspector-heading > button:hover {
   background: var(--hover);
+}
+.inspector-turn-navigation,
+.inspector-drawer-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.inspector-turn-navigation {
+  margin-inline-start: auto;
 }
 .inspector-panels {
   min-height: 0;
@@ -1422,7 +1393,33 @@ pre {
   padding: 22px 20px;
 }
 .inspector-panels .ant-tabs-tab-btn {
-  font-size: 12px;
+  font-size: 13px;
+}
+.inspector-panels .ant-tabs-tab + .ant-tabs-tab {
+  margin-inline-start: 18px;
+}
+.inspector-work {
+  display: grid;
+  gap: 16px;
+}
+.inspector-work > .ant-segmented {
+  justify-self: start;
+}
+.inspector-decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.inspector-overview > .inspector-decision {
+  margin-top: 14px;
+}
+.inspector-panels .runtime-panel {
+  margin: 0;
 }
 .inspector-overview > section {
   margin-top: 22px;
@@ -1460,32 +1457,6 @@ pre {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
-}
-.jobs-list {
-  list-style: none;
-  padding: 0;
-  margin: 24px 0;
-}
-.jobs-list li {
-  padding: 20px 4px;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
-}
-.jobs-list li > strong {
-  font-size: 14px;
-  font-weight: 550;
-}
-.jobs-list li > div {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.jobs-list li a {
-  color: var(--accent);
 }
 .markdown-message {
   font-size: 14px;
@@ -2007,10 +1978,6 @@ pre {
     align-items: flex-end;
     gap: 7px;
   }
-  .settings-layout {
-    grid-template-columns: minmax(0, 1fr) 190px;
-    gap: 30px;
-  }
   .composer-keyboard-hint {
     display: none;
   }
@@ -2142,14 +2109,6 @@ pre {
   .conversation-row-meta .ant-tag {
     white-space: normal;
     text-align: right;
-  }
-  .settings-layout {
-    grid-template-columns: 1fr;
-  }
-  .settings-aside {
-    border-left: 0;
-    border-top: 1px solid var(--line);
-    padding: 24px 0 0;
   }
   .session-header {
     padding: 12px;

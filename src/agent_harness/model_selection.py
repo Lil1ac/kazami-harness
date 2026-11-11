@@ -9,19 +9,10 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
-ModelProvider = Annotated[str, StringConstraints(pattern=r"^(deepseek|qwen|custom-[a-z0-9][a-z0-9-]{0,31})$")]  # 内置或宿主登记的稳定标识。
+ModelProvider = Annotated[str, StringConstraints(pattern=r"^custom-[a-z0-9][a-z0-9-]{0,31}$")]  # 用户登记的稳定服务商标识。
+ModelId = Annotated[str, StringConstraints(min_length=1, max_length=200, pattern=r"^[^\s\x00-\x1f\x7f](?:[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f])?$")]  # 发送给服务商的模型 ID。
 ModelVersion = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]  # 自定义端点版本，不含地址或凭据正文。
 ModelRole = Literal["explore", "review"]  # 首版允许独立选择模型的委派角色。
-
-DEFAULT_MODELS: dict[ModelProvider, str] = {
-    "deepseek": "deepseek-flash",
-    "qwen": "qwen-plus",
-}  # 切换供应商但未指定模型时使用的默认模型。
-
-MODEL_KEY_ENVS: dict[ModelProvider, str] = {
-    "deepseek": "DEEPSEEK_API_KEY",
-    "qwen": "DASHSCOPE_API_KEY",
-}  # Web 和 CLI 读取的宿主环境变量名，配置只记录供应商。
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})  # 允许明文 HTTP 和免密请求的本机地址。
 
@@ -32,14 +23,17 @@ class CustomProviderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)  # 定义只通过整体替换更新。
     name: str = Field(min_length=1, max_length=80)  # 页面显示名称，可与其他连接同名。
     base_url: str = Field(min_length=1, max_length=2048)  # 兼容接口根地址，末尾可包含 /v1 或网关前缀。
-    default_model: str = Field(min_length=1, max_length=200)  # 提交给服务商的默认模型 ID。
+    default_model: ModelId  # 未明确选择时提交给服务商的模型 ID。
+    models: list[ModelId] = Field(default_factory=list, max_length=31)  # 同连接可选的其他模型，不重复默认模型。
     auth: Literal["bearer", "none"] = "bearer"  # none 只适用于回环地址。
     enabled: bool = True  # 停用后不能接纳或继续使用该版本的任务。
 
-    @field_validator("name", "default_model")
+    @field_validator("name", "default_model", mode="before")
     @classmethod
-    def clean_text(cls, value: str) -> str:
+    def clean_text(cls, value: object) -> object:
         """去掉 value 的外侧空白并返回，拒绝空值及内嵌控制字符。"""
+        if not isinstance(value, str):
+            return value
         value = value.strip()
         if not value or re.search(r"[\x00-\x1f\x7f]", value):
             raise ValueError("名称和模型 ID 必须为单行文本")
@@ -69,10 +63,17 @@ class CustomProviderSettings(BaseModel):
 
     @model_validator(mode="after")
     def check_local_auth(self) -> "CustomProviderSettings":
-        """要求免密连接使用回环地址，返回定义本身。"""
+        """核对免密地址与模型去重规则，返回定义本身。"""
         if self.auth == "none" and httpx.URL(self.base_url).host not in LOOPBACK_HOSTS:
             raise ValueError("免密接入仅限本机回环地址")
+        if len(set(self.model_ids)) != len(self.model_ids):
+            raise ValueError("同一服务商的模型 ID 不能重复")
         return self
+
+    @property
+    def model_ids(self) -> list[str]:
+        """按默认模型在前的顺序返回全部登记的模型 ID。"""
+        return [self.default_model, *self.models]
 
 
 class CustomProvider(CustomProviderSettings):

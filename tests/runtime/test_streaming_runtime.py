@@ -9,6 +9,7 @@ import httpx
 
 from agent_harness.runtime.runner import run_task
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore
 from tests.helpers.streaming import model_stream_response
 
@@ -18,7 +19,7 @@ def test_streaming_text_precedes_tool_execution_and_final_answer(tmp_path: Path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "demo.txt").write_text("真实内容", encoding="utf-8")
-    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="读取文件", workspace=workspace), config=RunConfig(tools=["read_file"]))
+    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="读取文件", workspace=workspace), config=configured_run(tools=["read_file"]))
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

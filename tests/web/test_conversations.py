@@ -68,7 +68,7 @@ class EditingModel:
 @pytest.fixture
 def config(tmp_path: Path, monkeypatch) -> WebConfig:
     """创建真实普通目录并设置离线凭据，返回应用配置；目录始终原地执行。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-conversation-key')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-conversation-key')
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     return WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / 'runtime/copies', frontend_dist=tmp_path / 'dist', workspaces=[WebWorkspace(id='files', label='普通目录', path=workspace)])

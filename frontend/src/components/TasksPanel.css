@@ -155,27 +155,3 @@
   font-size: 12px;
   margin: 16px 0;
 }
-
-/* 容量和恢复选择可在窄屏自然换行，分组通过留白表达层级。 */
-.scheduler-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px 24px;
-  margin: 20px 0;
-}
-.scheduler-controls label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-.job-group {
-  margin-top: 28px;
-}
-.job-group > h2 {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}

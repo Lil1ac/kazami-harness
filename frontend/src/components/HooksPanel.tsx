@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Empty, Select, Skeleton, Space } from 'antd';
+import { Alert, Button, Select, Skeleton } from 'antd';
 import { errorMessage, getHooks, reviewHook } from '../api';
 import type { HookDefinition, HookRecord, HookSnapshot } from '../hookTypes';
 import type { RunEvent } from '../types';
+import { CodeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { IntegrationDrawer, IntegrationRow, IntegrationStatus } from './IntegrationCatalog';
+import { readableCommand } from './ReviewSurface';
 
 const statusLabels: Record<string, string> = {
   running: '执行中',
@@ -22,17 +25,72 @@ const reasons: Record<string, string> = {
   cleanup_failed: '进程未完成清理',
 }; // 固定原因的中文呈现。
 
-/** 展示一条 rule 的精确定义；返回只读命令、匹配条件及脚本内容摘要。 */
-function HookDetails({ definition }: { definition: HookDefinition }) {
+/** 将事件技术名转换为便于扫读的时机；未知事件保留原始标识。 */
+function hookEvent(event: string): string {
+  const labels: Record<string, string> = {
+    RunStart: '运行开始',
+    Stop: '运行结束',
+    PreToolUse: '工具调用前',
+    PostToolUse: '工具调用后',
+    PreCompact: '上下文压缩前',
+    SubagentStart: '子 Agent 开始',
+    SubagentStop: '子 Agent 结束',
+  };
+  return labels[event] || event;
+}
+
+/** 返回规则真实状态；旧指纹被替换时要求重新审核。 */
+function hookStatus(item: HookDefinition) {
+  if (!item.trusted)
+    return (
+      <IntegrationStatus label={item.previous_definition ? '待复审' : '待审核'} tone="attention" />
+    );
   return (
-    <div>
-      <pre>{JSON.stringify(definition.rule, null, 2)}</pre>
-      <p>
-        工作目录：<code>{definition.cwd}</code>
-      </p>
+    <IntegrationStatus
+      label={item.enabled ? '已审核 · 已启用' : '已审核 · 已停用'}
+      tone={item.enabled ? 'ready' : 'neutral'}
+    />
+  );
+}
+
+/** 展示 definition 的精确审核内容；命令与脚本作为纯文本呈现。 */
+function HookDetails({ definition }: { definition: HookDefinition }) {
+  const rule = definition.rule;
+  return (
+    <>
+      {!definition.trusted && definition.previous_definition && (
+        <Alert type="warning" showIcon title="定义与上次审核的版本不同" />
+      )}
+      <dl className="integration-fields">
+        <dt>触发时机</dt>
+        <dd>
+          {hookEvent(rule.event)} <code>{rule.event}</code>
+        </dd>
+        <dt>来源</dt>
+        <dd>{definition.key.startsWith('host:') ? '宿主规则' : '项目规则'}</dd>
+        <dt>工作目录</dt>
+        <dd>
+          <code>{definition.cwd}</code>
+        </dd>
+        <dt>工具</dt>
+        <dd>{rule.tools.join('、') || '不限制'}</dd>
+        <dt>路径</dt>
+        <dd>{rule.paths.join('、') || '不限制'}</dd>
+        <dt>Agent 范围</dt>
+        <dd>{rule.agent_scopes.join('、') || '不限制'}</dd>
+        <dt>超时</dt>
+        <dd>{rule.timeout_seconds} 秒</dd>
+        <dt>失败处理</dt>
+        <dd>
+          {rule.on_failure === 'block' ? '阻止后续动作' : '继续执行'}
+          {rule.required ? ' · 必须执行' : ''}
+        </dd>
+      </dl>
+      <h3>执行命令</h3>
+      <pre>{readableCommand(rule.argv)}</pre>
       {Object.entries(definition.script_previews).map(
-        /* 源码作为纯文本显示，审核不会执行。 */ ([path, preview]) => (
-          <div key={path}>
+        /* 保留可核对的文件名、正文与截断提示。 */ ([path, preview]) => (
+          <div className="integration-detail" key={path}>
             <p>
               <code>{path}</code>
             </p>
@@ -41,18 +99,19 @@ function HookDetails({ definition }: { definition: HookDefinition }) {
           </div>
         ),
       )}
-      <details>
-        <summary>入口摘要与指纹</summary>
+      <details className="integration-disclosure">
+        <summary>原始定义与指纹</summary>
+        <pre>{JSON.stringify(rule, null, 2)}</pre>
         <pre>{JSON.stringify(definition.scripts, null, 2)}</pre>
         <code>{definition.fingerprint}</code>
       </details>
       {definition.previous_definition != null && (
-        <details>
+        <details className="integration-disclosure">
           <summary>上次审核的定义</summary>
           <pre>{JSON.stringify(definition.previous_definition, null, 2)}</pre>
         </details>
       )}
-    </div>
+    </>
   );
 }
 
@@ -61,12 +120,14 @@ export function HookSettings({
   projectId,
   projects = [],
 }: {
-  projectId?: string;
-  projects?: { id: string; label: string }[];
+  projectId?: string; // 项目设置固定项目，缺省时由用户选择。
+  projects?: { id: string; label: string }[]; // 已登记项目及其可读名称。
 }) {
   const [selected, setSelected] = useState(projects[0]?.id || ''); // 仅选择已登记项目。
   const [reviewing, setReviewing] = useState<HookDefinition | null>(null); // 用户展开并实际审核的定义。
-  const current = projectId || selected;
+  const drawerTrigger = useRef<HTMLButtonElement | null>(null); // 关闭详情后返回原 Hook 目录行。
+  const current =
+    projectId || (projects.some((item) => item.id === selected) ? selected : projects[0]?.id || '');
   const cache = useQueryClient();
   const query = useQuery({
     queryKey: ['hooks', current],
@@ -89,113 +150,157 @@ export function HookSettings({
     },
   });
   return (
-    <section className="settings-section" aria-label="Hooks 设置">
-      <h2>Hooks</h2>
-      {!projectId && (
-        <Select
-          aria-label="Hooks 项目"
-          value={selected || undefined}
-          onChange={
-            /* 切换项目清除旧审核草稿。 */ (value) => {
-              setSelected(value);
-              setReviewing(null);
-            }
-          }
-          options={projects.map(
-            /* 项目登记名称用于选择。 */ (item) => ({ value: item.id, label: item.label }),
+    <section className="integration-catalog" aria-label="Hooks 设置">
+      <header className="integration-toolbar">
+        <h2>Hooks 规则</h2>
+        <div className="integration-project-controls">
+          {!projectId && (
+            <Select
+              aria-label="Hooks 项目"
+              value={current || undefined}
+              disabled={mutation.isPending || !projects.length}
+              onChange={
+                /* 切换到明确登记的项目并清除旧审核。 */ (value) => {
+                  setSelected(value);
+                  setReviewing(null);
+                  mutation.reset();
+                }
+              }
+              options={projects.map(
+                /* 仅提供当前可选项目。 */ (item) => ({ value: item.id, label: item.label }),
+              )}
+              placeholder="选择项目"
+            />
           )}
-          placeholder="选择项目"
-          style={{ minWidth: 200 }}
-        />
-      )}
-      {current && (
-        <Button
-          onClick={
-            /* 只重读配置，不执行脚本。 */ () => {
-              setReviewing(null);
-              void query.refetch();
-            }
-          }
-        >
-          重新加载
-        </Button>
-      )}
-      {!current && <p>打开项目后可查看和审核生命周期脚本。</p>}
-      {query.isFetching && current && !query.data && <Skeleton active />}
-      {(query.error || mutation.error) && (
+          {current && (
+            <Button
+              icon={<ReloadOutlined />}
+              loading={query.isFetching}
+              disabled={mutation.isPending}
+              onClick={
+                /* 刷新定义，不执行脚本。 */ () => {
+                  setReviewing(null);
+                  mutation.reset();
+                  void query.refetch();
+                }
+              }
+            >
+              重新加载
+            </Button>
+          )}
+        </div>
+      </header>
+      {!current && <p className="integration-empty">选择项目后查看 Hooks</p>}
+      {query.isFetching && current && !query.data && <Skeleton active paragraph={{ rows: 2 }} />}
+      {query.error && (
         <Alert
           type="error"
-          title="Hooks 操作失败"
-          description={errorMessage(query.error || mutation.error)}
+          showIcon
+          title="无法读取 Hooks"
+          description={errorMessage(query.error)}
         />
       )}
-      {query.data && (
-        <>
-          <p>
+      {query.data &&
+        (query.data.items.length ? (
+          <ul className="integration-list">
+            {query.data.items.map(
+              /* 相同名称的宿主和项目规则仍用各自的来源编号。 */ (item) => (
+                <IntegrationRow
+                  key={item.key}
+                  name={item.rule.id}
+                  icon={<CodeOutlined />}
+                  summary={
+                    hookEvent(item.rule.event) +
+                    ' · ' +
+                    (item.key.startsWith('host:') ? '宿主规则' : '项目规则')
+                  }
+                  status={hookStatus(item)}
+                  onOpen={
+                    /* 审核必须使用打开时实际看到的版本。 */ (trigger) => {
+                      drawerTrigger.current = trigger;
+                      mutation.reset();
+                      setReviewing(item);
+                    }
+                  }
+                />
+              ),
+            )}
+          </ul>
+        ) : (
+          <div className="integration-empty">
+            <p>这个项目还没有 Hook</p>
             <code>{query.data.config_path}</code>
-          </p>
-          {!query.data.items.length && (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置 Hook" />
-          )}
-          {query.data.items.map(
-            /* 每条规则使用来源编号，宿主与项目同名也独立显示。 */ (item) => (
-              <article key={item.key} className="diagnostic-section">
-                <Space wrap>
-                  <strong>{item.key}</strong>
-                  <span>{item.rule.event}</span>
-                  <span>
-                    {!item.trusted
-                      ? '待审核'
-                      : item.enabled
-                        ? '已审核 · 已启用'
-                        : '已审核 · 已禁用'}
-                  </span>
-                </Space>
-                <pre>{item.rule.argv.join('\n')}</pre>
-                <Space>
-                  <Button
-                    disabled={mutation.isPending}
-                    onClick={/* 展示完整定义后才允许确认审核。 */ () => setReviewing(item)}
-                  >
-                    审核定义
-                  </Button>
-                  <Button
-                    disabled={
-                      mutation.isPending || (item.rule.required && item.key.startsWith('host:'))
-                    }
-                    onClick={
-                      /* 只修改人工开关，不获得命令执行许可。 */ () =>
-                        mutation.mutate({
-                          item,
-                          action: item.enabled ? 'disable' : 'enable',
-                          project: current,
-                        })
-                    }
-                  >
-                    {item.enabled ? '禁用' : '启用'}
-                  </Button>
-                </Space>
-                {reviewing?.key === item.key && (
-                  <div>
-                    <HookDetails definition={reviewing} />
-                    <p>本机脚本可按系统权限访问文件与网络。审核后，执行仍遵守当前命令权限。</p>
-                    <Button
-                      type="primary"
-                      loading={mutation.isPending}
-                      onClick={
-                        /* 提交用户已查看定义的精确指纹。 */ () =>
-                          mutation.mutate({ item: reviewing, action: 'trust', project: current })
-                      }
-                    >
-                      信任此定义
-                    </Button>
-                  </div>
-                )}
-              </article>
-            ),
-          )}
-        </>
-      )}
+          </div>
+        ))}
+      <IntegrationDrawer
+        open={Boolean(reviewing)}
+        returnFocus={drawerTrigger.current}
+        title={reviewing?.rule.id || 'Hook 详情'}
+        onClose={
+          /* 关闭详情不保存，提交期间保留确认上下文。 */ () => {
+            if (!mutation.isPending) setReviewing(null);
+          }
+        }
+        footer={
+          reviewing && (
+            <div className="integration-actions">
+              <Button
+                disabled={
+                  mutation.isPending ||
+                  (reviewing.rule.required && reviewing.key.startsWith('host:'))
+                }
+                onClick={
+                  /* 启停是单独的管理决定，不授予脚本执行权限。 */ () =>
+                    mutation.mutate({
+                      item: reviewing,
+                      action: reviewing.enabled ? 'disable' : 'enable',
+                      project: current,
+                    })
+                }
+              >
+                {reviewing.enabled ? '停用' : '启用'}
+              </Button>
+              {!reviewing.trusted && (
+                <Button
+                  type="primary"
+                  loading={mutation.isPending}
+                  onClick={
+                    /* 审核提交精确指纹，定义变化时由后端拒绝。 */ () =>
+                      mutation.mutate({
+                        item: reviewing,
+                        action: 'trust',
+                        project: current,
+                      })
+                  }
+                >
+                  信任此定义
+                </Button>
+              )}
+            </div>
+          )
+        }
+      >
+        {reviewing && (
+          <div className="integration-detail">
+            {mutation.error && <Alert type="error" showIcon title={errorMessage(mutation.error)} />}
+            {!reviewing.trusted && (
+              <Alert
+                type="warning"
+                showIcon
+                title="本机脚本可按系统权限访问文件与网络"
+                description="信任此定义后，脚本执行仍遵守当前命令权限。"
+              />
+            )}
+            <HookDetails definition={reviewing} />
+            {!reviewing.key.startsWith('host:') && query.data?.config_path && (
+              <details className="integration-disclosure">
+                <summary>项目配置路径</summary>
+                <code>{query.data.config_path}</code>
+              </details>
+            )}
+          </div>
+        )}
+      </IntegrationDrawer>
     </section>
   );
 }

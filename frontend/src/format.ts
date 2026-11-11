@@ -73,7 +73,8 @@ export function modelFailureLabel(reason: string | null | undefined): string | n
   switch (reason) {
     case 'model_tls_verification': return '模型服务证书校验失败';
     case 'model_credentials_invalid': return '请配置当前模型供应商的密钥';
-    case 'model_authentication': return '模型服务认证失败，请检查密钥和地域';
+    case 'model_authentication': return '认证失败，请检查该连接的 API Key';
+    case 'model_not_configured': return '请先添加模型服务';
     case 'model_rate_limited': return '模型服务限流';
     case 'model_stream_interrupted': return '模型响应中断';
     case 'model_unavailable': return '模型服务暂时不可用';

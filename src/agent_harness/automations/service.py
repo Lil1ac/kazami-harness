@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from agent_harness.automations.models import AutomationDefinition, Schedule, GrantRequest, instant, next_time, preview
 from agent_harness.config import load_config, prepare_task
-from agent_harness.context.skills import SkillCatalog
+from agent_harness.context.skill_library import SkillLibrary
 from agent_harness.execution.python import prepare_python_execution
 from agent_harness.execution.scheduling import resources
 from agent_harness.hooks.catalog import discover, HookStore
@@ -34,6 +34,7 @@ def effective_config(host: RunConfig, task) -> RunConfig:
         if key in patch:
             merged[key] = {**merged[key], **patch.pop(key)}
     merged.update(patch)
+    merged["skill_auto"] = False  # 自动化只使用用户授权时固定的显式技能。
     return load_config(overrides=merged).freeze_models()
 
 
@@ -65,7 +66,7 @@ def environment_snapshot(definition: dict, root: Path, host_config: dict) -> dic
             "resources": resources([workspace], web.serial_resource_groups), "config": config.model_dump(mode="json"),
             "python": execution.model_dump(mode="json"), "verifier": verifier.model_dump(mode="json") if verifier else None,
             "hooks": [{key: hook[key] for key in ("key", "fingerprint", "trusted", "enabled")} for hook in hooks],
-            "skills": [item.model_dump(mode="json") for item in SkillCatalog(config.skill_roots).load(config.skills)],
+            "skills": [item.model_dump(mode="json") for item in SkillLibrary(root, config.skill_roots).load(config.skills)],
             "agents": file_identity(workspace / "AGENTS.md", config.context.max_project_instruction_bytes) if (workspace / "AGENTS.md").exists() else None}
     # 仅引用的自定义端点参与授权指纹，添加其他服务商不影响现有自动化。
     host_snapshot = {**host_config, "run": {**host_config["run"], "custom_providers": data["config"]["custom_providers"]}}

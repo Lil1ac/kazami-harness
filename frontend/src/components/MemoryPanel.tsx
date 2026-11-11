@@ -675,7 +675,7 @@ export function MemoryPanel({
           </article>
         ),
       )}
-      {projectId && (
+      {projectId && (offset > 0 || page.data?.next_offset != null) && (
         <div className="memory-actions">
           <Button
             disabled={offset === 0}

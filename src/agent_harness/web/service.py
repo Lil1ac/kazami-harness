@@ -17,13 +17,14 @@ from pydantic import ValidationError
 
 from agent_harness.config import ConfigurationError, load_config, prepare_task
 from agent_harness.providers.base import ModelClient, ModelError
-from agent_harness.model_selection import DEFAULT_MODELS, MODEL_KEY_ENVS, valid_model_key
+from agent_harness.model_selection import valid_model_key
 from agent_harness.runtime.runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
 from agent_harness.schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
 from agent_harness.projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
 from agent_harness.storage.runs import RunHistory, RunStore, StorageError
-from agent_harness.context.skills import SkillCatalog
+from agent_harness.context.skill_library import SkillLibrary
+from agent_harness.context.skill_runtime import recorded_skills
 from agent_harness.execution.local import LocalChangeStore
 from agent_harness.storage.snapshots import SnapshotError
 from agent_harness.storage.sessions import SessionError
@@ -129,6 +130,8 @@ def _context_view(events: list[RunEvent]) -> ContextView | None:
             view.action_count += 1
         elif event.type == "model_request_started" and view is not None and event.payload.get("purpose") == "summary":
             view.summary_calls += 1
+    if view is not None:
+        view.skills, view.skill_resources = recorded_skills(events)
     return view
 
 
@@ -259,6 +262,7 @@ class WebRunManager:
         self.runs_root = runs_root.resolve()  # 独立运行记录根目录。
         from agent_harness.mcp.store import McpStore
         self.mcp = McpStore(self.runs_root)  # 连接目录读取不启动任何服务。
+        self.skills = SkillLibrary(self.runs_root, self.run_config.skill_roots)  # 管理页和任务共用的本机目录。
         self.mcp_credential_provider = None  # 桌面安装异步原生读取器；CLI/Web 使用环境引用。
         self.catalog = ProjectCatalog(self.runs_root, web_config)  # 明确打开目录的持久登记，首轮与续轮共用。
         self.folder_picker = FolderPicker()  # 独立原生选择器，读取页面不创建窗口。
@@ -332,7 +336,7 @@ class WebRunManager:
             "recent_projects": recent,
             "folder_picker_available": self.folder_picker.available,
             "config": self.run_config,
-            "skills": SkillCatalog(self.run_config.skill_roots).discover(),
+            "skills": self.skills.discover(),
             "mcp_tools": self.mcp.options(),
             "model_providers": self.model_options(),
             "verifiers": [
@@ -352,20 +356,9 @@ class WebRunManager:
         return self._key_provider(config) if self._key_provider is not None else os.environ.get(config.api_key_env, "") if config.api_key_env else ""
 
     def model_options(self) -> dict:
-        """返回内置与自定义服务商的公开定义和凭据状态，不读取给页面的密钥正文。"""
-        definitions = self.run_config.custom_providers
-        options = {
-            provider: {
-                "name": "DeepSeek" if provider == "deepseek" else "Qwen",
-                "default_model": default,
-                "api_key_env": MODEL_KEY_ENVS[provider],
-                "auth": "bearer",
-                "enabled": True,
-                "key_configured": valid_model_key(self.api_key(RunConfig(provider=provider))),
-            }
-            for provider, default in DEFAULT_MODELS.items()
-        }
-        for provider, definition in definitions.items():
+        """返回用户登记的服务商和公开凭据状态，空目录返回空映射。"""
+        options = {}
+        for provider, definition in self.run_config.custom_providers.items():
             config = RunConfig(provider=provider, custom_providers={provider: definition})
             options[provider] = {
                 **definition.model_dump(exclude={"generation"}),

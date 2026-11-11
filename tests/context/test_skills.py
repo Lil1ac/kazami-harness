@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 import agent_harness.context.skills as skills
-from agent_harness.context.skills import SkillCatalog, SkillError
+from agent_harness.context.skill_library import SkillLibrary
+from agent_harness.context.skills import SkillError
 
 
 def skill(root: Path, name: str = "api-development", *, header: str | None = None, body: str = "按需求修改接口并运行测试。") -> Path:
@@ -20,14 +21,19 @@ def skill(root: Path, name: str = "api-development", *, header: str | None = Non
     return path
 
 
+
+def library(root: Path, roots: list[Path] | None = None) -> SkillLibrary:
+    """以 root 隔离测试数据，roots 为空时将 root 用作宿主技能目录。"""
+    return SkillLibrary(root / ".skill-data", [root] if roots is None else roots)
+
 def test_constructor_and_empty_selection_do_not_touch_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """构造及空选择不访问不存在的目录，默认未启用技能不会增加文件访问或异常。"""
     def forbidden(*args, **kwargs):
         """拒绝任何文件探测调用，确保空选择提前返回。"""
         raise AssertionError("unexpected filesystem access")
     monkeypatch.setattr(Path, "lstat", forbidden)
-    catalog = SkillCatalog([tmp_path / "not-created"])
-    monkeypatch.setattr(catalog, "_scan", forbidden)
+    catalog = library(tmp_path, [tmp_path / "not-created"])
+    monkeypatch.setattr(catalog.host, "_scan", forbidden)
     assert catalog.load([]) == []
 
 
@@ -37,7 +43,7 @@ def test_selected_snapshot_keeps_exact_bytes_and_order(tmp_path: Path) -> None:
     second = skill(tmp_path, "second")
     raw = first.read_bytes().replace(b"\n", b"\r\n")
     first.write_bytes(raw)
-    loaded = SkillCatalog([tmp_path]).load(["second", "first"])
+    loaded = library(tmp_path).load(["second", "first"])
     assert [item.name for item in loaded] == ["second", "first"]
     snapshot = loaded[1]
     assert snapshot.content.encode("utf-8") == raw
@@ -51,17 +57,17 @@ def test_discovery_reports_damage_but_load_ignores_unselected_skill(tmp_path: Pa
     """目录展示缺失正文的原因；明确加载另一技能时，不读取损坏项。"""
     skill(tmp_path, "good")
     (tmp_path / "broken").mkdir()
-    catalog = SkillCatalog([tmp_path])
+    catalog = library(tmp_path)
     options = {item.name: item for item in catalog.discover()}
     assert options["good"].available
     assert not options["broken"].available
     assert options["broken"].error_code == "skill_unreadable"
-    original = catalog._read
-    def read_selected(candidate):
-        """断言 load 仅读取用户选择的候选项，返回原安全加载结果。"""
-        assert candidate.name == "good"
-        return original(candidate)
-    monkeypatch.setattr(catalog, "_read", read_selected)
+    original = catalog.host.read_text
+    def read_selected(path, *, header_only=False):
+        """允许目录检查头部，正文仅为所选技能读取。"""
+        assert header_only or path.parent.name == "good"
+        return original(path, header_only=header_only)
+    monkeypatch.setattr(catalog.host, "read_text", read_selected)
     assert catalog.load(["good"])[0].name == "good"
 
 
@@ -82,7 +88,7 @@ def test_frontmatter_must_match_specification(tmp_path: Path, header: str) -> No
     """错误类型、越界长度、目录名不匹配及自定义 YAML 标签均返回安全元数据错误。"""
     skill(tmp_path, header=header)
     with pytest.raises(SkillError) as caught:
-        SkillCatalog([tmp_path]).load(["api-development"])
+        library(tmp_path).load(["api-development"])
     assert caught.value.code == "skill_invalid_metadata"
     assert caught.value.name == "api-development"
     assert header not in caught.value.message
@@ -100,7 +106,7 @@ allowed-tools: Bash(git:*) Read""")
     script = path.parent / "scripts"
     script.mkdir()
     (script / "run.py").write_text("raise RuntimeError('must not execute')", encoding="utf-8")
-    loaded = SkillCatalog([tmp_path]).load(["api-development"])
+    loaded = library(tmp_path).load(["api-development"])
     assert loaded[0].content == path.read_bytes().decode("utf-8")
     assert "allowed-tools: Bash(git:*) Read" in loaded[0].content
 
@@ -109,7 +115,7 @@ allowed-tools: Bash(git:*) Read""")
 def test_invalid_selection_names_never_resolve_paths(tmp_path: Path, name: str) -> None:
     """选择名称不允许路径或规范外字符；无需存在目录即可拒绝。"""
     with pytest.raises(SkillError) as caught:
-        SkillCatalog([tmp_path / "missing"]).load([name])
+        library(tmp_path, [tmp_path / "missing"]).load([name])
     assert caught.value.code == "skill_invalid_name"
 
 
@@ -118,7 +124,7 @@ def test_duplicate_skill_names_are_not_resolved_by_root_order(tmp_path: Path) ->
     roots = [tmp_path / "one", tmp_path / "two"]
     for root in roots:
         skill(root)
-    catalog = SkillCatalog(roots)
+    catalog = library(tmp_path, roots)
     assert {item.error_code for item in catalog.discover()} == {"skill_duplicate_name"}
     with pytest.raises(SkillError) as caught:
         catalog.load(["api-development"])
@@ -128,7 +134,7 @@ def test_duplicate_skill_names_are_not_resolved_by_root_order(tmp_path: Path) ->
 def test_missing_root_is_reported_without_blocking_other_root(tmp_path: Path) -> None:
     """目录索引明确展示配置根缺失，而选择另一个有效根中的技能仍能正常运行。"""
     skill(tmp_path / "good")
-    catalog = SkillCatalog([tmp_path / "missing", tmp_path / "good"])
+    catalog = library(tmp_path, [tmp_path / "missing", tmp_path / "good"])
     options = catalog.discover()
     assert any(not item.available and item.name == "" and item.error_code == "skill_unreadable" for item in options)
     assert catalog.load(["api-development"])[0].name == "api-development"
@@ -136,7 +142,7 @@ def test_missing_root_is_reported_without_blocking_other_root(tmp_path: Path) ->
 
 def test_not_found_and_duplicate_selection_have_explicit_errors(tmp_path: Path) -> None:
     """未知名称和重复选择分别拒绝，均不静默删除或替换用户选择。"""
-    catalog = SkillCatalog([tmp_path])
+    catalog = library(tmp_path)
     with pytest.raises(SkillError) as caught:
         catalog.load(["unknown"])
     assert caught.value.code == "skill_not_found"
@@ -148,15 +154,15 @@ def test_not_found_and_duplicate_selection_have_explicit_errors(tmp_path: Path) 
 def test_root_entry_and_selection_limits_are_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """目录数、实际扫描项和选择数都有独立限额；索引超限不返回部分可用目录。"""
     with pytest.raises(SkillError) as caught:
-        SkillCatalog([tmp_path] * 9)
+        library(tmp_path, [tmp_path] * 9)
     assert caught.value.code == "skill_catalog_limit"
-    catalog = SkillCatalog([tmp_path])
+    catalog = library(tmp_path)
     with pytest.raises(SkillError) as caught:
         catalog.load([f"skill-{number}" for number in range(9)])
     assert caught.value.code == "skill_selection_limit"
     for number in range(3):
         (tmp_path / f"file-{number}").write_text("not a skill", encoding="utf-8")
-    monkeypatch.setattr(catalog, "MAX_ENTRIES", 2)
+    monkeypatch.setattr(catalog.host, "MAX_ENTRIES", 2)
     options = catalog.discover()
     assert len(options) == 1 and options[0].error_code == "skill_catalog_limit"
     with pytest.raises(SkillError) as caught:
@@ -168,13 +174,13 @@ def test_file_and_selection_byte_limits_are_enforced(tmp_path: Path, monkeypatch
     """按原始 UTF-8 字节计算单文件和选择总量，超限整体拒绝而不截断技能约定。"""
     path = skill(tmp_path, "first")
     skill(tmp_path, "second")
-    catalog = SkillCatalog([tmp_path])
-    monkeypatch.setattr(catalog, "MAX_FILE_BYTES", path.stat().st_size - 1)
+    catalog = library(tmp_path)
+    monkeypatch.setattr(catalog.host, "MAX_FILE_BYTES", path.stat().st_size - 1)
     with pytest.raises(SkillError) as caught:
         catalog.load(["first"])
     assert caught.value.code == "skill_file_too_large"
-    monkeypatch.setattr(catalog, "MAX_FILE_BYTES", 64 * 1024)
-    monkeypatch.setattr(catalog, "MAX_TOTAL_BYTES", path.stat().st_size)
+    monkeypatch.setattr(catalog.host, "MAX_FILE_BYTES", 64 * 1024)
+    monkeypatch.setattr(catalog.host, "MAX_TOTAL_BYTES", path.stat().st_size)
     with pytest.raises(SkillError) as caught:
         catalog.load(["first", "second"])
     assert caught.value.code == "skill_total_too_large"
@@ -183,13 +189,28 @@ def test_file_and_selection_byte_limits_are_enforced(tmp_path: Path, monkeypatch
 def test_invalid_utf8_and_missing_frontmatter_are_rejected(tmp_path: Path) -> None:
     """非 UTF-8、缺少开始或结束分隔符的文件均不能成为技能快照。"""
     path = skill(tmp_path)
-    catalog = SkillCatalog([tmp_path])
+    catalog = library(tmp_path)
     for raw, expected in [(b"\xff", "skill_invalid_encoding"), (b"plain text", "skill_invalid_metadata"),
                           (b"---\nname: api-development", "skill_invalid_metadata")]:
         path.write_bytes(raw)
         with pytest.raises(SkillError) as caught:
             catalog.load(["api-development"])
         assert caught.value.code == expected
+
+
+def test_external_resource_keeps_the_identity_used_when_loading(tmp_path: Path) -> None:
+    """宿主登记的资料使用一致的文件身份，读取原文后拒绝同路径的新版本。"""
+    directory = skill(tmp_path).parent / "references"
+    directory.mkdir()
+    target = directory / "notes.md"
+    target.write_text("原始资料", encoding="utf-8")
+    catalog = library(tmp_path)
+    snapshot = catalog.load(["api-development"], resources=True)[0]
+    assert catalog.read_resource(snapshot, "references/notes.md").content == "原始资料"
+    target.write_text("已经替换的资料", encoding="utf-8")
+    with pytest.raises(SkillError) as caught:
+        catalog.read_resource(snapshot, "references/notes.md")
+    assert caught.value.code == "skill_file_changed"
 
 
 def test_file_replacement_during_open_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,7 +225,7 @@ def test_file_replacement_during_open_is_rejected(tmp_path: Path, monkeypatch: p
         return original(target, flags, *args, **kwargs)
     monkeypatch.setattr(skills.os, "open", replace_then_open)
     with pytest.raises(SkillError) as caught:
-        SkillCatalog([tmp_path]).load(["api-development"])
+        library(tmp_path).load(["api-development"])
     assert caught.value.code == "skill_file_changed"
 
 
@@ -214,7 +235,7 @@ def test_special_file_and_symlink_are_not_followed(tmp_path: Path) -> None:
     path.unlink()
     path.mkdir()
     with pytest.raises(SkillError) as caught:
-        SkillCatalog([tmp_path]).load(["api-development"])
+        library(tmp_path).load(["api-development"])
     assert caught.value.code == "skill_path_unsafe"
     target = tmp_path / "target"
     skill(target, "valid")
@@ -224,7 +245,7 @@ def test_special_file_and_symlink_are_not_followed(tmp_path: Path) -> None:
         (linked_root / "valid").symlink_to(target / "valid", target_is_directory=True)
     except OSError:
         pytest.skip("当前 Windows 账户未获得创建符号链接权限。")
-    catalog = SkillCatalog([linked_root])
+    catalog = library(tmp_path, [linked_root])
     assert catalog.discover()[0].error_code == "skill_path_unsafe"
     with pytest.raises(SkillError) as caught:
         catalog.load(["valid"])

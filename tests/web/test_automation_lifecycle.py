@@ -1,5 +1,7 @@
 """自动化的审批接续、排队暂停、合并、漏跑、重启和精确授权边界。"""
 
+from tests.helpers.models import configured_run
+
 import asyncio
 from datetime import datetime, UTC, timedelta
 from pathlib import Path
@@ -178,7 +180,7 @@ def test_isolated_hook_grant_and_project_verification(tmp_path: Path):
             subprocess.run(["git", "-C", str(source), *args], check=True, capture_output=True, stdin=subprocess.DEVNULL)
         model = ScriptModel([reply(call("write_file", path="report.txt", content="ready")), reply(text="完成")])
         web = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist", projects=[ProjectPreset(id="git", label="隔离项目", path=source, test_argv=[sys.executable, "check.py"])])
-        app = create_app(web, RunConfig(tools=["write_file", "run_command"], permission_policy=PermissionPolicy(automation_grants=True)), tmp_path / "runs", model_client=model)
+        app = create_app(web, configured_run(tools=["write_file", "run_command"], permission_policy=PermissionPolicy(automation_grants=True)), tmp_path / "runs", model_client=model)
         app.state.manager._key_provider = lambda config: "offline-automation"  # 仅注入离线测试凭据。
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
             hook = (await client.get("/api/hooks?project_id=git")).json()["items"][0]

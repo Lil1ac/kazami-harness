@@ -2,6 +2,7 @@
 
 from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 
 
 def trusted_config(**overrides) -> RunConfig:
@@ -10,4 +11,4 @@ def trusted_config(**overrides) -> RunConfig:
     仅供已有进程、修复及交付机制的测试使用；权限场景应直接构造RunConfig验证真实默认。
     本函数不写文件、不启动进程，不修改调用方传入对象。
     """
-    return RunConfig(**{"permission_policy": PermissionPolicy(command="allow", verification="allow"), **overrides})
+    return configured_run(**{"permission_policy": PermissionPolicy(command="allow", verification="allow"), **overrides})

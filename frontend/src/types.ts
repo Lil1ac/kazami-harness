@@ -216,6 +216,11 @@ export interface SkillOption {
   available: boolean; // false 时不能新增选择。
   error_code?: string | null; // 发现或解析失败的稳定原因码。
   error_message?: string | null; // 宿主返回的安全中文说明。
+  id?: string; // 管理入口的稳定标识，旧目录项可能未提供。
+  revision?: string; // 当前可变管理版本，操作必须带回。
+  enabled?: boolean; // 持久启停状态，与格式可用性分别展示。
+  managed?: boolean; // 是否为应用保存的导入副本。
+  manual_only?: boolean; // 技能自身仅允许手选。
 }
 
 /** 本轮建立时固定的完整技能文件，历史显示不读取当前目录。 */
@@ -226,6 +231,18 @@ export interface SkillSnapshot {
   content: string; // 完整 UTF-8 SKILL.md，包含 frontmatter。
   sha256: string; // 原文件字节的 SHA-256。
   size_bytes: number; // 原文件 UTF-8 字节数。
+  activation?: 'manual' | 'automatic'; // 记录加载正文时的触发方式。
+  version?: string | null; // 技能包版本，缺省时保留正文指纹。
+  resources?: Record<string, string>; // 包内允许读取的资料相对路径及其版本。
+}
+
+/** 某轮真正读取的资料快照，可从历史核对原文和指纹。 */
+export interface SkillResourceSnapshot {
+  name: string; // 所属技能。
+  path: string; // 包内相对路径。
+  content: string; // 当时实际送入上下文的完整文本。
+  sha256: string; // 实际原文字节的指纹。
+  size_bytes: number; // 实际 UTF-8 字节数。
 }
 
 /** 所选技能加载失败时保留的受控错误；失败发生在模型与工具执行之前。 */
@@ -245,11 +262,12 @@ export interface ContextView {
   action_count?: number; // 全部变换数，包含失败。
   summary_calls?: number; // 已开始摘要次数，包含失败/取消。
   skills?: SkillSnapshot[]; // 本轮固定的实际技能快照；旧记录缺省时不推断。
+  skill_resources?: SkillResourceSnapshot[]; // 本轮实际读取的技能资料。
   skill_error?: SkillFailure | null; // 所选技能读取失败的原因，无错误时为空。
 }
 
-/** 宿主内置的模型供应商，不接受页面传入任意认证地址。 */
-export type ModelProvider = 'deepseek' | 'qwen' | `custom-${string}`;
+/** 用户在宿主登记的稳定模型服务商标识。 */
+export type ModelProvider = `custom-${string}`;
 
 /** 主会话或子角色冻结的供应商和请求模型。 */
 export interface ModelSelection {
@@ -261,7 +279,9 @@ export interface ModelSelection {
 export type RoleModels = Partial<Record<'explore' | 'review', ModelSelection>>;
 
 /** 可序列化运行设置；前端从不接收密钥值。 */
-export interface RunConfig extends ModelSelection {
+export interface RunConfig {
+  provider: ModelProvider | null; // 首次使用时为空，已有任务保存实际选择。
+  requested_model: string | null; // 当前默认或已冻结的模型 ID。
   custom_providers?: Record<string, CustomProviderSettings>; // 运行历史中的自定义连接定义，无密钥。
   mcp_tools?: import('./mcpTypes').McpToolSelection[]; // 本轮选中的外部工具及版本。
   hooks: { rules: import('./hookTypes').HookRule[]; project_enabled: boolean; max_calls: number; max_seconds: number; max_context_bytes: number }; // 宿主扩展策略，只读。
@@ -275,6 +295,7 @@ export interface RunConfig extends ModelSelection {
   system_prompt: string; // 服务端系统提示词，只读展示。
   skill_roots?: string[]; // 宿主登记技能集合目录，只读且不能通过页面覆盖。
   skills?: string[]; // 本次选择的技能名称；空列表明确表示不加载。
+  skill_auto?: boolean; // 交互式主运行是否可按任务启用技能。
   limits: RunLimits; // 每个任务独立的预算快照。
   context: ContextPolicy; // 项目指令加载与整体输入预算快照。
 }
@@ -711,15 +732,10 @@ export interface OptionsResponse {
 }
 
 /** 供应商可公开的设置元数据，不含密钥与请求正文。 */
-export interface ModelProviderOption {
-  name: string; // 服务商显示名称。
-  default_model: string; // 选择供应商时提供的默认模型。
+export interface ModelProviderOption extends CustomProviderSettings {
   api_key_env: string | null; // 独立 Web 和 CLI 的宿主变量名称，桌面或免密为空。
-  auth: 'bearer' | 'none'; // 远程密钥认证或本机免密。
-  enabled: boolean; // 停用时保留定义供设置页处理。
   key_configured: boolean; // 密钥格式符合本地要求，尚未代表远端认证成功。
-  base_url?: string; // 自定义连接的固定地址。
-  version?: string; // 自定义端点版本，供探测、提交与密钥写入核对。
+  version: string; // 端点绑定版本，供编辑、探测与提交核对。
 }
 
 /** 用户可编辑的自定义端点定义，密钥单独保存。 */
@@ -727,6 +743,7 @@ export interface CustomProviderSettings {
   name: string; // 显示名称。
   base_url: string; // 兼容接口根地址。
   default_model: string; // 默认模型 ID。
+  models: string[]; // 同连接登记的其他模型，默认模型单独保存。
   auth: 'bearer' | 'none'; // 本机回环可免密。
   enabled: boolean; // 是否接受新任务和续跑。
 }
@@ -747,7 +764,7 @@ export interface DesktopSettings {
 }
 
 /** 桌面跨启动保存的运行设置；不含技能选择、内部策略和任何凭据。 */
-export interface DesktopRunSettings extends ModelSelection {
+export interface DesktopRunSettings extends Pick<RunConfig, 'provider' | 'requested_model'> {
   role_models: RoleModels; // 后续会话的独立角色模型。
   tools: ToolName[]; // 默认工具权限。
   limits: Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_timeout_seconds'>; // 三项总体预算。
@@ -764,6 +781,7 @@ export interface ConfigOverrides {
   role_models?: RoleModels; // 新会话角色覆盖，空映射代表全部继承。
   tools?: ToolName[]; // 缺省沿用宿主工具。
   skills?: string[]; // 缺省继承宿主或前轮选择，[] 明确清空。
+  skill_auto?: boolean; // 缺省继承，False 对应关闭本轮自动启用。
   limits?: Partial<RunLimits>; // 仅覆盖明确填写的预算字段。
   context?: Partial<ContextPolicy>; // 逐字段覆盖本次上下文策略，未设置字段沿用宿主默认。
 }

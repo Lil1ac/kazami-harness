@@ -9,7 +9,6 @@ import {
 import { NativeRequest, textParameter } from "./protocol";
 
 /** 可由宿主为模型凭据开户的固定供应商标识。 */
-export type ModelProvider = "deepseek" | "qwen";
 
 /** 验证 url 是可交给默认应用的网页或邮件地址；返回规范 URL，拒绝本地文件和脚本协议。 */
 export function externalUrl(url: string): string {
@@ -43,7 +42,7 @@ export class NativeService {
   /** 按 scope 和 key 返回独立的密文路径，拒绝未知供应商或非法连接标识。 */
   private credentialPath(scope: "model" | "mcp", key: string): string {
     const valid = scope === "model"
-      ? /^(deepseek|qwen|custom-[a-z0-9][a-z0-9-]{0,31}-[a-f0-9]{64})$/.test(key)
+      ? /^custom-[a-z0-9][a-z0-9-]{0,31}-[a-f0-9]{64}$/.test(key)
       : /^[a-z][a-z0-9_-]{0,31}$/.test(key);
     if (!valid) throw new Error("凭据分区标识无效");
     return path.join(scope === "model" ? this.modelCredentialDirectory : this.mcpCredentialDirectory, key + ".enc");

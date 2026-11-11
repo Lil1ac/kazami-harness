@@ -9,7 +9,7 @@ import pytest
 
 from agent_harness.hooks.models import HookPolicy, HookRule
 from agent_harness.permissions.models import PermissionPolicy
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from tests.permissions.test_permissions import setup_app, decide
 from tests.web.job_helpers import submit_run, submit_followup
 from tests.web.test_planning_api import call, reply, finished
@@ -20,7 +20,7 @@ def hook_app(tmp_path, monkeypatch, event="PostToolUse", responses=None):
     script = tmp_path / "hook.py"
     script.write_text('import json,pathlib,sys\nx=json.load(sys.stdin)\np=pathlib.Path("hook-count")\np.write_text(p.read_text()+"1" if p.exists() else "1")\nprint("{}")', encoding="utf-8")
     policy = HookPolicy(rules=[HookRule(id="format", event=event, tools=["write_file"] if "Tool" in event else [], argv=[sys.executable, str(script)])])
-    config = RunConfig(tools=["read_file", "write_file", "run_command"], permission_policy=PermissionPolicy(command="ask", verification="allow"), hooks=policy)
+    config = configured_run(tools=["read_file", "write_file", "run_command"], permission_policy=PermissionPolicy(command="ask", verification="allow"), hooks=policy)
     return setup_app(tmp_path, monkeypatch, responses if responses is not None else [reply(call("write_file", path="result.txt", content="first")), reply(text="完成")], config=config)
 
 
@@ -157,7 +157,7 @@ def test_precompact_approval_continues_same_logical_summary(tmp_path, monkeypatc
         from agent_harness.web.api import create_app
         from agent_harness.web.config import WebConfig, WebWorkspace
         from tests.context.test_compression import _manifest, CompressionServer
-        monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-hooks")
+        monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-hooks")
         value = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1)
         value.config.tools.append("run_command")
         value.config.permission_policy.command = "ask"

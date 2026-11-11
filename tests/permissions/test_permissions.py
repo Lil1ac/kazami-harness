@@ -12,6 +12,7 @@ import pytest
 from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.permissions.policy import evaluate
 from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from agent_harness.web.config import WebVerifier
@@ -22,13 +23,13 @@ from tests.web.test_planning_api import ScriptModel, call, reply, finished
 
 def setup_app(tmp_path: Path, monkeypatch, responses: list, *, config: RunConfig | None = None):
     """为独立 tmp_path、离线 responses 和可选宿主 config 建应用；返回应用、模型、工作区，不联网。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-permissions")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-permissions")
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     web = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist",
                     workspaces=[WebWorkspace(id="files", label="权限案例", path=workspace)])
     model = ScriptModel(responses)
-    app = create_app(web, config or RunConfig(tools=["read_file", "write_file", "edit_file", "run_command", "search_files"]), tmp_path / "records", model_client=model)
+    app = create_app(web, config or configured_run(tools=["read_file", "write_file", "edit_file", "run_command", "search_files"]), tmp_path / "records", model_client=model)
     return app, model, workspace
 
 
@@ -173,7 +174,7 @@ def test_expired_approval_rejects_and_still_allows_cancellation(tmp_path, monkey
 
 def test_read_and_write_scopes_filter_recursive_results(tmp_path, monkeypatch) -> None:
     """目录范围过滤递归搜索和读取，并阻止越权写入；显式审批不能扩大宿主目录。"""
-    config = RunConfig(tools=["read_file", "search_files", "write_file"], permission_policy=PermissionPolicy(read_roots=["public"], write_roots=["public"]))
+    config = configured_run(tools=["read_file", "search_files", "write_file"], permission_policy=PermissionPolicy(read_roots=["public"], write_roots=["public"]))
     app, model, workspace = setup_app(tmp_path, monkeypatch, [reply(
         call("search_files", query="secret", directory="."), call("read_file", path="private/key.txt"),
         call("write_file", path="private/new.txt", content="no")), reply(text="检查结束")], config=config)
@@ -316,7 +317,7 @@ def test_approved_original_call_uses_no_extra_budget_and_no_new_model_turn(tmp_p
     """生成动作已用完模型额度时仍可执行已接纳原调用，之后明确耗尽，不因审批获得额外模型轮次。"""
     from agent_harness.schemas import RunLimits
     from dataclasses import replace
-    config = RunConfig(tools=["write_file"], permission_mode="strict", limits=RunLimits(max_model_turns=1, max_tool_calls=1))
+    config = configured_run(tools=["write_file"], permission_mode="strict", limits=RunLimits(max_model_turns=1, max_tool_calls=1))
     response = replace(reply(call("write_file", path="bounded.txt", content="once")), usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5})
     app, model, workspace = setup_app(tmp_path, monkeypatch, [response], config=config)
 
@@ -416,7 +417,7 @@ def test_partial_host_config_override_preserves_denials(tmp_path) -> None:
 
 def test_host_read_denial_applies_to_automatic_project_instructions(tmp_path, monkeypatch) -> None:
     """宿主禁止项目读取时，自动AGENTS加载也不能泄露正文；必需规则不可读则零模型停止。"""
-    config = RunConfig(permission_policy=PermissionPolicy(read="deny"))
+    config = configured_run(permission_policy=PermissionPolicy(read="deny"))
     app, model, workspace = setup_app(tmp_path, monkeypatch, [reply(text="不应调用")], config=config)
     (workspace / "AGENTS.md").write_text("PRIVATE_PROJECT_RULE_DO_NOT_SEND", encoding="utf-8")
 

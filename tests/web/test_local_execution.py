@@ -88,7 +88,7 @@ def configuration(tmp_path: Path, kind: str) -> tuple[WebConfig, Path]:
 @pytest.mark.parametrize('kind', ['workspace', 'project'])
 def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: Path, monkeypatch, kind: str):
     """所选目录用于真实工具/命令/测试；外部编辑可接续，旧产物/差异/记录保持原字节。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, kind)
     model = LocalModel()
     index = (selected / '.git/index').read_bytes() if kind == 'project' else None
@@ -142,7 +142,7 @@ def test_registered_folder_defaults_local_and_continues_after_restart(tmp_path: 
 @pytest.mark.parametrize('kind', ['workspace', 'project'])
 def test_configured_directory_defaults_local_without_catalog_registration(tmp_path: Path, monkeypatch, kind: str):
     """TOML预设与页面选择采用同一目录规则；kind区分普通/Git来源，省略模式不创建副本。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, kind)
     if kind == 'workspace':
         config.workspaces = [WebWorkspace(id='files', label='指定文件夹', path=selected)]
@@ -162,7 +162,7 @@ def test_configured_directory_defaults_local_without_catalog_registration(tmp_pa
 
 def test_personal_folder_rejects_hidden_copy_execution(tmp_path: Path, monkeypatch):
     """个人文件夹不提供副本执行；显式isolated请求应在模型与目录创建之前失败。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, 'workspace')
 
     async def scenario():
@@ -179,7 +179,7 @@ def test_personal_folder_rejects_hidden_copy_execution(tmp_path: Path, monkeypat
 
 def test_explicit_worktree_does_not_modify_selected_directory(tmp_path: Path, monkeypatch):
     """只有明确创建Git工作树才更换执行目录；不改写所选仓库的当前文件。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, 'project')
     before = (selected / 'result.txt').read_bytes()
 
@@ -196,7 +196,7 @@ def test_explicit_worktree_does_not_modify_selected_directory(tmp_path: Path, mo
 
 def test_replaced_directory_is_not_silently_used_by_followup(tmp_path: Path, monkeypatch):
     """同名目录被替换后拒绝接续，不把原会话的写操作发送到新目录。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, 'workspace')
     model = LocalModel()
 
@@ -219,7 +219,7 @@ def test_replaced_directory_is_not_silently_used_by_followup(tmp_path: Path, mon
 
 def test_local_report_limit_does_not_force_a_copy_or_block_continuation(tmp_path: Path, monkeypatch):
     """差异采集超限时执行仍在原目录，报告明确失败，后续消息不强制依赖完整副本。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, 'workspace')
     (selected / 'large.bin').write_bytes(b'x' * 256)
 
@@ -245,7 +245,7 @@ def test_local_report_limit_does_not_force_a_copy_or_block_continuation(tmp_path
 
 def test_execution_mode_validation_and_saved_diff_integrity(tmp_path: Path, monkeypatch):
     """执行方式只允许枚举且不能在续轮更换；报告被改写后拒绝下载而非返回错误证据。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-local')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-local')
     config, selected = configuration(tmp_path, 'project')
 
     async def scenario():

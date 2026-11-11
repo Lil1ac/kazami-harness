@@ -270,21 +270,14 @@ export function saveDesktopSettings(
   });
 }
 
-/** 把 secret 加密到 provider 分区；空值清除，返回存在标记。 */
-export function saveDesktopCredential(provider: ModelProvider, secret: string, version?: string): Promise<{ key_configured: boolean }> {
-  return request('/api/desktop/credentials/' + provider, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ secret, version }),
-  });
-}
-
-/** 保存 definition，edit 为空时新建，提供时按原版本更新并返回稳定标识。 */
-export function saveCustomProvider(definition: CustomProviderSettings, edit?: { provider: ModelProvider; version: string }): Promise<{ provider: ModelProvider }> {
+/** 保存 definition 与可选 secret；edit 缺省时新建。返回标识和更新后的公开选项。 */
+export function saveCustomProvider(definition: CustomProviderSettings, secret?: string, edit?: {
+  provider: ModelProvider; version: string;
+}): Promise<{ provider: ModelProvider; options: OptionsResponse }> {
   return request('/api/desktop/model-providers' + (edit ? '/' + edit.provider : ''), {
     method: edit ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(edit ? { definition, version: edit.version } : definition),
+    body: JSON.stringify({ definition, secret, version: edit?.version }),
   });
 }
 

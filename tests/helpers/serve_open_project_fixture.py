@@ -8,7 +8,7 @@ import sys
 
 import uvicorn
 
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -38,10 +38,10 @@ def main() -> None:
         (source / "local.txt").write_text("用户的未提交文件保持。\n",encoding="utf-8")
     sys.path.insert(0,str(project / "tests" / "web"))
     from test_project_catalog import EditingModel
-    os.environ["DEEPSEEK_API_KEY"] = "offline-open-project-browser"
+    os.environ["HARNESS_TEST_MODEL_KEY"] = "offline-open-project-browser"
     app = create_app(
         WebConfig(project_dir=project,worktrees_root=root/"copies",frontend_dist=project/"frontend"/"dist"),
-        RunConfig(tools=["read_file","write_file"],skill_roots=[project/"examples"/"skills"]),
+        configured_run(tools=["read_file","write_file"],skill_roots=[project/"examples"/"skills"]),
         root/"runs",model_client=EditingModel(),
     )
     uvicorn.run(app,host="127.0.0.1",port=args.port,loop="asyncio",timeout_graceful_shutdown=2)

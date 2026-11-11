@@ -66,7 +66,7 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> RunC
 
     limits、context、memory 与 permission_policy 按字段合并，列表等其他值整体替换；不修改覆盖字典。
     TOML 的 skill_roots 相对该配置文件解释，overrides 仍要求严格的 Path 列表。
-    不读取环境变量值或 .env，返回的配置只保存密钥来源的固定变量名。
+    不读取环境变量值或 .env，返回的配置只保存各连接登记的环境变量名。
     """
     if overrides is not None and not isinstance(overrides, dict):
         raise ConfigurationError("配置覆盖参数必须是字典。")

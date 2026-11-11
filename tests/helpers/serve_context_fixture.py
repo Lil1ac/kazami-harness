@@ -9,7 +9,7 @@ from pathlib import Path
 import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 
@@ -64,13 +64,13 @@ def main() -> None:
     instructions = workspace / 'AGENTS.md'
     if not instructions.exists():
         instructions.write_text('请保留项目约定标记 CONTEXT_BROWSER_RULE。\n交付使用中文。\n', encoding='utf-8')
-    os.environ['DEEPSEEK_API_KEY'] = 'offline-context-browser-key'
+    os.environ['HARNESS_TEST_MODEL_KEY'] = 'offline-context-browser-key'
     config = WebConfig(
         project_dir=project, worktrees_root=root / 'copies', frontend_dist=project / 'frontend/dist',
         workspaces=[WebWorkspace(id='context', label='上下文联动工作区（离线）', path=workspace)],
         verifiers=[],
     )
-    app = create_app(config, RunConfig(requested_model='offline-context-browser', tools=['read_file', 'write_file']), root / 'runs', model_client=ContextBrowserModel())
+    app = create_app(config, configured_run(requested_model='offline-context-browser', tools=['read_file', 'write_file']), root / 'runs', model_client=ContextBrowserModel())
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', workers=1, timeout_graceful_shutdown=2)
 
 

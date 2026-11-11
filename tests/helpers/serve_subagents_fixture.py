@@ -11,7 +11,7 @@ import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.runtime.runner import REQUEST_CONTEXT
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebVerifier, WebWorkspace
 
@@ -91,7 +91,7 @@ def main() -> None:
     web = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=Path(__file__).resolve().parents[2] / "frontend/dist",
                     workspaces=[WebWorkspace(id="subagents", label="子Agent验收项目", path=workspace)],
                     verifiers=[WebVerifier(id="amount", label="独立金额检查", path=profile)])
-    app = create_app(web, RunConfig(tools=["read_file", "search_files", "write_file"]), root / "runs", model_client=SubagentFixtureModel())
+    app = create_app(web, configured_run(tools=["read_file", "search_files", "write_file"]), root / "runs", model_client=SubagentFixtureModel())
 
     def key(config):
         """为离线config返回固定占位凭据；不读取、输出或发送任何真实密钥。"""

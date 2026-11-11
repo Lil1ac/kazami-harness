@@ -12,6 +12,7 @@ from agent_harness.execution.local import LocalChangeStore
 from agent_harness.providers.base import ModelError, ModelResponse, ToolCall
 from agent_harness.runtime.runner import run_task
 from tests.helpers.permissions import trusted_config
+from tests.helpers.models import MODEL_TEST_TOML
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
 from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.storage.runs import RunStore
@@ -127,9 +128,9 @@ def test_cli_discovers_command_output_without_declared_paths(tmp_path: Path, mon
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     profile = tmp_path / 'harness.toml'
-    profile.write_text('tools = ["run_command"]\n[permission_policy]\ncommand="allow"\n', encoding='utf-8')
+    profile.write_text('tools = ["run_command"]\n[permission_policy]\ncommand="allow"\n' + MODEL_TEST_TOML, encoding='utf-8')
     records = tmp_path / 'records'
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-cli-files')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-cli-files')
 
     async def offline_run(manifest, runs_root, api_key, **kwargs):
         """保留CLI清单、目录、凭据及信号参数，注入只生成report.txt的离线模型，返回真实结果。"""

@@ -98,9 +98,11 @@ beforeEach(
 it('查看连接不会自动信任、发现或启用，按钮只提交当前指纹', async () => {
   vi.mocked(reviewMcp).mockResolvedValue({ ...connection, trusted: true, status: 'disconnected' });
   show(<McpSettings />);
-  await screen.findByText('官方文档');
+  const row = await screen.findByRole('button', { name: '官方文档' });
   expect(discoverMcp).not.toHaveBeenCalled();
-  expect(screen.getByRole('button', { name: '连接并发现工具' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: '已核对，允许连接' })).not.toBeInTheDocument();
+  fireEvent.click(row);
+  expect(screen.queryByRole('button', { name: '连接并发现工具' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '已核对，允许连接' }));
   await waitFor(
     /* 明确按钮只信任连接，不批准工具参数。 */ () =>

@@ -1,5 +1,7 @@
 """真实Git验证固定成果、目标修改保护、冲突、增量、恢复和受保护撤销。"""
 
+from tests.helpers.models import configured_run
+
 from pathlib import Path
 import threading
 from uuid import uuid4
@@ -227,13 +229,13 @@ def test_incremental_and_multiple_targets_use_independent_anchors(setup):
     repository, manager, store, preset, review = setup
     first = apply(store, prepare(setup))
     RunStore.create(store.work.root, RunManifest(run_id=review.run_id, session_id=review.session_id, turn_index=1,
-                                               task=TaskSpec(prompt="first", workspace=Path(review.worktree)), config=RunConfig()))
+                                               task=TaskSpec(prompt="first", workspace=Path(review.worktree)), config=configured_run()))
     next_id = uuid4()
     next_review = manager.prepare_turn(preset, review.run_id, next_id)
     (Path(review.worktree) / "app.txt").write_bytes(b"ONE\ntwo\nthree\nfour\n")
     manager.capture(next_id)
     RunStore.create(store.work.root, RunManifest(run_id=next_id, session_id=review.session_id, turn_index=2,
-                                               task=TaskSpec(prompt="next", workspace=Path(review.worktree)), config=RunConfig()))
+                                               task=TaskSpec(prompt="next", workspace=Path(review.worktree)), config=configured_run()))
     (repository / "app.txt").write_bytes(b"manual\ntwo\nthree\n")
     value = store.create(str(next_id), str(review.session_id), preset.id, str(uuid4()))
     value = store.prepare(value["id"], preset, threading.Event())

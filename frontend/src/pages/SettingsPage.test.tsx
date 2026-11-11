@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, MemoryRouter, Route, Routes } from 'react-router';
@@ -85,8 +85,9 @@ function setup(initialPath = '/settings', configuredOptions: OptionsResponse = o
 it('设置页只公开模型、工具和三项总体预算', async () => {
   // 删除的是调参入口，后端完整策略仍由 options 返回并用于执行。
   setup();
-  await screen.findByLabelText('模型名称');
-  expect(screen.getAllByRole('spinbutton')).toHaveLength(3);
+  await screen.findByLabelText('默认模型');
+  fireEvent.click(screen.getByText('执行预算'));
+  expect(await screen.findAllByRole('spinbutton')).toHaveLength(3);
   expect(screen.getByLabelText('模型轮次（轮）')).toBeInTheDocument();
   expect(screen.getByLabelText('工具调用（次）')).toBeInTheDocument();
   expect(screen.getByLabelText('整个任务超时（秒）')).toBeInTheDocument();
@@ -106,7 +107,9 @@ it('可编辑预算随真实任务提交，内部限制沿用宿主配置', asyn
     },
   };
   const user = setup('/settings', configured);
-  await replaceInput(user, await screen.findByLabelText('模型名称'), 'offline-custom');
+  fireEvent.mouseDown(await screen.findByRole('combobox', { name: '默认模型' }));
+  fireEvent.click(await screen.findByRole('option', { name: '测试网关 · offline-custom' }));
+  fireEvent.click(screen.getByText('执行预算'));
   await replaceInput(user, screen.getByLabelText('模型轮次（轮）'), '7');
   await replaceInput(user, screen.getByLabelText('工具调用（次）'), '30');
   await replaceInput(user, screen.getByLabelText('整个任务超时（秒）'), '120');
@@ -134,6 +137,8 @@ it('可编辑预算随真实任务提交，内部限制沿用宿主配置', asyn
 it('恢复宿主默认会清除已应用的总体预算', async () => {
   // 恢复同步更新表单与浏览器草稿，不改变活动运行。
   const user = setup();
+  await screen.findByLabelText('默认模型');
+  fireEvent.click(screen.getByText('执行预算'));
   const input = await screen.findByLabelText('模型轮次（轮）');
   await replaceInput(user, input, '7');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
@@ -146,6 +151,8 @@ it('恢复宿主默认会清除已应用的总体预算', async () => {
 it('必填预算为空时不能应用', async () => {
   // 用户清空预算后必须得到校验提示，不能生成已应用状态。
   const user = setup();
+  await screen.findByLabelText('默认模型');
+  fireEvent.click(screen.getByText('执行预算'));
   const input = await screen.findByLabelText('模型轮次（轮）');
   await user.clear(input);
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
@@ -176,7 +183,7 @@ it('任务页选择技能后调整模型预算，不丢失已选择的技能', a
   await user.click(await screen.findByText(/高级设置/));
   await user.click(screen.getByRole('checkbox', { name: 'review-code' }));
   await user.click(screen.getByRole('link', { name: '调整模型与预算' }));
-  await screen.findByLabelText('模型名称');
+  await screen.findByLabelText('默认模型');
   await user.click(screen.getByRole('button', { name: /应用到后续任务/ }));
   await screen.findByRole('status');
   await user.click(screen.getByRole('link', { name: '前往提交' }));

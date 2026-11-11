@@ -75,7 +75,7 @@ def project_config(tmp_path: Path) -> WebConfig:
         "import os\nfrom pathlib import Path\nimport app\n"
         "print('cwd=' + str(Path.cwd()))\nprint('import=' + app.__file__)\n"
         "assert Path(app.__file__).resolve().is_relative_to(Path.cwd().resolve())\n"
-        "assert 'DEEPSEEK_API_KEY' not in os.environ\nassert app.add(2, 3) == 5\n", encoding="utf-8",
+        "assert 'HARNESS_TEST_MODEL_KEY' not in os.environ\nassert app.add(2, 3) == 5\n", encoding="utf-8",
     )
     git(repository, "init", "-q")
     git(repository, "add", ".")
@@ -134,7 +134,7 @@ def test_task_sources_are_mutually_exclusive(body: dict):
 
 def test_project_options_probe_failure_does_not_break_ordinary_tasks(project_config: WebConfig, monkeypatch):
     """Git 目录失效只让该项目不可用，普通工作区提交仍正常；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
     project_config.projects[0].path = project_config.project_dir / "missing"
     ordinary = project_config.project_dir / "ordinary"
     ordinary.mkdir()
@@ -171,7 +171,7 @@ def test_project_config_resolves_relative_paths_and_fixed_program(project_config
 
 def test_missing_key_prevents_git_worktree_creation(project_config: WebConfig, monkeypatch):
     """密钥缺失的提交在工作树创建前失败，源目录与登记均不变化；返回 None。"""
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("HARNESS_TEST_MODEL_KEY", raising=False)
     before = git(project_config.projects[0].path, "worktree", "list", "--porcelain")
 
     async def scenario():
@@ -186,7 +186,7 @@ def test_missing_key_prevents_git_worktree_creation(project_config: WebConfig, m
 
 def test_real_tools_project_test_diff_and_keep_discard(project_config: WebConfig, monkeypatch):
     """真实写文件修复基线，测试加载副本，新增文件入补丁，保留/丢弃不碰 dirty 源目录；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
     source = project_config.projects[0].path
     before_status = git(source, "status", "--porcelain=v1")
     before_index = (source / ".git" / "index").read_bytes()
@@ -231,7 +231,7 @@ def test_real_tools_project_test_diff_and_keep_discard(project_config: WebConfig
 
 def test_failed_project_check_is_not_reported_as_success(project_config: WebConfig, monkeypatch):
     """模型仅回答时原始错误仍使真实项目测试失败，执行完成与测试失败分别呈现；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """使用不修复模型完成任务，读取失败检查与可用空 diff 快照。"""
@@ -247,7 +247,7 @@ def test_failed_project_check_is_not_reported_as_success(project_config: WebConf
 
 def test_cancel_then_restart_keeps_partial_diff_reviewable(project_config: WebConfig, monkeypatch):
     """真实写入后取消任务，部分变更仍可审阅；新服务读取相同补丁与决定，不恢复模型；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """等待第二模型轮次后验证活动保护并取消，再重新构造应用读历史。"""
@@ -280,7 +280,7 @@ def test_cancel_then_restart_keeps_partial_diff_reviewable(project_config: WebCo
 def test_snapshot_keeps_slot_and_cannot_be_cancelled_mid_capture(project_config: WebConfig, monkeypatch):
     """固化快照期间仍持有单槽，取消不会打断捕获线程并提前标记可审阅；返回 None。"""
     import threading
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """在线程门闩处阻塞真实capture，检查active/phase/拒绝并发，然后放行。"""
@@ -315,7 +315,7 @@ def test_snapshot_keeps_slot_and_cannot_be_cancelled_mid_capture(project_config:
 def test_request_disconnect_during_prepare_remains_service_owned(project_config: WebConfig, monkeypatch):
     """请求在 Git 准备中取消后，服务仍保存运行与快照，不遗留无法查询的工作树；返回 None。"""
     import threading
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """线程门闩模拟慢Git，取消请求协程后继续后台运行，再从历史列表查询结果。"""
@@ -350,7 +350,7 @@ def test_request_disconnect_during_prepare_remains_service_owned(project_config:
 def test_shutdown_during_prepare_creates_cancel_record_without_model(project_config: WebConfig, monkeypatch):
     """停服等待 Git 准备并生成可信取消终态与审阅快照，模型零调用，无遗失工作树；返回 None。"""
     import threading
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """在prepare阻塞期间停服，等待两者收尾后对照模型次数与真实RunStore记录。"""
@@ -389,7 +389,7 @@ def test_runner_start_failure_cleans_registered_worktree(project_config: WebConf
     """Runner 建立记录前失败，已登记且未执行工具的工作树受控移除，源项目不受影响；返回 None。"""
     from agent_harness import web
     from agent_harness.storage.runs import StorageError
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def fail_before_context(*arguments, **keywords):
         """模拟宿主记录目录不可写；arguments/keywords 不读取，直接抛StorageError且未执行进程。"""
@@ -409,7 +409,7 @@ def test_runner_start_failure_cleans_registered_worktree(project_config: WebConf
 
 def test_broken_git_identity_keeps_snapshot_error_and_refuses_delete(project_config: WebConfig, monkeypatch):
     """工作树身份文件被修改后，快照明确error且不提供补丁或删除动作；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """工具写入完成后改动工作树.git并取消，检查审阅失败事实与防误删保护。"""
@@ -434,7 +434,7 @@ def test_broken_git_identity_keeps_snapshot_error_and_refuses_delete(project_con
 
 def test_large_diff_preview_is_bounded_but_patch_is_complete(project_config: WebConfig, monkeypatch):
     """大文本diff按256KiB展示且可下载完整补丁，预览不以截断快照冒充完整结果；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """在模型等待期间扩大新文件，再完成真实测试并比较预览与完整下载字节数。"""
@@ -459,7 +459,7 @@ def test_large_diff_preview_is_bounded_but_patch_is_complete(project_config: Web
 
 def test_restarted_interrupted_run_can_capture_once_but_not_delete(project_config: WebConfig, monkeypatch):
     """重启遗留的未终态项目可补捕获审阅，但未知进程清理时禁止删除；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """先真实执行，再模拟磁盘只保留终态前缀及pending快照，重启后检查一次恢复和删除保护。"""
@@ -493,7 +493,7 @@ def test_restarted_interrupted_run_can_capture_once_but_not_delete(project_confi
 def test_post_worktree_preflight_failure_removes_unstarted_copy(project_config: WebConfig, monkeypatch):
     """创建副本后的二次路径校验失败时清理已登记工作树，不启动模型也不遗留孤立副本；返回 None。"""
     from agent_harness import web
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
     from agent_harness.execution.python import PythonExecutionError
 
     def fail_execution_snapshot(*arguments, **keywords):
@@ -516,7 +516,7 @@ def test_post_worktree_preflight_failure_removes_unstarted_copy(project_config: 
 def test_concurrent_review_requests_wait_for_same_recovery(project_config: WebConfig, monkeypatch):
     """两个页面同时恢复pending快照时共用任务，第二请求不提前缓存pending；返回 None。"""
     import threading
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-key")
 
     async def scenario():
         """制造历史pending并阻塞一次capture，两个GET均等待同一真实完成结果。"""

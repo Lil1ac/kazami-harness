@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from agent_harness.memory.service import MemoryChange, MemoryContent, MemoryController, MemoryError, MemoryGet, MemoryService, MemoryStore
 from agent_harness.schemas import MemoryPolicy, RunConfig, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 
 
 DETAILS = {
@@ -42,7 +43,7 @@ def save(service: MemoryService, kind: str, **options) -> dict:
 
 def controller(service: MemoryService, prompt: str = "修改金额接口", **policy) -> MemoryController:
     """创建固定版本读取集；prompt 为任务文字，policy 是宿主预算覆盖，返回控制器。"""
-    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(workspace=service.workspace, prompt=prompt), config=RunConfig(memory=MemoryPolicy(**policy)))
+    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(workspace=service.workspace, prompt=prompt), config=configured_run(memory=MemoryPolicy(**policy)))
 
     def emit(kind, payload):
         """忽略领域测试的 kind/payload 事件；真实事件由 HTTP 测试验证，返回 None。"""

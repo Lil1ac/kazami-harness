@@ -196,6 +196,6 @@ it('检查进程尚待核对时不能批准新检查或写回', async () => {
   );
   expect(await screen.findByRole('button', { name: '审阅并确认采纳' })).toBeDisabled();
   expect(screen.getByRole('button', { name: '批准运行候选检查' })).toBeDisabled();
-  expect(screen.getByRole('link', { name: '后台工作' })).toHaveAttribute('href', '/jobs');
+  expect(screen.getByRole('link', { name: '运行队列' })).toHaveAttribute('href', '/jobs');
   expect(integrationAction).not.toHaveBeenCalled();
 });

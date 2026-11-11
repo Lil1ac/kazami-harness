@@ -9,6 +9,7 @@ import os
 import platform
 import stat
 
+from agent_harness.context.skill_runtime import SkillRuntime, skill_text
 from agent_harness.schemas import ContextCheck, ContextPolicy, ProjectInstructionSnapshot, RunConfig, SkillSnapshot, TaskSpec
 from agent_harness.work.planning import PlanningController, project_plan_history
 from agent_harness.execution.workspace import Workspace, WorkspaceError
@@ -104,17 +105,20 @@ class ContextBuilder:
         self._task = task.model_copy(deep=True)  # 固定本次初始任务，外部可变对象不改变模型输入。
         self._config = config.model_copy(deep=True)  # 固定宿主规则及预算，后续网页草稿不影响本次运行。
         self.skills = [item.model_copy(deep=True) for item in skills or []]  # 冻结所选正文，压缩始终保护此初始用户前缀。
+        self.skill_runtime: SkillRuntime | None = None  # 交互运行的动态技能目录和已读资料。
         self.token_ratio = 1 / 3  # UTF-8字节到token的初始启发式；后续只用真实usage保守上调。
         self.instruction = instruction.model_copy(deep=True) if instruction is not None else load_project_instructions(workspace, self._config.context)  # 委派沿用批准时已提供的项目约定。
         self.planning: PlanningController | None = None  # Runner 绑定的可信状态，每次实际输入读取最新快照。
         self._planning_base: str | None = None  # 不含规划动态状态的原系统正文，刷新时替换而非反复追加。
         self.tasks = None  # Runner 绑定的任务控制器；每次请求读取可信最新状态。
         self.memory = None  # 固定修订的记忆控制器；输入投影随实际动作选择，不回查新修订。
+        self._memory_prefix = ""  # 原始固定前缀中的记忆片段，空值表示没有可替换的记忆。
 
     @property
     def has_fixed_context(self) -> bool:
         """返回当前是否使用固定 user 前缀；供跨轮压缩索引映射使用，不访问文件。"""
-        return self.instruction.status == "loaded" or bool(self.skills) or bool(self.memory and self.memory.input_text())
+        return (self.instruction.status == "loaded" or bool(self.skills) or bool(self.memory and self.memory.input_text())
+                or bool(self.skill_runtime and self.skill_runtime.catalog))
 
     def bind_planning(self, planning: PlanningController, base_instructions: str) -> None:
         """绑定 planning 与原系统正文 base_instructions，返回 None，不修改持久消息或请求模型。"""
@@ -157,9 +161,12 @@ class ContextBuilder:
         if self.instruction.status == "loaded":
             fixed_context.append("以下是本次运行固定的工作区根 AGENTS.md 项目约定：\n<project_instructions>\n" + (self.instruction.content or "") + "\n</project_instructions>")
         for skill in self.skills:
-            fixed_context.append("以下是本轮手动选择的技能 " + skill.name + "（流程指导）：\n<selected_skill>\n" + skill.content + "\n</selected_skill>")
-        if self.memory is not None and self.memory.input_text():
-            fixed_context.append(self.memory.input_text())
+            fixed_context.append(skill_text(skill))
+        if self.skill_runtime is not None and self.skill_runtime.catalog_text:
+            fixed_context.append(self.skill_runtime.catalog_text)
+        self._memory_prefix = self.memory.input_text() if self.memory is not None else ""
+        if self._memory_prefix:
+            fixed_context.append(self._memory_prefix)
         if fixed_context:
             messages.append({"role": "user", "content": "\n\n".join(fixed_context)})
         if history:
@@ -195,13 +202,20 @@ class ContextBuilder:
         摘要请求始终不注入执行权限状态，原消息和工具结果不被覆盖。
         """
         frozen_messages = deepcopy(messages)
-        if purpose == "execution" and self.memory is not None:
-            # 替换已有固定前缀中的记忆片段，保持消息索引稳定；原始 run_started 不被改写。
+        skill_suffix = ""
+        if purpose == "execution" and self.skill_runtime is not None:
+            additional = self.skill_runtime.projection()
+            if additional:
+                skill_suffix = "\n\n" + additional
+                # 交接可能已拿到一次投影，先分离资料，避免被误作宿主记忆或重复追加。
+                frozen_messages[1]["content"] = frozen_messages[1]["content"].removesuffix(skill_suffix)
+        if purpose == "execution" and self.memory is not None and self._memory_prefix:
+            # 仅替换原始固定前缀中实际注入的记忆。技能或资料里的字面标签仍是原文。
             for message in frozen_messages[:2]:
-                if message.get("role") == "user" and "<project_memory>" in message.get("content", ""):
-                    start = message["content"].index("<project_memory>")
-                    end = message["content"].index("</project_memory>", start) + len("</project_memory>")
-                    message["content"] = message["content"][:start] + self.memory.input_text() + message["content"][end:]
+                if message.get("role") == "user" and self._memory_prefix in message.get("content", ""):
+                    message["content"] = message["content"].replace(self._memory_prefix, self.memory.input_text(), 1)
+        if skill_suffix:
+            frozen_messages[1]["content"] += skill_suffix
         if apply_planning and purpose == "execution" and self.planning is not None:
             frozen_messages = project_plan_history(frozen_messages)
             if not frozen_messages or frozen_messages[0].get("role") != "system" or self._planning_base is None:

@@ -5,8 +5,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { createRun, errorMessage } from '../api';
 import { useConfigDraft, effectiveConfig } from '../config';
-import type { LocalProjectOption, OptionsResponse, CreateRunRequest, ModelProvider, ModelSelection } from '../types';
-import { modelLabel, modelProviderName } from '../modelSelection';
+import type { LocalProjectOption, OptionsResponse, CreateRunRequest } from '../types';
+import { modelChoices, modelChoiceValue, modelLabel, modelProviderName } from '../modelSelection';
 import { SkillSelector } from './SkillSelector';
 import { McpSelector } from './McpSelector';
 import { ProjectSelector } from './ProjectSelector';
@@ -96,14 +96,15 @@ export function TaskForm({
   const [mode, setMode] = useState<'auto' | 'plan'>('auto'); // 自动也允许Agent主动进入规划。
   const { draft, setDraft } = useConfigDraft();
   const config = effectiveConfig(options.config, draft);
-  const [selectedModel, setSelectedModel] = useState<ModelSelection | null>(null); // 未显式选择时使用设置默认值。
-  const model = selectedModel ?? config;
+  const [selectedModel, setSelectedModel] = useState<string>(); // 未显式选择时使用设置默认值。
   const modelProviders = options.model_providers;
-  const modelConnection = modelProviders[model.provider];
+  const availableModels = modelChoices(modelProviders);
+  const selectedChoice = availableModels.find((choice) => choice.value === selectedModel)
+    ?? availableModels.find((choice) => choice.value === modelChoiceValue(config))
+    ?? availableModels[0];
+  const model = selectedChoice?.selection;
+  const modelConnection = model && modelProviders[model.provider];
   const modelReady = modelConnection?.enabled && (modelConnection.auth === 'none' || modelConnection.key_configured);
-  const modelChoices: ModelSelection[] = [config, ...(Object.keys(modelProviders) as ModelProvider[])
-    .filter((provider) => provider !== config.provider)
-    .map((provider) => ({ provider, requested_model: modelProviders[provider].default_model }))];
   const navigate = useNavigate();
   const cache = useQueryClient();
   const pendingSubmission = useRef<PendingNewSubmission | null>(readPendingSubmission(draftKey)); // 网络未知时固定原载荷及编号。
@@ -190,7 +191,7 @@ export function TaskForm({
   }
   /** 提交当前选择的编号与可编辑任务；无目录时不请求模型，失败不清空输入。 */
   function submit(values: TaskValues): void {
-    if (!selected || !modelReady) return;
+    if (!selected || !model || !modelReady) return;
     const versions: Record<string, string> = {};
     for (const choice of [model, ...Object.values(config.role_models)]) {
       const version = choice && modelProviders[choice.provider]?.version;
@@ -225,14 +226,9 @@ export function TaskForm({
         <Alert
           type="warning"
           showIcon
-          title={!modelConnection?.enabled ? '所选服务商已停用或移除' :
-            options.desktop ? '请先配置模型密钥' : '请先配置 ' + (modelConnection.api_key_env || '宿主模型密钥')}
+          title={model ? '所选模型服务缺少 API Key' : '请先添加模型服务'}
           description={
-            options.desktop ? (
-              <Link to="/settings">前往运行配置保存密钥</Link>
-            ) : (
-              '在启动服务的终端设置环境变量，然后重启服务。'
-            )
+            <Link to="/settings#model-services">前往模型服务</Link>
           }
         />
       )}
@@ -245,7 +241,7 @@ export function TaskForm({
               type="link"
               onClick={/* 打开现有任务，不重复发送。 */ () => navigate('/jobs')}
             >
-              查看后台工作
+              查看运行队列
             </Button>
           }
         />
@@ -292,27 +288,22 @@ export function TaskForm({
             <div className="start-send-area">
               <ModeSelect value={mode} onChange={setMode} />
               <PermissionSelect value={config.permission_mode} onChange={/* 只覆盖新任务公开模式。 */ permission_mode => setDraft({ ...draft, permission_mode })} disabled={confirmingSubmission} />
-              <Select
+              {model && <Select
                 aria-label="会话模型"
-                value={model.provider}
+                value={selectedChoice.value}
                 size="small"
                 variant="borderless"
                 virtual={false}
                 popupMatchSelectWidth={false}
                 disabled={confirmingSubmission}
-                options={modelChoices.map((choice) => ({
-                  value: choice.provider,
-                  label: modelLabel(choice, undefined, modelProviders[choice.provider]?.name),
-                  disabled: !modelProviders[choice.provider]?.enabled,
-                }))}
+                options={availableModels}
                 labelRender={/* 窄屏保留供应商入口，完整模型名称仍在选项内。 */ () => (
                   <span title={model.requested_model}>
                     {modelProviderName(model.provider, modelConnection?.name)}<span className="start-model">{' · ' + model.requested_model}</span>
                   </span>
                 )}
-                onChange={/* 只更新当前新建表单的模型选择。 */ (provider: ModelProvider) =>
-                  setSelectedModel(modelChoices.find((choice) => choice.provider === provider) ?? null)}
-              />
+                onChange={setSelectedModel}
+              />}
               <Button
                 type="primary"
                 htmlType="submit"
@@ -376,7 +367,7 @@ export function TaskForm({
               </Form.Item>
             )}
             <div className="composer-config">
-              <span>{modelLabel(model, undefined, modelConnection?.name)}</span>
+              <span>{model ? modelLabel(model, undefined, modelConnection?.name) : '未配置模型'}</span>
               <Link to="/settings">调整模型与预算</Link>
             </div>
             <Checkbox
@@ -403,11 +394,13 @@ export function TaskForm({
             >
               允许提出记忆候选
             </Checkbox>
-            {((options.skills?.length || 0) > 0 || (config.skills?.length || 0) > 0) && (
+            {((options.skills?.length || 0) > 0 || (config.skills?.length || 0) > 0 || config.skill_auto) && (
               <SkillSelector
                 options={options.skills || []}
                 selected={config.skills || []}
                 onChange={/* 选名仍由宿主映射正文。 */ (skills) => setDraft({ ...draft, skills })}
+                automatic={config.skill_auto}
+                onAutomaticChange={/* 仅作用于当前任务配置。 */ (skill_auto) => setDraft({ ...draft, skill_auto })}
               />
             )}
             {selected?.kind === 'project' && createWorktree && (

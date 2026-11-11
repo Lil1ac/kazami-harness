@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from agent_harness.storage.runs import RunStore
+from tests.helpers.models import MODEL_TEST_TOML
 
 
 # 子进程始终覆盖模型凭据为离线值，模型客户端也由本地替身提供，不访问供应商。
@@ -76,7 +77,7 @@ def interrupt_when_requested() -> None:
 web_api.create_app = offline_factory
 threading.Thread(target=interrupt_when_requested, daemon=True).start()
 raise SystemExit(cli.main([
-    "serve", "--web-config", "web.toml", "--runs-dir", "records", "--port", sys.argv[1],
+    "serve", "--config", "model.toml", "--web-config", "web.toml", "--runs-dir", "records", "--port", sys.argv[1],
 ]))
 '''
 
@@ -137,13 +138,14 @@ def test_cli_sigint_with_open_sse_cleans_command_and_persists_shutdown(tmp_path:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (tmp_path / "server_helper.py").write_text(SERVER_SCRIPT, encoding="utf-8")
+    (tmp_path / "model.toml").write_text(MODEL_TEST_TOML, encoding="utf-8")
     (tmp_path / "web.toml").write_text(
         'worktrees_root="runtime"\nfrontend_dist="dist"\n'
         '[[workspaces]]\nid="workspace"\nlabel="离线停服测试"\npath="workspace"\n',
         encoding="utf-8",
     )
     child_environment = os.environ.copy()
-    child_environment.update({"DEEPSEEK_API_KEY": DUMMY_KEY, "PYTHONPATH": str(SOURCE_ROOT), "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"})
+    child_environment.update({"HARNESS_TEST_MODEL_KEY": DUMMY_KEY, "PYTHONPATH": str(SOURCE_ROOT), "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"})
     port = unused_loopback_port()
     log_path = tmp_path / "server.log"
     with log_path.open("wb") as log:

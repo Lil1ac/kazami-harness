@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 from agent_harness.desktop.server import main as server_main
+from agent_harness.desktop.storage import PreferenceStore
+from agent_harness.model_selection import CustomProvider
 from agent_harness.providers.base import ModelResponse, ToolCall
 
 
@@ -48,6 +50,12 @@ class FixtureModel:
 def main() -> int:
     """准备 Electron 指定数据目录中的测试项目，向生产后台注入离线模型，返回退出码。"""
     root = Path(sys.argv[sys.argv.index("--data-dir") + 1]).resolve()
+    store = PreferenceStore(root)
+    if not store.value.custom_providers:
+        # 正式后台从用户目录读取连接。测试使用免密回环定义和离线模型。
+        store.update(custom_providers={"custom-desktop": CustomProvider(
+            name="桌面测试", base_url="http://127.0.0.1/v1", default_model="fixture-model", auth="none",
+        )})
     project = root / "project"
     project.mkdir(parents=True, exist_ok=True)
     if not (project / ".git").exists():

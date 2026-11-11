@@ -1,6 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, Input, InputNumber, Modal, Select, Switch } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Drawer,
+  Dropdown,
+  Empty,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Skeleton,
+  Switch,
+  Tabs,
+} from 'antd';
+import { ClockCircleOutlined, MoreOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import {
   automationAction,
@@ -15,7 +30,12 @@ import {
   readAutomationNotification,
   saveAutomation,
 } from '../api';
-import type { AutomationDefinition, AutomationRule, AutomationSchedule } from '../automationTypes';
+import type {
+  AutomationDefinition,
+  AutomationFire,
+  AutomationRule,
+  AutomationSchedule,
+} from '../automationTypes';
 import type { LocalProjectOption } from '../types';
 import './AutomationsPage.css';
 
@@ -40,6 +60,59 @@ function timeLabel(value: string | null, timezone?: string): string {
   return timezone
     ? new Date(value).toLocaleString('zh-CN', { timeZone: timezone, hour12: false })
     : value.replace('T', ' ');
+}
+
+/** 将五段 Cron 解析为可编辑预设；cron 为原表达式，返回频率、时分及星期，复杂表达式保持 custom。 */
+function cronParts(cron: string | null): { frequency: string; time: string; day: string } {
+  const fields = (cron || '').trim().split(/\s+/);
+  const [minute, hour, date, month, day] = fields;
+  if (
+    fields.length === 5 &&
+    /^\d+$/.test(minute) &&
+    /^\d+$/.test(hour) &&
+    Number(minute) < 60 &&
+    Number(hour) < 24 &&
+    date === '*' &&
+    month === '*'
+  ) {
+    const frequency =
+      day === '*'
+        ? 'daily'
+        : day === 'mon-fri'
+          ? 'weekdays'
+          : /^(mon|tue|wed|thu|fri|sat|sun)$/.test(day)
+            ? 'weekly'
+            : 'custom';
+    return { frequency, time: `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`, day };
+  }
+  return { frequency: 'custom', time: '09:00', day: 'mon' };
+}
+
+/** 将公开计划转换为列表摘要；schedule 为持久触发条件，返回不依赖浏览器时区的中文说明。 */
+function scheduleLabel(schedule: AutomationSchedule): string {
+  if (schedule.kind === 'event')
+    return schedule.event === 'completed' ? '普通任务执行完成时' : '普通任务验收失败时';
+  if (schedule.kind === 'once') return `一次性 · ${timeLabel(schedule.at, schedule.timezone)}`;
+  if (schedule.kind === 'interval') return `每 ${schedule.interval_minutes} 分钟`;
+  const parts = cronParts(schedule.cron);
+  const days: Record<string, string> = {
+    mon: '一',
+    tue: '二',
+    wed: '三',
+    thu: '四',
+    fri: '五',
+    sat: '六',
+    sun: '日',
+  }; // 与后端星期名称保持一致。
+  const frequency =
+    parts.frequency === 'daily'
+      ? '每天'
+      : parts.frequency === 'weekdays'
+        ? '工作日'
+        : parts.frequency === 'weekly'
+          ? `每周${days[parts.day]}`
+          : null;
+  return frequency ? `${frequency} ${parts.time}` : `Cron · ${schedule.cron}`;
 }
 
 /** 创建默认工作日09:00触发；无共享对象，编辑不会改变列表里的已保存规则。 */
@@ -71,7 +144,9 @@ function RuleEditor({
   const [name, setName] = useState(rule?.definition.name || ''); // 当前表单名称。
   const [prompt, setPrompt] = useState(rule?.definition.task.prompt || ''); // 当前任务模板。
   const [projectId, setProjectId] = useState(
-    rule?.definition.task.project_id || rule?.definition.task.workspace_id || projects[0]?.id,
+    rule?.definition.task.project_id ||
+      rule?.definition.task.workspace_id ||
+      projects.find(/* 默认选可用登记项目。 */ (item) => item.available)?.id,
   ); // 实际执行来源。
   const [schedule, setSchedule] = useState<AutomationSchedule>(
     rule?.definition.schedule || defaultSchedule(),
@@ -85,6 +160,8 @@ function RuleEditor({
     JSON.stringify(rule?.definition.task.config || {}, null, 2),
   ); // 高级公开配置，后端拒绝内部字段。
   const [advancedError, setAdvancedError] = useState(''); // JSON解析错误在表单内解释。
+  const [customCron, setCustomCron] = useState(cronParts(schedule.cron).frequency === 'custom'); // 复杂表达式不被预设覆盖。
+  const parts = cronParts(schedule.cron); // 时间控件始终反映当前待保存表达式。
   const project = projects.find(
     /* 按登记编号找实际类型，不按路径文本猜测。 */ (item) => item.id === projectId,
   );
@@ -108,12 +185,36 @@ function RuleEditor({
       interval_minutes: kind === 'interval' ? 60 : null,
       event: kind === 'event' ? 'verification_failed' : null,
     });
+    setCustomCron(false);
     preview.reset();
   }
 
+  /** 根据频率、时分和星期生成唯一 Cron；参数为空沿用当前值，更新草稿并清除过期预览，不发起请求。 */
+  function changeCadence(frequency = parts.frequency, time = parts.time, day = parts.day): void {
+    if (frequency === 'custom') {
+      setCustomCron(true);
+      return;
+    }
+    const [hour, minute] = time.split(':').map(Number);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return;
+    setCustomCron(false);
+    setSchedule({
+      ...schedule,
+      cron: `${minute} ${hour} * * ${frequency === 'daily' ? '*' : frequency === 'weekdays' ? 'mon-fri' : /^(mon|tue|wed|thu|fri|sat|sun)$/.test(day) ? day : 'mon'}`,
+    });
+    preview.reset();
+  }
+
+  useEffect(
+    /* 任意计划字段改变后清除旧预览，防止把上一次时间当成当前结果。 */ () => {
+      preview.reset();
+    },
+    [schedule],
+  );
+
   /** 校验公开JSON配置并提交；无项目或无效JSON只显示错误，不发送任何任务。 */
   function submit(): void {
-    if (!project) return;
+    if (!project?.available) return;
     try {
       const config = JSON.parse(configuration);
       if (!config || Array.isArray(config) || typeof config !== 'object')
@@ -145,24 +246,25 @@ function RuleEditor({
   }
 
   return (
-    <Modal
+    <Drawer
       title={rule ? '编辑自动化' : '新建自动化'}
       open
-      onCancel={onClose}
+      onClose={onClose}
       footer={
         <>
           <Button onClick={onClose}>取消</Button>
           <Button
             type="primary"
             loading={save.isPending}
-            disabled={!project || !name.trim() || !prompt.trim()}
+            disabled={!project?.available || !name.trim() || !prompt.trim()}
             onClick={submit}
           >
             保存并保持暂停
           </Button>
         </>
       }
-      width={680}
+      size={620}
+      className="automation-editor"
     >
       <div className="automation-form">
         {(save.error || advancedError) && (
@@ -233,30 +335,70 @@ function RuleEditor({
         </div>
         {schedule.kind === 'cron' && (
           <>
-            <Select
-              aria-label="常用时间"
-              value={schedule.cron}
-              onChange={
-                /* 预设统一落为同一Cron定义。 */ (cron) => setSchedule({ ...schedule, cron })
-              }
-              options={[
-                { value: '0 9 * * mon-fri', label: '工作日 09:00' },
-                { value: '0 9 * * *', label: '每天 09:00' },
-                { value: '0 9 * * mon', label: '每周一 09:00' },
-                { value: '0 * * * *', label: '每小时' },
-              ]}
-            />
-            <label>
-              Cron
-              <Input
-                value={schedule.cron || ''}
-                onChange={
-                  /* 高级表达式由后端成熟触发器严格校验。 */ (event) =>
-                    setSchedule({ ...schedule, cron: event.target.value })
-                }
-              />
-            </label>
-            <small>五段表达式；星期推荐 mon–sun，数字 0 表示周一。</small>
+            <div className="automation-form-row">
+              <label>
+                重复
+                <Select
+                  aria-label="重复频率"
+                  value={customCron ? 'custom' : parts.frequency}
+                  onChange={/* 频率切换只修改草稿。 */ (value) => changeCadence(value)}
+                  options={[
+                    { value: 'daily', label: '每天' },
+                    { value: 'weekdays', label: '工作日' },
+                    { value: 'weekly', label: '每周' },
+                    { value: 'custom', label: '自定义 Cron' },
+                  ]}
+                />
+              </label>
+              {!customCron && (
+                <label>
+                  时间
+                  <Input
+                    type="time"
+                    aria-label="触发时间"
+                    value={parts.time}
+                    onChange={
+                      /* 浏览器时分直接编码为指定时区的 Cron，不转成本机时区。 */ (event) =>
+                        changeCadence(parts.frequency, event.target.value)
+                    }
+                  />
+                </label>
+              )}
+            </div>
+            {!customCron && parts.frequency === 'weekly' && (
+              <label>
+                星期
+                <Select
+                  aria-label="执行星期"
+                  value={parts.day}
+                  onChange={
+                    /* 单周星期与时分一同写入表达式。 */ (day) =>
+                      changeCadence('weekly', parts.time, day)
+                  }
+                  options={['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(
+                    /* 星期名称与后端一致。 */ (day, index) => ({
+                      value: day,
+                      label: `星期${'一二三四五六日'[index]}`,
+                    }),
+                  )}
+                />
+              </label>
+            )}
+            {customCron && (
+              <label>
+                Cron
+                <Input
+                  value={schedule.cron || ''}
+                  onChange={
+                    /* 复杂表达式交由后端校验。 */ (event) => {
+                      setSchedule({ ...schedule, cron: event.target.value });
+                      preview.reset();
+                    }
+                  }
+                />
+                <small>五段表达式；星期推荐 mon–sun，数字 0 表示周一。</small>
+              </label>
+            )}
           </>
         )}
         {schedule.kind === 'interval' && (
@@ -305,29 +447,6 @@ function RuleEditor({
         )}
         {schedule.kind !== 'event' && (
           <>
-            <label className="automation-inline">
-              <Switch
-                checked={schedule.catch_up}
-                onChange={
-                  /* 用户明确选择才补跑。 */ (catch_up) => setSchedule({ ...schedule, catch_up })
-                }
-              />
-              漏跑时在窗口内补最近一次
-            </label>
-            {schedule.catch_up && (
-              <label>
-                补跑窗口（分钟）
-                <InputNumber
-                  min={1}
-                  max={10080}
-                  value={schedule.catch_up_minutes}
-                  onChange={
-                    /* 补跑窗口不扩展任务预算。 */ (value) =>
-                      setSchedule({ ...schedule, catch_up_minutes: value || 60 })
-                  }
-                />
-              </label>
-            )}
             <Button
               onClick={/* 预览不保存规则或执行任务。 */ () => preview.mutate(schedule)}
               loading={preview.isPending}
@@ -346,51 +465,82 @@ function RuleEditor({
             )}
           </>
         )}
-        <label>
-          已有执行时
-          <Select
-            aria-label="重叠策略"
-            value={overlap}
-            onChange={setOverlap}
-            options={[
-              { value: 'skip', label: '跳过本次' },
-              { value: 'coalesce', label: '合并保留最近一次待执行' },
-            ]}
-          />
-        </label>
-        <label>
-          权限
-          <Select
-            aria-label="自动化权限"
-            value={permissionMode}
-            onChange={setPermissionMode}
-            options={[
-              { value: 'research', label: '仅研究' },
-              { value: 'workspace_edit', label: '工作区编辑，未授权命令仍需审批' },
-              { value: 'strict', label: '严格审批' },
-            ]}
-          />
-        </label>
-        <details>
-          <summary>运行配置</summary>
-          <label>
-            模型、工具、技能、记忆与预算（公开配置 JSON）
-            <Input.TextArea
-              aria-label="高级运行配置"
-              rows={5}
-              value={configuration}
-              onChange={
-                /* 只编辑草稿，后端仍严格验证公开字段。 */ (event) =>
-                  setConfiguration(event.target.value)
-              }
-            />
-          </label>
+        <details className="automation-advanced">
+          <summary>高级设置</summary>
+          <div className="automation-form">
+            {schedule.kind !== 'event' && (
+              <>
+                <label className="automation-inline">
+                  <Switch
+                    checked={schedule.catch_up}
+                    onChange={
+                      /* 用户明确选择才补跑。 */ (catch_up) =>
+                        setSchedule({ ...schedule, catch_up })
+                    }
+                  />
+                  漏跑时在窗口内补最近一次
+                </label>
+                {schedule.catch_up && (
+                  <label>
+                    补跑窗口（分钟）
+                    <InputNumber
+                      min={1}
+                      max={10080}
+                      value={schedule.catch_up_minutes}
+                      onChange={
+                        /* 补跑窗口不扩展任务预算。 */ (value) =>
+                          setSchedule({ ...schedule, catch_up_minutes: value || 60 })
+                      }
+                    />
+                  </label>
+                )}
+              </>
+            )}
+            <label>
+              已有执行时
+              <Select
+                aria-label="重叠策略"
+                value={overlap}
+                onChange={setOverlap}
+                options={[
+                  { value: 'skip', label: '跳过本次' },
+                  { value: 'coalesce', label: '合并保留最近一次待执行' },
+                ]}
+              />
+            </label>
+            <label>
+              权限
+              <Select
+                aria-label="自动化权限"
+                value={permissionMode}
+                onChange={setPermissionMode}
+                options={[
+                  { value: 'research', label: '仅研究' },
+                  { value: 'workspace_edit', label: '工作区编辑，未授权命令仍需审批' },
+                  { value: 'strict', label: '严格审批' },
+                ]}
+              />
+            </label>
+
+            <label>
+              模型、工具、技能、记忆与预算（公开配置 JSON）
+              <Input.TextArea
+                aria-label="高级运行配置"
+                rows={5}
+                value={configuration}
+                onChange={
+                  /* 只编辑草稿，后端仍严格验证公开字段。 */ (event) =>
+                    setConfiguration(event.target.value)
+                }
+              />
+            </label>
+          </div>
         </details>
         <small>
           电脑与宿主需保持运行。保存或编辑后均暂停；启用不会自动批准未来方案和未授权动作。
         </small>
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -526,15 +676,17 @@ function GrantDialog({
   );
 }
 
-/** 展示rule触发的真实状态与作业链接，不用页面重试旧运行。 */
-function RuleHistory({ rule }: { rule: AutomationRule }) {
-  const query = useQuery({
-    queryKey: ['automation-history', rule.id],
-    queryFn: /* 仅查询触发账本。 */ () => getAutomationHistory(rule.id),
-    refetchInterval: 2000,
-  });
+/** 展示当前规则的真实触发记录；rule 决定时区，query 复用详情查询结果，返回只读历史及原作业链接。 */
+function RuleHistory({
+  rule,
+  query,
+}: {
+  rule: AutomationRule;
+  query: { data?: { items: AutomationFire[] }; error: Error | null; isPending: boolean };
+}) {
   return (
     <div className="automation-history">
+      {query.isPending && <Skeleton active paragraph={{ rows: 2 }} />}
       {query.error && <Alert type="error" title={errorMessage(query.error)} />}
       {query.data?.items.length === 0 && <p>还没有触发记录</p>}
       {query.data?.items.map(
@@ -577,6 +729,7 @@ function RuleHistory({ rule }: { rule: AutomationRule }) {
 /** 本机自动化管理和持久收件箱；桌面及Web共用API，刷新不触发任务。 */
 export function AutomationsPage() {
   const cache = useQueryClient();
+  const [modal, modalContext] = Modal.useModal(); // 确认框继承当前主题，异步失败时保留确认状态。
   const rules = useQuery({
     queryKey: ['automations'],
     queryFn: getAutomations,
@@ -593,7 +746,33 @@ export function AutomationsPage() {
   });
   const [editing, setEditing] = useState<AutomationRule | null | undefined>(); // undefined关闭，null新建，否则编辑。
   const [granting, setGranting] = useState<AutomationRule | null>(null); // 当前审核规则。
-  const [history, setHistory] = useState<string | null>(null); // 展开一个规则历史，避免无意义轮询。
+  const [selectedId, setSelectedId] = useState<string | null>(null); // 仅保存编号，每次轮询采用最新规则版本。
+  const [tab, setTab] = useState('tasks'); // 任务与需要关注分别呈现。
+  const [detailTab, setDetailTab] = useState('overview'); // 当前规则详情页签。
+  const selected = rules.data?.items.find(
+    /* 详情随服务快照更新。 */ (rule) => rule.id === selectedId,
+  );
+  const activity = useQuery({
+    queryKey: ['automation-history', selectedId],
+    queryFn: /* 仅打开规则后读取真实活动，不逐行请求历史。 */ () =>
+      getAutomationHistory(selectedId!),
+    enabled: Boolean(selectedId),
+    refetchInterval: 2000,
+  });
+  const hasActiveRun = activity.data?.items.some(
+    /* 仅存在活动执行时显示停止。 */ (fire) =>
+      [
+        'pending',
+        'dispatching',
+        'queued',
+        'preparing',
+        'running',
+        'waiting_input',
+        'coalesced',
+      ].includes(fire.status),
+  );
+  const unread =
+    inbox.data?.items.filter(/* 未读数来自持久通知。 */ (item) => !item.read).length || 0;
   const attempt = useRef<{ key: string; id: string } | null>(null); // 响应不明时保留原操作编号，手动重试不能另建触发。
   const mutation = useMutation({
     mutationFn: /* 只提交当前明确操作，失败重试复用相同规则/动作的编号。 */ ({
@@ -609,7 +788,10 @@ export function AutomationsPage() {
     },
     onSuccess: /* 宿主确认后展开本次执行历史，下一次点击才表示新操作。 */ (_result, variables) => {
       attempt.current = null;
-      if (variables.action === 'run') setHistory(variables.rule.id);
+      if (variables.action === 'run') {
+        setSelectedId(variables.rule.id);
+        setDetailTab('history');
+      }
       refresh();
     },
   });
@@ -630,21 +812,30 @@ export function AutomationsPage() {
 
   return (
     <section className="page-section automations-page">
+      {modalContext}
       <div className="automation-heading">
         <h1>自动化</h1>
         <Button
           type="primary"
-          disabled={!options.data?.recent_projects.length}
+          icon={<PlusOutlined />}
+          aria-label="新建自动化"
+          disabled={
+            !options.data?.recent_projects.some(
+              /* 只有可用项目才能新建。 */ (project) => project.available,
+            )
+          }
           onClick={/* 新建只打开草稿。 */ () => setEditing(null)}
         >
           新建自动化
         </Button>
       </div>
-      {(rules.error || mutation.error || options.error || read.error) && (
+      {(rules.error || (!selected && mutation.error) || options.error || read.error) && (
         <Alert
           type="error"
           showIcon
-          title={errorMessage(rules.error || mutation.error || options.error || read.error)}
+          title={errorMessage(
+            rules.error || (!selected && mutation.error) || options.error || read.error,
+          )}
         />
       )}
       {rules.data?.error && <Alert type="error" title={rules.data.error} />}
@@ -653,119 +844,286 @@ export function AutomationsPage() {
           type="warning"
           title={
             <>
-              后台队列已暂停，自动化不会绕过。<Link to="/jobs">查看后台工作</Link>
+              运行队列已暂停，自动化将继续等待。<Link to="/jobs">查看运行队列</Link>
             </>
           }
         />
       )}
-      {rules.data?.items.length === 0 && <p>保存可重复执行的任务，再选择触发时间或本机事件。</p>}
-      <div className="automation-rules">
-        {rules.data?.items.map(
-          /* 规则与触发分开呈现，列表不会自动启动。 */ (rule) => (
-            <article key={rule.id} className="automation-rule">
-              <div className="automation-rule-title">
-                <h2>{rule.definition.name}</h2>
-                <Switch
-                  aria-label={'启用' + rule.definition.name}
-                  checked={rule.enabled}
-                  loading={mutation.isPending && mutation.variables?.rule.id === rule.id}
-                  onChange={
-                    /* 启停都绑定当前规则版本。 */ (enabled) =>
-                      mutation.mutate({ rule, action: enabled ? 'enable' : 'pause' })
-                  }
-                />
-              </div>
-              <p className="automation-task">{rule.definition.task.prompt}</p>
-              <p>
-                {rule.definition.schedule.kind === 'event'
-                  ? rule.definition.schedule.event === 'completed'
-                    ? '普通任务执行完成时'
-                    : '普通任务验收失败时'
-                  : timeLabel(rule.next_at, rule.definition.schedule.timezone)}
-                {rule.definition.schedule.kind !== 'event' &&
-                  ' · ' + rule.definition.schedule.timezone}
-                {rule.has_grant && ' · 已保存持续授权'}
-              </p>
-              {rule.invalid_reason && <Alert type="warning" title={rule.invalid_reason} />}
-              <div className="automation-actions">
-                <Button
-                  onClick={
-                    /* 手动试跑仍经过同一账本、权限和重叠策略。 */ () =>
-                      mutation.mutate({ rule, action: 'run' })
-                  }
-                  disabled={mutation.isPending}
-                >
-                  立即运行
-                </Button>
-                <Button onClick={/* 编辑草稿不改已保存定义。 */ () => setEditing(rule)}>
-                  编辑
-                </Button>
-                <Button onClick={/* 打开审核不表示批准。 */ () => setGranting(rule)}>
-                  审核授权
-                </Button>
-                <Button
-                  onClick={/* 历史只读。 */ () => setHistory(history === rule.id ? null : rule.id)}
-                >
-                  触发历史
-                </Button>
-                <Button
-                  danger
-                  onClick={
-                    /* 单项停止及后代清理由原队列负责。 */ () =>
-                      mutation.mutate({ rule, action: 'stop' })
-                  }
-                  disabled={mutation.isPending}
-                >
-                  停止当前执行
-                </Button>
-                {rule.has_grant && (
-                  <Button
-                    danger
-                    onClick={
-                      /* 撤销同时阻止旧运行的新动作。 */ () =>
-                        mutation.mutate({ rule, action: 'revoke' })
-                    }
-                    disabled={mutation.isPending}
-                  >
-                    撤销授权
-                  </Button>
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        destroyOnHidden
+        items={[
+          {
+            key: 'tasks',
+            label: '任务',
+            children: (
+              <div className="automation-rules" aria-label="自动化任务">
+                {rules.isPending && <Skeleton active paragraph={{ rows: 3 }} />}
+                {rules.data?.items.length === 0 && (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有自动化任务" />
+                )}
+                {!!rules.data?.items.length && (
+                  <div className="automation-list-heading" aria-hidden="true">
+                    <span>任务</span>
+                    <span>触发计划</span>
+                    <span>状态</span>
+                  </div>
+                )}
+                {rules.data?.items.map(
+                  /* 点击只查看详情，开关独立控制启停。 */ (rule) => (
+                    <article key={rule.id} className="automation-rule">
+                      <button
+                        className="automation-rule-open"
+                        aria-label={'查看' + rule.definition.name}
+                        onClick={
+                          /* 新规则从概览打开。 */ () => {
+                            setSelectedId(rule.id);
+                            setDetailTab('overview');
+                          }
+                        }
+                      >
+                        <span className="automation-rule-icon">
+                          <ClockCircleOutlined />
+                        </span>
+                        <span className="automation-rule-name">
+                          <strong>{rule.definition.name}</strong>
+                          <small>
+                            {options.data?.recent_projects.find(
+                              /* 项目展示使用登记名称。 */ (project) =>
+                                project.id ===
+                                (rule.definition.task.project_id ||
+                                  rule.definition.task.workspace_id),
+                            )?.label ||
+                              rule.definition.task.project_id ||
+                              rule.definition.task.workspace_id}
+                          </small>
+                        </span>
+                        <span className="automation-rule-schedule">
+                          {scheduleLabel(rule.definition.schedule)}
+                          <small>
+                            {rule.definition.schedule.kind === 'event'
+                              ? '本机事件'
+                              : rule.definition.schedule.timezone}
+                          </small>
+                        </span>
+                        <RightOutlined className="automation-rule-chevron" />
+                      </button>
+                      <div className="automation-rule-state">
+                        <span
+                          className={
+                            rule.invalid_reason
+                              ? 'automation-state-warning'
+                              : rule.enabled
+                                ? 'automation-state-enabled'
+                                : ''
+                          }
+                        >
+                          {rule.invalid_reason ? '需处理' : rule.enabled ? '已启用' : '已暂停'}
+                        </span>
+                        <Switch
+                          size="small"
+                          aria-label={'启用' + rule.definition.name}
+                          checked={rule.enabled}
+                          disabled={mutation.isPending}
+                          onChange={
+                            /* 启停绑定当前版本，不隐式授权。 */ (enabled) =>
+                              mutation.mutate({ rule, action: enabled ? 'enable' : 'pause' })
+                          }
+                        />
+                      </div>
+                    </article>
+                  ),
                 )}
               </div>
-              {history === rule.id && <RuleHistory rule={rule} />}
-            </article>
-          ),
-        )}
-      </div>
-      <div className="automation-inbox">
-        <h2>需要关注</h2>
-        {inbox.error && <Alert type="error" title={errorMessage(inbox.error)} />}
-        {inbox.data?.items.length === 0 && <p>暂时没有通知</p>}
-        {inbox.data?.items.map(
-          /* 已读记录仍可回看；重复失败通过count合并。 */ (item) => (
-            <article key={item.id} className={item.read ? 'is-read' : ''}>
-              <div>
-                <strong>{item.name}</strong>
-                <span>
-                  {item.message}
-                  {item.count > 1 && `（${item.count}次）`}
-                </span>
+            ),
+          },
+          {
+            key: 'inbox',
+            label: (
+              <span>
+                需要关注{unread > 0 && <span className="automation-unread">{unread}</span>}
+              </span>
+            ),
+            children: (
+              <div className="automation-inbox">
+                {inbox.isPending && <Skeleton active />}
+                {inbox.error && <Alert type="error" title={errorMessage(inbox.error)} />}
+                {inbox.data?.items.length === 0 && (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂时没有通知" />
+                )}
+                {inbox.data?.items.map(
+                  /* 已读仍可回看，进入原作业才标记已读。 */ (item) => (
+                    <article key={item.id} className={item.read ? 'is-read' : ''}>
+                      <div>
+                        <strong>
+                          {!item.read && <span className="automation-unread-dot" />}
+                          {item.name}
+                        </strong>
+                        <span>
+                          {item.message}
+                          {item.count > 1 && `（${item.count}次）`}
+                        </span>
+                      </div>
+                      {item.job_id ? (
+                        <Link
+                          to={'/jobs/' + item.job_id}
+                          onClick={/* 跳转确认读取。 */ () => read.mutate(item.id)}
+                        >
+                          查看与处理 <RightOutlined />
+                        </Link>
+                      ) : (
+                        <Button
+                          type="text"
+                          disabled={item.read || read.isPending}
+                          onClick={/* 无作业通知也能确认读取。 */ () => read.mutate(item.id)}
+                        >
+                          {item.read ? '已读' : '标为已读'}
+                        </Button>
+                      )}
+                    </article>
+                  ),
+                )}
               </div>
-              {item.job_id ? (
-                <Link
-                  to={'/jobs/' + item.job_id}
-                  onClick={/* 用户进入结果时确认已读。 */ () => read.mutate(item.id)}
-                >
-                  查看与处理
-                </Link>
-              ) : (
-                <Button onClick={/* 无作业的准备错误也能标记已读。 */ () => read.mutate(item.id)}>
-                  标为已读
-                </Button>
-              )}
-            </article>
-          ),
+            ),
+          },
+        ]}
+      />
+      <Drawer
+        open={Boolean(selected)}
+        title={selected?.definition.name}
+        size={620}
+        onClose={/* 关闭详情即停止历史轮询。 */ () => setSelectedId(null)}
+        className="automation-detail"
+        destroyOnHidden
+      >
+        {selected && (
+          <>
+            <div className="automation-detail-actions">
+              <Button
+                type="primary"
+                disabled={mutation.isPending}
+                onClick={
+                  /* 试跑仍经过同一账本。 */ () =>
+                    mutation.mutate({ rule: selected, action: 'run' })
+                }
+              >
+                立即运行
+              </Button>
+              <Button onClick={/* 编辑不改变已存定义。 */ () => setEditing(selected)}>编辑</Button>
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'grant', label: '审核授权' },
+                    ...(selected.has_grant
+                      ? [{ key: 'revoke', label: '撤销授权', danger: true }]
+                      : []),
+                  ],
+                  onClick: /* 撤销需明确确认，菜单打开不执行动作。 */ ({ key }) => {
+                    if (key === 'grant') setGranting(selected);
+                    if (key === 'revoke')
+                      modal.confirm({
+                        title: '撤销持续授权？',
+                        content: '规则将暂停，当前执行也会停止；再次运行时，需审批的动作将重新等待确认。',
+                        okText: '撤销授权',
+                        cancelText: '取消',
+                        okButtonProps: { danger: true },
+                        onOk: /* 确认后等待宿主持久化，失败保留弹窗。 */ () =>
+                          mutation.mutateAsync({ rule: selected, action: 'revoke' }),
+                      });
+                  },
+                }}
+              >
+                <Button aria-label="更多操作" icon={<MoreOutlined />} />
+              </Dropdown>
+            </div>
+            {mutation.error && <Alert type="error" title={errorMessage(mutation.error)} />}
+            {selected.invalid_reason && <Alert type="warning" title={selected.invalid_reason} />}
+            <Tabs
+              activeKey={detailTab}
+              onChange={setDetailTab}
+              items={[
+                {
+                  key: 'overview',
+                  label: '概览',
+                  children: (
+                    <div className="automation-overview">
+                      <div className="automation-detail-status">
+                        <span>{selected.enabled ? '已启用' : '已暂停'}</span>
+                        <Switch
+                          aria-label={'详情启用' + selected.definition.name}
+                          checked={selected.enabled}
+                          disabled={mutation.isPending}
+                          onChange={
+                            /* 详情采用相同版本校验。 */ (enabled) =>
+                              mutation.mutate({
+                                rule: selected,
+                                action: enabled ? 'enable' : 'pause',
+                              })
+                          }
+                        />
+                      </div>
+                      <dl>
+                        <dt>触发计划</dt>
+                        <dd>{scheduleLabel(selected.definition.schedule)}</dd>
+                        {selected.definition.schedule.kind !== 'event' && (
+                          <>
+                            <dt>时区</dt>
+                            <dd>{selected.definition.schedule.timezone}</dd>
+                            <dt>下次执行</dt>
+                            <dd>
+                              {selected.enabled
+                                ? timeLabel(selected.next_at, selected.definition.schedule.timezone)
+                                : '启用后按计划执行'}
+                            </dd>
+                          </>
+                        )}
+                        <dt>持续授权</dt>
+                        <dd>
+                          {selected.has_grant ? '已保存精确授权' : '未设置，需审批的动作将等待处理'}{' '}
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={/* 审阅本身不授予权限。 */ () => setGranting(selected)}
+                          >
+                            审核授权
+                          </Button>
+                        </dd>
+                      </dl>
+                      <section>
+                        <h3>任务内容</h3>
+                        <p className="automation-task">{selected.definition.task.prompt}</p>
+                      </section>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'history',
+                  label: '运行记录',
+                  children: (
+                    <>
+                      <RuleHistory rule={selected} query={activity} />
+                      {hasActiveRun && (
+                        <Button
+                          danger
+                          disabled={mutation.isPending}
+                          onClick={
+                            /* 仅停止已有活动执行。 */ () =>
+                              mutation.mutate({ rule: selected, action: 'stop' })
+                          }
+                        >
+                          停止当前执行
+                        </Button>
+                      )}
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </>
         )}
-      </div>
+      </Drawer>
       {editing !== undefined && (
         <RuleEditor
           rule={editing}

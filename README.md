@@ -8,7 +8,7 @@
 
 ## 安装与密钥
 
-Windows 发布版运行安装程序，或解压发布包后双击 `Agent Harness.exe`。Python 后台与界面随应用分发；在“运行配置”输入 DeepSeek API Key，应用使用操作系统加密后保存。桌面启动与构建详见 [桌面端说明](docs/DESKTOP.md)。
+Windows 发布版运行安装程序，或解压发布包后双击 `Agent Harness.exe`。Python 后台与界面随应用分发；在「运行配置 → 模型服务 → 添加服务商」填写接口地址、模型 ID 和所需凭据。密钥由操作系统加密保存。桌面启动与构建详见 [桌面端说明](docs/DESKTOP.md)。
 
 源码运行需要 Python 3.12、uv；源码桌面端和网页还需要 Node.js 22.12 或更新兼容版本完成构建。所有命令在项目根目录执行。
 
@@ -17,13 +17,13 @@ uv --cache-dir .uv-cache sync --frozen
 uv --cache-dir .uv-cache run harness --help
 ```
 
-CLI 和独立网页服务从启动终端读取 `DEEPSEEK_API_KEY` 或 `DASHSCOPE_API_KEY`。桌面端使用设置页按供应商保存的加密凭据。Qwen 首版使用百炼北京地域，可通过 `harness run --provider qwen --model qwen-plus` 选择。完整参数、角色配置与凭据规则见 [模型供应商与角色配置](docs/MODELS.md)。
+CLI 和独立网页服务通过 TOML 登记连接。使用 API Key 的服务在 TOML 中填写对应的环境变量名，再在启动终端设置该变量。完整参数和角色配置见 [模型服务](docs/MODELS.md)。
 
 PowerShell 可以用密码框输入 CLI 凭据，避免把明文写入命令历史。
 
 ```powershell
-$credential = Get-Credential -UserName 'deepseek' -Message '在密码框输入 DeepSeek API Key'
-$env:DEEPSEEK_API_KEY = $credential.GetNetworkCredential().Password
+$credential = Get-Credential -UserName 'model-service' -Message '在密码框输入服务商 API Key'
+$env:HARNESS_MODEL_KEY = $credential.GetNetworkCredential().Password
 ```
 
 密钥不进入网页或运行记录。真实模型运行会发送任务和读取的内容并消耗服务额度；仓库样例使用虚构数据。
@@ -87,6 +87,8 @@ uv --cache-dir .uv-cache run harness serve --config harness.example.toml
 新任务可手动选择宿主登记的 SKILL.md，后续消息默认沿用，也可更换或清空。详情“上下文”保存本轮完整技能正文和指纹，正文计入输入预算并受压缩保护。示例配置已登记 examples/skills，默认不选择；CLI 可在配置中填写 skills = ["code-delivery"]。登记方法及当前边界见 [任务技能](docs/SKILLS.md)。
 
 ## CLI 常用命令
+
+运行前请按 [模型服务](docs/MODELS.md) 在运行 TOML 中登记你的连接和模型。下列命令使用补充了连接的示例配置。
 
 读取仓库日志并返回文字统计：
 
@@ -168,7 +170,7 @@ npm.cmd --prefix frontend run build
 
 侧栏“自动化”可保存时间或本机普通运行事件规则，先预览、试跑，再明确启用。每次执行使用独立会话，Git默认工作树；遇到未授权动作仍等待人工处理。宿主可明确开启`permission_policy.automation_grants`，再从页面审核精确命令、固定验收及已审核Hook的持续许可；默认关闭。漏跑、重叠、启停和结果通知见[本机自动化](docs/AUTOMATIONS.md)。电脑及宿主需保持运行。
 
-批准计划后自动生成持久工作项，Agent 通过 task_create/get/list/update 管理依赖、进度和完成证据。会话内可查看、编辑待处理项、取消或重新打开；后台工作页查看排队、运行和待核对作业。默认两个独立项目并发，同仓库与重叠目录仍串行；退出保留未执行队列，重启按明确选择恢复。历史记录不自动重放工具；后台页面提供资源等待原因、单项停止和启动恢复设置，详见[调度与恢复](docs/SCHEDULING.md)及[任务协议](docs/TASKS.md)。
+批准计划后自动生成持久工作项，Agent 通过 task_create/get/list/update 管理依赖、进度和完成证据。会话内可查看、编辑待处理项、取消或重新打开。侧栏底部的「运行队列」可查看排队、运行和待核对作业，并提供资源等待原因、单项停止和启动恢复设置。默认两个独立项目并发，同仓库与重叠目录仍串行。退出保留未执行队列，重启按明确选择恢复。详见[调度与恢复](docs/SCHEDULING.md)及[任务协议](docs/TASKS.md)。
 
 长命令可通过 `run_command(background=true)` 返回句柄，使用 `read_command`、`wait_command` 和 `stop_command` 管理；同一目录有活动命令时不继续写文件。页面执行中可发送本轮补充或排队下一轮，支持安全暂停和明确恢复；恢复沿用原预算，未知进程结果先核对。桌面/Web 可查看父子命令、增量输出和处理状态；详见[长任务协议](docs/LONG_RUNNING.md)。
 

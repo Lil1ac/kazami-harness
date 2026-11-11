@@ -1,8 +1,6 @@
-"""有界发现并冻结宿主技能文件；只加载明确选择的正文，不授予工具权限。"""
+"""安全扫描宿主登记目录，读取技能文件的头部或正文。"""
 
-from collections import Counter
 from dataclasses import dataclass
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -10,11 +8,11 @@ import stat
 
 import yaml
 
-from agent_harness.schemas import SkillOption, SkillSnapshot
+from agent_harness.schemas import SkillOption
 
 
 _NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # 名称同时用作子目录名，不接受路径分隔符。
-_FIELDS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
+_FIELDS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools", "disable-model-invocation"}  # 支持的 frontmatter 字段。
 
 
 class SkillError(Exception):
@@ -34,7 +32,7 @@ class _Candidate:
 
     name: str  # 子目录名；空串表示整个配置根目录不可扫描。
     source: Path  # 候选 SKILL.md 的绝对路径，目录级错误则是配置根目录。
-    error: SkillError | None = None  # 扫描期间发现的问题，None 表示仍需读取正文。
+    error: SkillError | None = None  # 扫描期间发现的问题，None 表示仍需检查文件头部。
 
 
 def _valid_name(name: object) -> bool:
@@ -56,7 +54,7 @@ def _signature(info: os.stat_result) -> tuple:
 
 
 class SkillCatalog:
-    """从宿主批准的集合目录发现技能；加载时生成完整原文字节对应的不可变快照。"""
+    """核验宿主登记集合中的文件，供统一技能库读取和解析。"""
 
     MAX_ROOTS = 8  # 一个目录集合配置最多 8 个根目录。
     MAX_ENTRIES = 256  # 所有根目录合计最多检查 256 个直接目录项，不递归。
@@ -125,40 +123,45 @@ class SkillCatalog:
                 candidates.append(_Candidate("", root, SkillError("skill_unreadable", "技能集合目录无法读取。")))
         return sorted(candidates, key=lambda item: (item.name, str(item.source)))
 
-    def _read(self, candidate: _Candidate) -> SkillSnapshot:
-        """读取 candidate 的完整文件并校验身份及规范，返回快照；失败抛带名称的 SkillError。"""
-        name, path = candidate.name, candidate.source
+    def read_text(self, path: Path, *, header_only: bool = False) -> tuple[str, tuple]:
+        """读取 path 的完整 UTF-8 文本或仅头部，返回文本及已核对的文件身份。"""
         try:
-            if candidate.error is not None:
-                raise candidate.error
             before = self._checked_path(path)
             if before[-1][3] > self.MAX_FILE_BYTES:
-                raise SkillError("skill_file_too_large", "技能正文超过单文件字节上限。")
-            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags)
-            with os.fdopen(descriptor, "rb", buffering=0) as stream:
+                raise SkillError("skill_file_too_large", "技能文件超过单文件字节上限。")
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(path, flags), "rb") as stream:
                 opened = os.fstat(stream.fileno())
                 if not stat.S_ISREG(opened.st_mode) or _signature(opened) != before[-1]:
                     raise SkillError("skill_file_changed", "读取期间技能文件发生变化。")
-                raw = stream.read(self.MAX_FILE_BYTES + 1)
+                if header_only:
+                    # 只解析 frontmatter，正文错误留到预览或真正启用时检查。
+                    lines = [stream.readline(self.MAX_FILE_BYTES + 1)]
+                    remaining = self.MAX_FILE_BYTES + 1 - len(lines[0])
+                    while lines[0].rstrip(b"\r\n") == b"---" and remaining > 0:
+                        line = stream.readline(remaining)
+                        if not line:
+                            break
+                        lines.append(line)
+                        remaining -= len(line)
+                        if line.rstrip(b"\r\n") == b"---":
+                            break
+                    raw = b"".join(lines)
+                else:
+                    raw = stream.read(self.MAX_FILE_BYTES + 1)
                 after = os.fstat(stream.fileno())
             if len(raw) > self.MAX_FILE_BYTES:
-                raise SkillError("skill_file_too_large", "技能正文超过单文件字节上限。")
-            if len(raw) != after.st_size or _signature(after) != before[-1] or self._checked_path(path) != before:
+                raise SkillError("skill_file_too_large", "技能文件超过单文件字节上限。")
+            if (not header_only and len(raw) != after.st_size) or _signature(after) != before[-1] or self._checked_path(path) != before:
                 raise SkillError("skill_file_changed", "读取期间技能文件或所在目录发生变化。")
-            content = raw.decode("utf-8", errors="strict")
-            metadata = self._metadata(content, name)
-            return SkillSnapshot(name=name, description=metadata["description"], source=str(path),
-                content=content, sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
-        except SkillError as error:
-            raise SkillError(error.code, error.message, name or None) from None
+            return raw.decode("utf-8"), before[-1]
         except UnicodeDecodeError:
-            raise SkillError("skill_invalid_encoding", "技能正文必须是完整的 UTF-8 文本。", name) from None
+            raise SkillError("skill_invalid_encoding", "技能文件必须是完整的 UTF-8 文本。") from None
         except (OSError, ValueError):
-            raise SkillError("skill_unreadable", "技能正文缺失、无法读取或已发生变化。", name) from None
+            raise SkillError("skill_unreadable", "技能文件缺失、无法读取或已发生变化。") from None
 
-    def _metadata(self, content: str, name: str) -> dict:
+    @staticmethod
+    def _metadata(content: str, name: str) -> dict:
         """校验完整 content 的 YAML frontmatter，返回元数据；不解释正文或执行附属资源。"""
         lines = content.splitlines()
         try:
@@ -181,6 +184,8 @@ class SkillCatalog:
             if "metadata" in data and (not isinstance(data["metadata"], dict) or
                     not all(isinstance(key, str) and isinstance(value, str) for key, value in data["metadata"].items())):
                 raise ValueError("metadata values")
+            if "disable-model-invocation" in data and type(data["disable-model-invocation"]) is not bool:
+                raise ValueError("invocation policy")
             # allowed-tools 仅作为原文保存；权限始终由宿主 Runner/工具注册表控制。
             return data
         except (ValueError, TypeError, RecursionError, yaml.YAMLError):
@@ -193,46 +198,16 @@ class SkillCatalog:
         except SkillError as error:
             return [SkillOption(name="", description="", source="", available=False,
                 error_code=error.code, error_message=error.message)]
-        counts = Counter(item.name for item in candidates if item.name)
         options = []
         for candidate in candidates:
             try:
-                if candidate.name and counts[candidate.name] > 1:
-                    raise SkillError("skill_duplicate_name", "多个技能目录使用相同名称，请先消除冲突。")
-                snapshot = self._read(candidate)
-                options.append(SkillOption(name=snapshot.name, description=snapshot.description, source=snapshot.source))
+                if candidate.error is not None:
+                    raise candidate.error
+                header, signature = self.read_text(candidate.source, header_only=True)
+                metadata = self._metadata(header, candidate.name)
+                options.append(SkillOption(name=candidate.name, description=metadata["description"], source=str(candidate.source),
+                    revision=repr(signature), manual_only=metadata.get("disable-model-invocation", False)))
             except SkillError as error:
                 options.append(SkillOption(name=candidate.name, description="", source=str(candidate.source),
                     available=False, error_code=error.code, error_message=error.message))
         return options
-
-    def load(self, names: list[str]) -> list[SkillSnapshot]:
-        """按 names 顺序冻结显式选择的技能；空选择立即返回，未选坏技能不读取、不阻塞。
-
-        重复选择、非法名称、同名目录、读取异常或字节限额失败均抛 SkillError；
-        返回值不授予任何脚本执行或工具权限，也不创建或修改文件。
-        """
-        if not names:
-            return []
-        if len(names) > self.MAX_SELECTED:
-            raise SkillError("skill_selection_limit", "本轮选择的技能超过数量上限。")
-        for name in names:
-            if not _valid_name(name):
-                raise SkillError("skill_invalid_name", "所选技能名称不符合规范。")
-        if len(set(names)) != len(names):
-            raise SkillError("skill_duplicate_name", "同一技能不能在一轮中重复选择。")
-        candidates = self._scan()
-        snapshots = []
-        total = 0
-        for name in names:
-            matches = [item for item in candidates if item.name == name]
-            if not matches:
-                raise SkillError("skill_not_found", "所选技能不存在或所在目录无法读取。", name)
-            if len(matches) > 1:
-                raise SkillError("skill_duplicate_name", "多个技能目录使用相同名称，请先消除冲突。", name)
-            snapshot = self._read(matches[0])
-            total += snapshot.size_bytes
-            if total > self.MAX_TOTAL_BYTES:
-                raise SkillError("skill_total_too_large", "所选技能正文合计超过字节上限。", name)
-            snapshots.append(snapshot)
-        return snapshots

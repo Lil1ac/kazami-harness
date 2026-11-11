@@ -13,7 +13,7 @@ from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.projects import ProjectPreset
 from agent_harness.projects.integration_files import git
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 from agent_harness.web.jobs import JobRequest
@@ -44,7 +44,7 @@ def application(root: Path):
         (project / "app.txt").write_bytes(b"USER\ntwo\nthree\n")
     config = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=Path(__file__).resolve().parents[2] / "frontend/dist", projects=[ProjectPreset(id="integration", label="成果采纳验收", path=project,
         test_argv=[sys.executable, "-c", "from pathlib import Path; assert Path('app.txt').read_text().startswith('ONE'); print('integration checks passed')"])])
-    app = create_app(config, RunConfig(tools=["read_file", "write_file"], permission_policy=PermissionPolicy(verification="allow")), root / "runs", model_client=IntegrationFixtureModel())
+    app = create_app(config, configured_run(tools=["read_file", "write_file"], permission_policy=PermissionPolicy(verification="allow")), root / "runs", model_client=IntegrationFixtureModel())
 
     def key(config) -> str:
         """为离线config返回固定占位值；不会读取或发送真实模型密钥。"""

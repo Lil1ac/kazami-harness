@@ -70,7 +70,7 @@ it('查看源码后审核精确定义，审核不等于运行脚本', async () =
   const user = setup();
   await screen.findByText('待审核');
   expect(reviewHook).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button', { name: '审核定义' }));
+  await user.click(screen.getByRole('button', { name: 'format' }));
   expect(screen.getByText('print("{}")')).toBeVisible();
   vi.mocked(reviewHook).mockResolvedValue({
     ...catalog,
@@ -84,7 +84,7 @@ it('查看源码后审核精确定义，审核不等于运行脚本', async () =
 it('定义变化拒绝审核时保留待审核状态与受控错误', async () => {
   const user = setup();
   await screen.findByText('待审核');
-  await user.click(screen.getByRole('button', { name: '审核定义' }));
+  await user.click(screen.getByRole('button', { name: 'format' }));
   vi.mocked(reviewHook).mockRejectedValue(new Error('定义已变化，请重新加载'));
   await user.click(screen.getByRole('button', { name: '信任此定义' }));
   await screen.findByText('定义已变化，请重新加载');

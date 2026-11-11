@@ -31,6 +31,7 @@ from agent_harness.work.planning import PlanningError
 from agent_harness.memory.service import MemoryError
 from agent_harness.web.memory import install_memory_routes
 from agent_harness.config import ConfigurationError
+from agent_harness.context.skills import SkillError
 from agent_harness.permissions.store import PermissionStore
 
 if TYPE_CHECKING:
@@ -95,6 +96,14 @@ def create_app(
     install_mcp_routes(app, manager, desktop)
     from agent_harness.web.model_providers import install_model_routes
     install_model_routes(app, manager)
+    from agent_harness.web.skills import install_skill_routes
+    install_skill_routes(app, manager.skills)
+
+    @app.exception_handler(SkillError)
+    async def skill_error(request: Request, error: SkillError) -> JSONResponse:
+        """为 request 返回受控技能错误，缺失为 404，版本冲突为 409。"""
+        status = 404 if error.code == "skill_not_found" else 409 if error.code in {"skill_stale", "skill_duplicate_name"} else 400
+        return _error(status, error.code, error.message)
 
     @app.exception_handler(ConversationError)
     async def conversation_error(request: Request, error: ConversationError) -> JSONResponse:

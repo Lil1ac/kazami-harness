@@ -118,13 +118,13 @@ export function ContextPanel({
         {context.skills === undefined ? (
           <p className="muted">此记录未保存技能快照，无法推断当时的加载情况。</p>
         ) : !context.skills.length && !context.skill_error ? (
-          <p className="muted">本轮未选择技能。</p>
+          <p className="muted">本轮未加载技能。</p>
         ) : (
           context.skills.map(
             /* 仅读取本轮持久化内容；目录当前版本不会覆盖这份历史。 */ (skill) => (
               <details className="skill-snapshot" key={skill.name}>
                 <summary>
-                  {skill.name} · {formatContextBytes(skill.size_bytes)}
+                  {skill.name} · {skill.activation === 'automatic' ? '自动' : '手动'} · {formatContextBytes(skill.size_bytes)}
                 </summary>
                 <p>{skill.description}</p>
                 <dl className="compact-dl">
@@ -142,6 +142,7 @@ export function ContextPanel({
                       <code>{skill.sha256}</code>
                     </dd>
                   </div>
+                  {skill.version && <div><dt>技能版本</dt><dd><code>{skill.version}</code></dd></div>}
                 </dl>
                 <p className="muted">建立本轮运行时固定的完整正文，后续文件修改不会改变此快照。</p>
                 <pre
@@ -150,6 +151,15 @@ export function ContextPanel({
                 >
                   {skill.content}
                 </pre>
+                {context.skill_resources?.filter((item) => item.name === skill.name).map(
+                  /* 来源和正文均来自当轮读取回执。 */ (item) => (
+                    <details key={item.path}>
+                      <summary>{item.path} · {formatContextBytes(item.size_bytes)}</summary>
+                      <p><code>{item.sha256}</code></p>
+                      <pre className="context-instruction-text" aria-label={'技能资料 ' + item.path}>{item.content}</pre>
+                    </details>
+                  ),
+                )}
               </details>
             ),
           )

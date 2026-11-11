@@ -25,7 +25,7 @@ from agent_harness.web.config import WebConfig, WebWorkspace
 PROBE = (
     "import agent_harness,json,os,sys;"
     "print(json.dumps({'source':agent_harness.__file__,'value':agent_harness.VALUE,"
-    "'has_key':'DEEPSEEK_API_KEY' in os.environ,'executable':sys.executable}))"
+    "'has_key':'HARNESS_TEST_MODEL_KEY' in os.environ,'executable':sys.executable}))"
 )  # 普通 Python 导入，不插入 sys.path 或 pytest pythonpath 参数。
 
 
@@ -77,7 +77,7 @@ def configuration(tmp_path: Path, *, verified: bool = True, kind: str = "project
         "from pathlib import Path; import agent_harness,os;"
         "assert Path(agent_harness.__file__).resolve().is_relative_to(Path.cwd()/'src');"
         "assert agent_harness.VALUE in {'first-change','second-change-expanded'};"
-        "assert 'DEEPSEEK_API_KEY' not in os.environ; print(agent_harness.__file__)"
+        "assert 'HARNESS_TEST_MODEL_KEY' not in os.environ; print(agent_harness.__file__)"
     )
     return WebConfig(
         project_dir=tmp_path, worktrees_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
@@ -111,7 +111,7 @@ async def finish(client: httpx.AsyncClient, response: httpx.Response) -> dict:
 @pytest.mark.parametrize("mode", ["local", "isolated"])
 def test_followups_share_current_sources_and_preserve_old_snapshot(tmp_path: Path, monkeypatch, mode: str) -> None:
     """mode 决定原目录或工作树；两轮命令/验收都使用该轮路径，旧运行快照原字节保持。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-source-paths")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-source-paths")
     config = configuration(tmp_path)
     model = ImportModel()
 
@@ -143,7 +143,7 @@ def test_followups_share_current_sources_and_preserve_old_snapshot(tmp_path: Pat
 @pytest.mark.parametrize("kind", ["project", "workspace"])
 def test_no_verifier_still_uses_selected_source(tmp_path: Path, monkeypatch, kind: str) -> None:
     """kind 为 Git 或普通目录；未登记验收也应使用所选源码，结果如实保持未验收。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-source-paths")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-source-paths")
     config = configuration(tmp_path, verified=False, kind=kind)
     model = ImportModel()
 
@@ -161,7 +161,7 @@ def test_no_verifier_still_uses_selected_source(tmp_path: Path, monkeypatch, kin
 
 def test_invalid_project_source_config_rejects_before_model(tmp_path: Path, monkeypatch) -> None:
     """显式配置缺失源码目录时，模型未调用且不建立运行或隐藏回退路径。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-source-paths")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-source-paths")
     config = configuration(tmp_path)
     config.projects[0].python_paths = ["missing"]
     model = ImportModel()
@@ -180,7 +180,7 @@ def test_invalid_project_source_config_rejects_before_model(tmp_path: Path, monk
 @pytest.mark.parametrize("kind", ["project", "workspace"])
 def test_project_settings_select_real_python_and_survive_restart(tmp_path: Path, monkeypatch, kind: str) -> None:
     """kind 对应 Git/普通目录；保存另一真实解释器不运行，实际工具与项目验收使用它，重启仍保存。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-execution")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-execution")
     config = configuration(tmp_path, kind=kind)
     environment = tmp_path / "selected-python"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True, capture_output=True)
@@ -217,7 +217,7 @@ def test_project_settings_select_real_python_and_survive_restart(tmp_path: Path,
 
 def test_interpreter_disappears_before_followup_preserves_shared_workspace(tmp_path: Path, monkeypatch) -> None:
     """有效解释器在首轮后消失时，新轮在模型前拒绝并还原管理状态；恢复入口后可正常续聊。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-missing-interpreter")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-missing-interpreter")
     config = configuration(tmp_path, verified=False)
     environment = tmp_path / "project-python"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True, capture_output=True)

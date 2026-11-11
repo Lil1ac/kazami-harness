@@ -1,4 +1,4 @@
-# 受控 MCP 工具接入与文档研究
+# 受控 MCP 工具接入与联网研究
 
 本轮覆盖 C10 的外部连接、工具发现与调用，以及 C17 的官方文档研究首版。桌面、独立 Web 和 CLI 共用 Runner、权限、工具预算及固定历史。Skills 的自主激活与附属资源、MCP 资源/提示模板浏览、OAuth、浏览器及图像能力仍属后续范围。
 
@@ -12,6 +12,12 @@
 6. 在“本轮详情 → 结果”查看外部资料、实际来源链接、结果和当轮配置快照。刷新、停用或后续改配置不会替换历史证据。
 
 公开文档服务可使用 `https://developers.openai.com/mcp`，选择 `search_openai_docs` 和 `fetch_openai_doc`。该服务只提供官方文档搜索与内容读取，不代表 Harness 接入了 OpenAI 模型，也不会代替用户调用 OpenAI API。
+
+## 通用网页搜索与原文读取
+
+在「运行配置 → 外部工具连接」添加远程 Streamable HTTP 连接，地址填写 `https://mcp.exa.ai/mcp`。按现有流程审核连接、发现工具并启用。用于仅研究模式时，先在「研究阶段与子 Agent 可用工具」勾选并保存 `web_search_exa` 和 `web_fetch_exa`。Exa 提供有频率限制的免密钥试用，凭据字段可留空。 [Exa MCP 官方说明](https://exa.ai/docs/get-started/exa-mcp)
+
+在任务高级设置或会话下一轮设置中选择上述两个工具。`web_search_exa` 搜索公开网页并返回结果摘录，`web_fetch_exa` 按所选 URL 读取正文。默认策略下，先核对并批准要发给 Exa 的查询或 URL。任务结束后，可在对应轮次的「结果 → 外部资料与调用」查看链接和工具回执。Exa 的来源列表使用结果条目报告的页面地址，正文中提到的其他链接保留在原始回执中。
 
 ## 认证与宿主策略
 
@@ -87,3 +93,9 @@ CLI 可在同一 `--runs-dir` 下引用页面已登记、审核并启用的连�
 刷新最新版页面后，最终轮仍显示独立检查通过；打开第2轮显示当时搜索结果与来源，同时保留该轮等待下一次审批的历史状态。停用或改配不改变旧回执的确定性链路由API专项覆盖。页面没有把历史轮的未验收状态替换为最终轮通过。
 
 本机截图位于 `output/playwright/mcp-search-approval.png`、`mcp-result-passed.png`、`mcp-history-sources.png` 和 `mcp-settings-mobile.png`。实际测量桌面文档宽度1280/视口1280，390px设置页在展开配置后文档宽度仍为390；截图已人工查看。完整原始日志保存在 `.runtime/mcp-delivery-*.log`、`.runtime/mcp-backend-last-special.log`、`.runtime/mcp-frontend-delivery.log`、`.runtime/mcp-frontend-last-special.log` 及原运行目录。
+
+### 2026-11-08 公开网页研究验收
+
+通过本机 Web 页面登记并审核免密钥 Exa MCP，调查样例项目从 Pydantic 1 升级时的 `BaseSettings` 迁移。真实 DeepSeek 读取样例项目并提出查询，经页面审批后在 `4a2dd7d6-9cdc-4c00-a7f9-5fdef5ed0fca` 获得实际搜索结果。随后的原文读取在连接阶段失败，同会话的新请求遇到模型传输错误，两次失败均保留原记录。
+
+最终使用固定测试模型隔离供应商传输，仍由真实 Exa 执行搜索和读取。`ae9c7e83-6bdc-48c2-9d47-8f7658eb4f86` 返回 8 个搜索命中。`1b8f3faa-e5b1-4835-b45e-19dc872a891f` 返回官方迁移指南和 GitHub 讨论的正文，只展示这两条读取来源。两次调用均经页面核对原参数并单独批准。服务重启后，两轮历史的日志哈希和页面来源一致，样例文件变更数为零。最终后端 MCP 回归 23 项通过，前端 MCP 与审批相关回归 10 项通过，前端生产构建通过。 [搜索历史截图](../output/playwright/exa-research/web_search_exa-history.png) · [读取历史截图](../output/playwright/exa-research/web_fetch_exa-history.png)

@@ -8,7 +8,7 @@ import httpx
 
 from agent_harness.desktop.host import DesktopHost
 from agent_harness.desktop.storage import PreferenceStore
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from tests.desktop.test_plan_export_integration import NativeDownload
@@ -23,9 +23,9 @@ def test_memory_export_native_destination_and_invalid_paths(tmp_path: Path):
     preferences = PreferenceStore(tmp_path / "desktop")
     preferences.update(downloads_directory=tmp_path / "downloads")
     native = NativeDownload()
-    host = DesktopHost(preferences, native, "memory-token", {"deepseek": "offline-key"})
+    host = DesktopHost(preferences, native, "memory-token")
     model = ScriptModel([])
-    app = create_app(web, RunConfig(), tmp_path / "records", model_client=model, desktop=host)
+    app = create_app(web, configured_run(), tmp_path / "records", model_client=model, desktop=host)
 
     async def scenario():
         """在真实认证应用保存并下载记忆，只模拟 Electron 文件落地，返回 None。"""

@@ -10,7 +10,7 @@ import httpx
 import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 
@@ -33,7 +33,7 @@ def application(root: Path):
     """为专属root构造全新应用；返回app，目录已由main核对，重启不重置用户操作。"""
     config = WebConfig(project_dir=root, worktrees_root=root / 'trees', frontend_dist=Path(__file__).resolve().parents[2] / 'frontend/dist',
                        workspaces=[WebWorkspace(id=name, label=label, path=root / name) for name, label in [('alpha', '日志工具'), ('beta', '文档项目')]])
-    app = create_app(config, RunConfig(tools=['write_file']), root / 'runs', model_client=ManagementModel())
+    app = create_app(config, configured_run(tools=['write_file']), root / 'runs', model_client=ManagementModel())
     app.state.manager._key_provider = lambda config: 'offline-management'  # config仅用于符合供应商凭据接口；不读取真实密钥。
     return app
 

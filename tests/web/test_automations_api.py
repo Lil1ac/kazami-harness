@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import httpx
 
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -25,7 +25,7 @@ def application(root: Path, responses: list, *, grants: bool = False):
     model = ScriptModel(responses)
     config = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=root / "dist",
                        workspaces=[WebWorkspace(id="project", label="项目", path=workspace)])
-    app = create_app(config, RunConfig(tools=["write_file", "read_file", "run_command"], permission_policy=PermissionPolicy(automation_grants=grants)), root / "runs", model_client=model)
+    app = create_app(config, configured_run(tools=["write_file", "read_file", "run_command"], permission_policy=PermissionPolicy(automation_grants=grants)), root / "runs", model_client=model)
     app.state.manager._key_provider = lambda config: "offline-automation"  # 离线测试不访问用户密钥。
     return app, workspace, model
 
@@ -57,7 +57,7 @@ def test_manual_run_persistent_origin_notifications_and_idempotence(tmp_path: Pa
         app, workspace, model = application(tmp_path, [reply(call("write_file", path="report.txt", content="巡检完成")), reply(text="完成")])
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
             request = definition()
-            request["task"]["config"] = {"provider": "qwen", "requested_model": "qwen-plus"}
+            request["task"]["config"] = {"provider": "custom-secondary", "requested_model": "fixture-review"}
             created = await client.post("/api/automations", json=request)
             assert created.status_code == 201, created.text
             rule = created.json()
@@ -70,7 +70,7 @@ def test_manual_run_persistent_origin_notifications_and_idempotence(tmp_path: Pa
             assert workspace.joinpath("report.txt").read_text(encoding="utf-8") == "巡检完成"
             run = (await client.get("/api/runs/" + fire["run_id"])).json()
             assert run["automation"]["rule_id"] == rule["id"]
-            assert run["config"]["provider"] == "qwen" and run["config"]["requested_model"] == "qwen-plus"
+            assert run["config"]["provider"] == "custom-secondary" and run["config"]["requested_model"] == "fixture-review"
             assert (await action(client, rule, "run", identifier)).status_code == 200
             assert len((await client.get(f"/api/automations/{rule['id']}/history")).json()["items"]) == 1
             messages = (await client.get("/api/automation-notifications")).json()["items"]

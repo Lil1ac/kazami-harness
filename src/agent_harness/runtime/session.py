@@ -8,7 +8,9 @@ from agent_harness.context.compression import ContextCompressor
 from agent_harness.context.archive import ContextArchive
 from agent_harness.providers.base import ModelClient, ModelResponse
 from agent_harness.schemas import SkillFailure, VerificationResult
-from agent_harness.context.skills import SkillCatalog, SkillError
+from agent_harness.context.skill_library import SkillLibrary
+from agent_harness.context.skill_runtime import SkillRuntime, recorded_skills
+from agent_harness.context.skills import SkillError
 from agent_harness.memory.service import MemoryController, MemoryError
 from agent_harness.work.planning import project_plan_history
 from agent_harness.tools.registry import ToolExecutor
@@ -71,40 +73,6 @@ def prepare_session(context: "RunContext", client: ModelClient, executor: ToolEx
     from agent_harness.runtime.runner import AgentStopped
 
     config = context.manifest.config
-    skills = []  # 每轮开始只读取一次；后续模型调用和历史页都使用固定快照。
-    skill_error = None  # 加载失败同样落盘受控事实，模型和工具均不执行。
-    try:
-        skills = ([item for item in inherited_context.skills if item.name in config.skills] if inherited_context is not None
-                  else SkillCatalog(config.skill_roots).load(config.skills))
-    except SkillError as error:
-        skill_error = SkillFailure(name=error.name, code=error.code, message=error.message)
-    builder = ContextBuilder(
-        Workspace(context.manifest.task.workspace, context.runs_root),
-        context.manifest.task, config, skills=skills,
-        instruction=inherited_context.instruction if inherited_context is not None else None,
-    )
-    try:
-        builder.memory = (inherited_context.memory.fork(context.manifest, context.emit) if inherited_context is not None
-                          else MemoryController(context.runs_root, context.manifest, context.emit))
-        executor.memory = builder.memory
-    except MemoryError as error:
-        context.emit("memory_failed", {"code": error.code, "message": error.message})
-        raise AgentStopped("failed", error.code) from None
-    if isinstance(executor, ToolExecutor) and context.manifest.delegation is None and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
-        from agent_harness.subagents.service import SubagentController
-        executor.subagents = SubagentController(context, client, executor)
-        context.subagent_controller = executor.subagents
-        from agent_harness.teams.controller import TeamController
-        executor.team = TeamController(context, executor.subagents)
-        executor.subagents.team = executor.team
-        executor.team.reconcile()
-    context.emit("context_prepared", {
-        "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
-        "skills": [item.model_dump(mode="json") for item in builder.skills],
-        "skill_error": skill_error.model_dump(mode="json") if skill_error is not None else None,
-    })
-    if builder.instruction.status == "error":
-        raise AgentStopped("failed", builder.instruction.error_code or "project_instructions_unreadable")
     inherited = []
     memory_history_changed = False  # 旧记忆工具被投影后不能复用覆盖旧内容的摘要区间。
     parent = None  # 仅核验后的父记录可提供工作摘要复用来源。
@@ -132,6 +100,51 @@ def prepare_session(context: "RunContext", client: ModelClient, executor: ToolEx
         inherited = projected
         if memory_history_changed:
             context.emit("memory_history_projected", {"reason": "旧轮记忆工具结果由新轮项目记忆替代，旧摘要不直接继承。"})
+    library = SkillLibrary(context.runs_root, config.skill_roots)
+    interactive = inherited_context is None and context.manifest.automation is None and config.permission_policy.read == "allow"
+    resume = (context.manifest.permission_resume is not None or context.manifest.execution_resume is not None
+              or context.manifest.human_decision is not None and context.manifest.human_decision.action == "approve")
+    skills, skill_resources, skill_error = [], [], None
+    try:
+        if inherited_context is not None:
+            skills = [item.model_copy(update={"resources": {}}) for item in inherited_context.skills if item.name in config.skills]
+        elif resume and parent is not None:
+            skills, skill_resources = recorded_skills(parent.events)
+        else:
+            skills = library.load(config.skills, resources=interactive)
+    except SkillError as error:
+        skill_error = SkillFailure(name=error.name, code=error.code, message=error.message)
+    builder = ContextBuilder(
+        Workspace(context.manifest.task.workspace, context.runs_root),
+        context.manifest.task, config, skills=skills,
+        instruction=inherited_context.instruction if inherited_context is not None else None,
+    )
+    if interactive and isinstance(executor, ToolExecutor) and (config.skill_auto or skills):
+        builder.skill_runtime = executor.skill_runtime = SkillRuntime(library, builder.skills, skill_resources,
+            automatic=config.skill_auto, emit=context.emit)
+    try:
+        builder.memory = (inherited_context.memory.fork(context.manifest, context.emit) if inherited_context is not None
+                          else MemoryController(context.runs_root, context.manifest, context.emit))
+        executor.memory = builder.memory
+    except MemoryError as error:
+        context.emit("memory_failed", {"code": error.code, "message": error.message})
+        raise AgentStopped("failed", error.code) from None
+    if isinstance(executor, ToolExecutor) and delegation is None and executor.readonly is None and {"read_file", "search_files"}.intersection(config.tools):
+        from agent_harness.subagents.service import SubagentController
+        executor.subagents = SubagentController(context, client, executor)
+        context.subagent_controller = executor.subagents
+        from agent_harness.teams.controller import TeamController
+        executor.team = TeamController(context, executor.subagents)
+        executor.subagents.team = executor.team
+        executor.team.reconcile()
+    context.emit("context_prepared", {
+        "instruction": builder.instruction.model_dump(mode="json"), "serialization": SERIALIZATION,
+        "skills": [item.model_dump(mode="json") for item in builder.skills],
+        "skill_resources": [item.model_dump(mode="json") for item in skill_resources],
+        "skill_error": skill_error.model_dump(mode="json") if skill_error is not None else None,
+    })
+    if builder.instruction.status == "error":
+        raise AgentStopped("failed", builder.instruction.error_code or "project_instructions_unreadable")
     archive = ContextArchive(context.store.run_dir, context.manifest)
     hooks = getattr(executor, "hooks", None)
     if hooks is not None and (context.manifest.permission_resume is not None or context.manifest.execution_resume is not None or delegation is not None and delegation.previous_run_id is not None):

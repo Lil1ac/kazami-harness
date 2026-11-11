@@ -12,12 +12,13 @@ import httpx
 
 from agent_harness.runtime.runner import run_task
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
+from tests.helpers.models import MODEL_TEST_TOML, configured_run
 from agent_harness.storage.runs import RunStore
 
 
 def _manifest(workspace: Path) -> RunManifest:
     """创建只读任务，使取消测试使用与真实 CLI 相同的运行契约。"""
-    return RunManifest(run_id=uuid4(), config=RunConfig(), task=TaskSpec(prompt="读取 app.log", workspace=workspace))
+    return RunManifest(run_id=uuid4(), config=configured_run(), task=TaskSpec(prompt="读取 app.log", workspace=workspace))
 
 
 def test_transport_cancellation_without_task_cancel_is_not_user_action(tmp_path: Path):
@@ -78,9 +79,9 @@ import signal
 import sys
 import httpx
 from agent_harness import cli
-from agent_harness.providers.deepseek import DeepSeekClient
+from agent_harness.providers.chat import ChatCompletionsClient
 
-original = DeepSeekClient.__init__
+original = ChatCompletionsClient.__init__
 
 async def handler(request):
     """用真实 SIGINT 模拟用户在请求等待中按下 Ctrl+C。"""
@@ -92,14 +93,16 @@ def offline_init(self, *args, **kwargs):
     kwargs['transport'] = httpx.MockTransport(handler)
     original(self, *args, **kwargs)
 
-DeepSeekClient.__init__ = offline_init
-raise SystemExit(cli.main(['run', '--task', '读取 app.log', '--workspace', sys.argv[1], '--runs-dir', sys.argv[2], '--json']))
+ChatCompletionsClient.__init__ = offline_init
+raise SystemExit(cli.main(['run', '--task', '读取 app.log', '--workspace', sys.argv[1], '--runs-dir', sys.argv[2], '--config', sys.argv[3], '--json']))
 '''
     env = os.environ.copy()
-    env["DEEPSEEK_API_KEY"] = "dummy-sigint-key"
+    env["HARNESS_TEST_MODEL_KEY"] = "dummy-sigint-key"
     env["PYTHONUTF8"] = "1"
     records = tmp_path / "records"
-    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path), str(records)], env=env, capture_output=True, encoding="utf-8", timeout=15)
+    profile = tmp_path / "model.toml"
+    profile.write_text(MODEL_TEST_TOML, encoding="utf-8")
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path), str(records), str(profile)], env=env, capture_output=True, encoding="utf-8", timeout=15)
     assert completed.returncode == 130, completed.stderr
     result = json.loads(completed.stdout)
     assert result["execution_status"] == "cancelled"

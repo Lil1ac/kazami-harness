@@ -12,6 +12,7 @@ from agent_harness.hooks.catalog import HookStore, discover, review
 from agent_harness.hooks.models import HookPolicy, HookRule, HookReview
 from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.schemas import RunConfig, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.work.tasks import TaskError
 from tests.runtime.test_runner import call, response, run_script
 
@@ -26,7 +27,7 @@ def configured(tmp_path: Path, event: str, script: str, *, trust: bool = True, *
     root = tmp_path / "records"
     rule = HookRule(id="check", event=event, argv=[sys.executable, str(entry)], **rule_options)
     policy = HookPolicy(rules=[rule])
-    config = RunConfig(tools=["read_file", "write_file", "edit_file", "run_command"], permission_policy=PermissionPolicy(command="allow", verification="allow"), hooks=policy)
+    config = configured_run(tools=["read_file", "write_file", "edit_file", "run_command"], permission_policy=PermissionPolicy(command="allow", verification="allow"), hooks=policy)
     manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="完成任务", workspace=workspace), config=config)
     if trust:
         store = HookStore(root)
@@ -216,7 +217,7 @@ def test_development_scope_inherits_review_without_loading_root_only_paths(tmp_p
     def context(workspace, delegation=None, parent=None):
         """构造 workspace/角色/父关系的最小只读上下文，返回命名空间，不运行模型或工具。"""
         return SimpleNamespace(runs_root=tmp_path / "records", result=SimpleNamespace(hooks={}), budget_parent=parent,
-                manifest=SimpleNamespace(run_id=uuid4(), task=SimpleNamespace(workspace=workspace), config=RunConfig(hooks=policy), delegation=delegation, automation=None))
+                manifest=SimpleNamespace(run_id=uuid4(), task=SimpleNamespace(workspace=workspace), config=configured_run(hooks=policy), delegation=delegation, automation=None))
 
     parent = HookController(context(parent_path), None)
     child = HookController(context(child_path, SimpleNamespace(role="develop"), SimpleNamespace(hooks=parent)), None)

@@ -117,6 +117,7 @@ export function useConversationSend(
     [conversation.latest_run_id],
   );
   const [skillChoice, setSkillChoice] = useState<SkillChoice | null>(null); // null 自动继承；[] 明确不加载。
+  const [skillAutoChoice, setSkillAutoChoice] = useState<RepairChoice | null>(null); // 自动使用状态只绑定下一轮普通消息。
   const [mcpChoice, setMcpChoice] = useState<{ parentId: string; tools: McpToolSelection[] } | null>(null); // 明确覆盖只属于当前最新轮。
   const mcpTools = mcpChoice?.parentId === conversation.latest_run_id ? mcpChoice.tools : run?.config.mcp_tools;
   const [repairChoice, setRepairChoice] = useState<RepairChoice | null>(null); // null继承本轮，不读取全局设置草稿。
@@ -136,6 +137,7 @@ export function useConversationSend(
   // 续轮默认读取最新真实配置；首轮页面的全局 draft.skills 不能覆盖继承结果。
   const skills =
     skillChoice?.parentId === conversation.latest_run_id ? skillChoice.names : run?.config.skills;
+  const skillAuto = skillAutoChoice?.parentId === conversation.latest_run_id ? skillAutoChoice.enabled : run?.config.skill_auto;
   const inFlight = useRef(false); // 同一事件循环中的连续 Enter 也只能开始一次发送。
   const [queuedJob, setQueuedJob] = useState<JobView | null>(null); // 已接纳作业，等待真正建立运行。
   useEffect(
@@ -191,6 +193,10 @@ export function useConversationSend(
             ? { parentId: view.run_id, names: choice.names }
             : null,
       );
+      setSkillAutoChoice(
+        /* 发送期间改变的开关属于下一条消息。 */ (choice) =>
+          choice && choice.enabled !== submission.body.config?.skill_auto ? { ...choice, parentId: view.run_id } : null,
+      );
       setText(
         /* 清空已发送正文，保留发送期间编辑的不同草稿。 */ (current) =>
           current.trim() === submission.body.prompt ? '' : current,
@@ -242,6 +248,7 @@ export function useConversationSend(
     if (inFlight.current || !canSend) return;
     const {
       skills: _previousTaskSkills,
+      skill_auto: _previousSkillAuto,
       mcp_tools: _previousMcpTools,
       auto_repair: _previousRepairChoice,
       memory: _previousMemoryChoice,
@@ -263,6 +270,7 @@ export function useConversationSend(
           memory,
           ...(autoRepair !== undefined ? { auto_repair: autoRepair } : {}),
           ...(skills !== undefined ? { skills } : {}),
+          ...(skillAuto !== undefined ? { skill_auto: skillAuto } : {}),
           ...(mcpTools !== undefined ? { mcp_tools: mcpTools } : {}),
         }),
       },
@@ -358,6 +366,9 @@ export function useConversationSend(
     text,
     setText,
     skills: skills || [],
+    skillAuto: Boolean(skillAuto),
+    setSkillAuto: /* 自动使用开关只影响下一轮普通请求。 */ (enabled: boolean) =>
+      setSkillAutoChoice({ parentId: conversation.latest_run_id, enabled }),
     mcpTools: mcpTools || [],
     setMcpTools: /* 只修改下一条普通消息，审批重试使用原冻结请求。 */ (tools: McpToolSelection[]) => setMcpChoice({ parentId: conversation.latest_run_id, tools }),
     autoRepair: Boolean(autoRepair),

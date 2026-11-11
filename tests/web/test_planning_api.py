@@ -63,7 +63,7 @@ class ScriptModel:
 @pytest.fixture
 def planning_config(tmp_path: Path, monkeypatch) -> WebConfig:
     """建立独立普通目录与离线密钥；返回配置，不执行用户项目或访问供应商网络。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-planning-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-planning-key")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "source.txt").write_text("原始内容", encoding="utf-8")
@@ -295,7 +295,7 @@ def test_host_required_policy_guards_auto_entry_and_cannot_be_overridden(plannin
 def test_planning_skips_project_tests_until_explicit_approval(project_config, monkeypatch, mode: str) -> None:
     """真实Git的mode覆盖原目录与隔离；规划不执行可能写文件的项目测试，批准后才检查。"""
     config = project_config
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-planning-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-planning-key")
     config.projects[0].test_argv = [sys.executable, "-c", "from pathlib import Path; Path('TEST_RAN').write_text('yes')"]
     original = (config.projects[0].path / "src/app.py").read_bytes()
     model = ScriptModel([reply(call("submit_plan", **PLAN)), reply(call("write_file", path="result.txt", content="通过批准")), reply()])

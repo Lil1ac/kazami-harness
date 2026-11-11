@@ -15,11 +15,27 @@ from agent_harness.mcp.store import McpStore, tool_name
 from agent_harness.work.tasks import TaskError
 
 
-def sources(value: dict) -> list[str]:
-    """从实际文本及结构结果抽取最多32个 HTTP 来源；不自动访问，也不把来源当权限指令。"""
+def sources(value: dict, *, service_url: str, tool: str) -> list[str]:
+    """从本次回执 value 提取最多 32 条网页地址，按 service_url 和原始工具名 tool 识别 Exa 格式。
+
+    本地服务的 service_url 为空。Exa 错误或截断回执返回空列表。来源始终只供查阅。
+    """
+    if urlsplit(service_url).hostname == "mcp.exa.ai" and tool in {"web_search_exa", "web_fetch_exa"}:
+        if value.get("isError") or value.get("truncated"):
+            return []
+        # Exa 将结果标题和 URL 放在相邻行。正文中的导航、示例和其他链接不属于本次结果。
+        heading = "Title: " if tool == "web_search_exa" else "# "
+        pattern = re.compile(
+            rf'^{re.escape(heading)}[^\r\n]+\r?\nURL:[ \t]+(https?://[^\s<>"\\`]+)[ \t]*\r?$',
+            re.MULTILINE,
+        )
+        urls = [url for block in value.get("content", []) if block.get("type") == "text"
+                for url in pattern.findall(block["text"])]
+    else:
+        urls = [match.rstrip(".,;，。）；)]}")
+                for match in re.findall(r'https?://[^\s<>"\\]+', json.dumps(value, ensure_ascii=False))]
     found = []
-    for match in re.findall(r"https?://[^\s<>\"\\]+", json.dumps(value, ensure_ascii=False)):
-        url = match.rstrip(".,;，。）；)]}")
+    for url in urls:
         try:
             parsed = urlsplit(url)
             if parsed.hostname and not parsed.username and not parsed.password and url not in found:
@@ -106,7 +122,7 @@ class McpController:
                 "code": error.code if isinstance(error, McpError) else "mcp_cancelled_unknown"})
             raise
         value = output["result"]
-        urls = sources(value)
+        urls = sources(value, service_url=config.url, tool=item["tool"]["name"])
         self.context.emit("mcp_call_result", {"name": name, "server_id": config.id, "tool": item["tool"]["name"],
             "fingerprint": item["record"]["fingerprint"], "protocol_version": output["protocol_version"], "sources": urls, "result": value})
         return {"ok": not value.get("isError", False), "data": {"server_id": config.id, "tool": item["tool"]["name"],

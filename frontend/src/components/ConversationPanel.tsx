@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Input, Select } from 'antd';
+import { Alert, Button, Checkbox, Input, Select, Popover, Tooltip } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -8,7 +8,11 @@ import {
   AuditOutlined,
   TeamOutlined,
   StopOutlined,
+  PauseOutlined,
+  SettingOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons';
+import './ConversationComposer.css';
 import { ModeSelect } from './ModeSelect';
 import { phaseLabel, modelFailureLabel } from '../format';
 import { useConversationSend } from '../hooks/useConversationSend';
@@ -33,7 +37,8 @@ interface ConversationPanelProps {
   conversation: ConversationView; // 当前会话的有序消息与继续条件。
   events: RunEvent[]; // 最新轮共享订阅，不为每条消息创建SSE。
   skills?: SkillOption[]; // 当前宿主目录仅用于下一条的选择，不改写旧轮证据。
-  onInspect: (runId: string, tab?: string) => void; // 查看某轮详情，不更改追加父轮。
+  onInspect: (runId: string, tab?: string, commandCallId?: string) => void; // 查看某轮详情或命令，不更改追加父轮。
+  decisionRef?: React.Ref<HTMLDivElement>; // 详情跳回待处理决定时，用于定位对话内唯一审批区。
   onConfirmed: (run: RunView) => void; // 服务确认新运行后原地更新会话与路由。
   onStop?: () => void; // 用户点击停止后由宿主取消当前运行；缺省不提供停止入口。
   stopping?: boolean; // 宿主正在清理或取消请求尚未返回。
@@ -78,13 +83,15 @@ function TurnMessage({
   events,
   onInspect,
   readOnly,
+  onRevealActivity,
 }: {
   turn: ConversationTurn; // 本轮唯一已接纳运行及独立结果。
   run?: RunView; // 最新运行快照，缺省时不伪造活动状态。
   latestId: string; // 唯一实时订阅对应的运行。
   events: RunEvent[]; // 最新运行共享的真实事件。
-  onInspect: (runId: string, tab?: string) => void; // 只改变检查器选择。
+  onInspect: ConversationPanelProps['onInspect']; // 只改变检查器选择。
   readOnly: boolean; // 归档会话仍展示旧消息，但不提供会话写入入口。
+  onRevealActivity: () => void; // 用户展开过程时暂停自动滚动。
 }) {
   const selected = turn.run_id === run?.run_id;
   const answer = selected && run?.active ? null : turn.final_answer; // 宿主检查和自动修复结束前，文字仍属于过程。
@@ -95,6 +102,14 @@ function TurnMessage({
         <div className="assistant-heading">
           <strong>Agent</strong>
           <span>第 {turn.turn_index} 轮</span>
+          <button
+            type="button"
+            className="text-button turn-inspect"
+            onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'result')}
+            aria-label={'查看第 ' + turn.turn_index + ' 轮详情'}
+          >
+            本轮详情
+          </button>
         </div>
         <TurnActivity
           runId={turn.run_id}
@@ -102,6 +117,10 @@ function TurnMessage({
           active={Boolean(selected && run?.active)}
           phase={phaseLabel(run?.phase || 'created')}
           finalAnswer={answer}
+          onReveal={onRevealActivity}
+          onOpenOutput={/* 工具调用只定位本轮日志，不会重放命令。 */ (callId) =>
+            onInspect(turn.run_id, 'output', callId)
+          }
           onInspect={
             /* 查看本轮轨迹，不改变下一条消息的发送目标。 */ () =>
               onInspect(turn.run_id, 'diagnostics')
@@ -131,14 +150,7 @@ function TurnMessage({
               )}
             </span>
           )}
-          <button
-            type="button"
-            onClick={/* 每轮详情始终指向本轮独立记录。 */ () => onInspect(turn.run_id, 'result')}
-            aria-label={'查看第 ' + turn.turn_index + ' 轮详情'}
-          >
-            本轮详情
-          </button>
-          {(run?.project || run?.local_changes) && (
+          {selected && (run.project || Boolean(run.local_changes?.files.length)) && (
             <button
               type="button"
               onClick={/* 代码差异和审阅属于所选轮。 */ () => onInspect(turn.run_id, 'files')}
@@ -151,6 +163,8 @@ function TurnMessage({
           runId={turn.run_id}
           active={Boolean(selected && run?.active)}
           readOnly={readOnly || !selected}
+          display="conversation"
+          onOpenOutput={/* 当轮只有命令摘要，完整日志在输出页。 */ () => onInspect(turn.run_id, 'output')}
         />
       </div>
     </div>
@@ -163,6 +177,7 @@ export function ConversationPanel({
   conversation,
   events,
   onInspect,
+  decisionRef,
   onConfirmed,
   onStop,
   stopping = false,
@@ -173,7 +188,7 @@ export function ConversationPanel({
   const runtime = useRuntimeControl(run?.run_id, Boolean(run?.active));
   const { tasks, planning } = useRunPlanning(run);
   const viewport = useRef<HTMLDivElement>(null); // 唯一消息纵向滚动区域。
-  const content = useRef<HTMLDivElement>(null); // 用尺寸变化补偿字体加载与过程展开。
+  const content = useRef<HTMLDivElement>(null); // 仅在跟随时用尺寸变化补偿流式内容或字体加载。
   const atBottom = useRef(true); // 用户上翻后关闭跟随，不打断历史阅读。
   const composing = useRef(false); // 中文输入法选字期间不能把Enter当发送。
   const [showJump, setShowJump] = useState(false); // 上翻后提供明确回到底部操作。
@@ -183,6 +198,12 @@ export function ConversationPanel({
     if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
     atBottom.current = true;
     setShowJump(false);
+  }
+
+  /** 用户主动展开历史内容时停在触发位置；再次跟随由滚动到底或按钮触发。 */
+  function pauseFollowing(): void {
+    atBottom.current = false;
+    setShowJump(true);
   }
   useLayoutEffect(
     /* 新消息、过程或发送状态改变时仅跟随底部读者。 */ () => {
@@ -314,6 +335,7 @@ export function ConversationPanel({
                   events={events}
                   onInspect={onInspect}
                   readOnly={conversation.management.state !== 'active'}
+                  onRevealActivity={pauseFollowing}
                 />
               </article>
             ),
@@ -327,20 +349,19 @@ export function ConversationPanel({
           {run?.context?.memory?.proposals?.length ? (
             <MemoryPanel runId={run.run_id} readOnly={conversation.management.state !== 'active'} />
           ) : null}
-          {run && planning?.pending && (
-            <PlanningPanel
-              runId={run.run_id}
-              state={planning!}
-              disabled={!send.canDecide}
-              onDecision={send.decide}
-            />
-          )}
-          {run?.result.permissions.pending && (
-            <PermissionPanel
-              run={run}
-              disabled={!send.canDecide || conversation.management.state !== 'active'}
-              onDecision={send.decideAction}
-            />
+          {run && (planning?.pending || run.result.permissions.pending) && (
+            <div ref={decisionRef} className="conversation-decisions" tabIndex={-1} aria-label="待处理决定">
+              {planning?.pending && (
+                <PlanningPanel runId={run.run_id} state={planning} disabled={!send.canDecide} onDecision={send.decide} />
+              )}
+              {run.result.permissions.pending && (
+                <PermissionPanel
+                  run={run}
+                  disabled={!send.canDecide || conversation.management.state !== 'active'}
+                  onDecision={send.decideAction}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -353,27 +374,12 @@ export function ConversationPanel({
         <div className="composer-inner">
           {send.queuedJob && (
             <p role="status">
-              请求已接纳 · <Link to={'/jobs/' + send.queuedJob.id}>查看后台作业</Link>
+              请求已接纳 · <Link to={'/jobs/' + send.queuedJob.id}>查看排队详情</Link>
             </p>
           )}
           {runtime.error && <Alert type="error" title={runtime.error} />}
           {runtime.pending && !runtime.sending && (
             <p role="status">运行中输入尚未确认，重试会核对原内容。</p>
-          )}
-          {runtime.query.data?.state?.status === 'pausing' && run?.active && (
-            <p role="status">正在暂停，等待当前操作和子任务安全收尾；需要立即终止可点击停止。</p>
-          )}
-          {run?.result.stop_reason === 'user_paused' && !run.active && (
-            <div className="composer-toolbar">
-              <span>已暂停 · 继续沿用剩余预算</span>
-              <Button
-                type="primary"
-                onClick={send.resume}
-                disabled={!conversation.can_continue || send.sending || !!send.pending}
-              >
-                恢复执行
-              </Button>
-            </div>
           )}
           {send.error && (
             <Alert
@@ -400,59 +406,74 @@ export function ConversationPanel({
               {conversation.continuation_notice}
             </p>
           )}
-          {run && (
-            <details className="composer-skills">
-              <summary>
-                下一轮设置 · {send.skills.length ? send.skills.join('、') : '未选择'}
-              </summary>
-              <McpSelector options={mcpTools} selected={send.mcpTools} onChange={send.setMcpTools} disabled={Boolean(send.pending)} />
-              <SkillSelector
-                label="下一轮技能"
-                options={skills}
-                selected={send.skills}
-                onChange={send.setSkills}
-                disabled={!run}
-              />
-              <Checkbox
-                checked={send.memory.use}
-                onChange={
-                  /* 下一轮读取选择不改变当前快照。 */ (event) =>
-                    send.setMemory({ ...send.memory, use: event.target.checked })
-                }
-              >
-                使用项目记忆
-              </Checkbox>
-              <Checkbox
-                checked={send.memory.capture}
-                onChange={
-                  /* 候选仍需人工确认。 */ (event) =>
-                    send.setMemory({ ...send.memory, capture: event.target.checked })
-                }
-              >
-                允许提出记忆候选
-              </Checkbox>
-              {run?.verification_kind === 'project_tests' && (
-                <Checkbox
-                  checked={send.autoRepair}
-                  onChange={
-                    /* 下一条要求沿用自己的预算；重试使用原请求冻结值。 */ (event) =>
-                      send.setAutoRepair(event.target.checked)
-                  }
-                >
-                  测试失败自动修复（最多2次）
-                </Checkbox>
-              )}
-              {send.confirming && (
-                <p className="muted">
-                  重试确认仍使用原请求的技能选择；这里的修改用于下一条新消息。
-                </p>
-              )}
-            </details>
+          {(run?.active || run?.result.stop_reason === 'user_paused') && (
+            <div className="composer-run-state" aria-label="运行控制">
+              <span className="composer-run-label" role="status">
+                <span className={run.active ? 'run-indicator is-active' : 'run-indicator'} />
+                {stopping
+                  ? '正在停止…'
+                  : run.active
+                    ? runtime.query.data?.state?.status === 'pausing'
+                      ? '正在安全暂停…'
+                      : phaseLabel(run.phase || 'running')
+                    : '已暂停'}
+              </span>
+              <div className="composer-run-actions">
+                {run.active ? (
+                  <>
+                    {conversation.management.state === 'active' && (
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label="暂停"
+                        icon={<PauseOutlined />}
+                        loading={runtime.pausing}
+                        disabled={stopping || runtime.query.data?.state?.status !== 'running'}
+                        onClick={/* 暂停意图提交后，等待宿主确认安全收尾。 */ () => runtime.pause()}
+                      >
+                        暂停
+                      </Button>
+                    )}
+                    {onStop && (
+                      <Tooltip title="立即停止当前执行">
+                        <Button
+                          type="text"
+                          size="small"
+                          aria-label="停止当前执行"
+                          icon={<StopOutlined />}
+                          loading={stopping}
+                          disabled={stopping}
+                          onClick={onStop}
+                        />
+                      </Tooltip>
+                    )}
+                  </>
+                ) : (
+                  <Tooltip title="沿用原授权和剩余预算">
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label="恢复执行"
+                      icon={<PlayCircleOutlined />}
+                      onClick={send.resume}
+                      disabled={
+                        conversation.management.state !== 'active' ||
+                        !conversation.can_continue ||
+                        send.sending ||
+                        !!send.pending
+                      }
+                    >
+                      继续
+                    </Button>
+                  </Tooltip>
+                )}
+              </div>
+            </div>
           )}
           <form className="message-composer" onSubmit={submit}>
             <Input.TextArea
               aria-label="输入消息"
-              placeholder="继续描述你想调整的内容…"
+              placeholder={run?.active ? '补充要求，或安排接下来的工作…' : '描述接下来要做的事…'}
               value={send.text}
               maxLength={65536}
               autoSize={{ minRows: 2, maxRows: 6 }}
@@ -486,70 +507,136 @@ export function ConversationPanel({
               }
             />
             <div className="composer-toolbar">
-              {run?.active ? (
-                <Select
-                  aria-label="运行中消息生效时机"
-                  value={runtime.delivery}
-                  onChange={runtime.setDelivery}
-                  disabled={Boolean(runtime.pending)}
-                  options={[
-                    { value: 'steer', label: '本轮补充' },
-                    { value: 'next', label: '下一轮执行' },
-                  ]}
-                />
-              ) : (
+              {!run?.active && (
                 <ModeSelect label="下一轮工作模式" value={send.mode} onChange={send.setMode} />
               )}
               <PermissionSelect
                 value={send.permissionMode}
                 onChange={send.setPermissionMode}
-                disabled={send.permissionBlocked || Boolean(run?.active) || run?.result.stop_reason === 'user_paused'}
-              />
-              <span className="composer-keyboard-hint">
-                {!run ? '正在核对最新运行状态…' : run.active ? '' : 'Enter 发送 · Shift+Enter 换行'}
-              </span>
-              {run?.active && conversation.management.state === 'active' && (
-                <Button
-                  aria-label="暂停"
-                  onClick={/* 暂停只改变调度意图；真实状态以宿主快照为准。 */ () => runtime.pause()}
-                  loading={runtime.pausing}
-                  disabled={stopping || runtime.query.data?.state?.status !== 'running'}
-                >
-                  暂停
-                </Button>
-              )}
-              {run?.active && onStop && (
-                <Button
-                  className="send-message"
-                  aria-label="停止当前执行"
-                  icon={<StopOutlined />}
-                  loading={stopping}
-                  disabled={stopping}
-                  onClick={onStop}
-                >
-                  停止
-                </Button>
-              )}
-              <Button
-                type="primary"
-                htmlType="submit"
-                className="send-message"
-                aria-label={runtime.pending || send.confirming ? '重试确认' : '发送消息'}
                 disabled={
-                  run?.active || runtime.pending
-                    ? conversation.management.state !== 'active' ||
-                      runtime.sending ||
-                      (!runtime.pending &&
-                        (!send.text.trim() ||
-                          send.text.length > 16000 ||
-                          runtime.query.data?.state?.status !== 'running'))
-                    : !send.canSend
+                  send.permissionBlocked ||
+                  Boolean(run?.active) ||
+                  run?.result.stop_reason === 'user_paused'
                 }
-                loading={runtime.sending || send.sending}
-                icon={runtime.pending || send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />}
-              >
-                {runtime.pending || send.confirming ? '重试确认' : '发送'}
-              </Button>
+              />
+              {run && (
+                <Popover
+                  trigger="click"
+                  placement="topLeft"
+                  title="下一轮设置"
+                  content={
+                    <div className="composer-settings">
+                      {' '}
+                      <McpSelector
+                        options={mcpTools}
+                        selected={send.mcpTools}
+                        onChange={send.setMcpTools}
+                        disabled={Boolean(send.pending)}
+                      />
+                      <SkillSelector
+                        label="下一轮技能"
+                        options={skills}
+                        selected={send.skills}
+                        onChange={send.setSkills}
+                        automatic={send.skillAuto}
+                        onAutomaticChange={send.setSkillAuto}
+                        disabled={!run}
+                      />
+                      <Checkbox
+                        checked={send.memory.use}
+                        onChange={
+                          /* 下一轮读取选择不改变当前快照。 */ (event) =>
+                            send.setMemory({ ...send.memory, use: event.target.checked })
+                        }
+                      >
+                        使用项目记忆
+                      </Checkbox>
+                      <Checkbox
+                        checked={send.memory.capture}
+                        onChange={
+                          /* 候选仍需人工确认。 */ (event) =>
+                            send.setMemory({ ...send.memory, capture: event.target.checked })
+                        }
+                      >
+                        允许提出记忆候选
+                      </Checkbox>
+                      {run?.verification_kind === 'project_tests' && (
+                        <Checkbox
+                          checked={send.autoRepair}
+                          onChange={
+                            /* 下一条要求沿用自己的预算；重试使用原请求冻结值。 */ (event) =>
+                              send.setAutoRepair(event.target.checked)
+                          }
+                        >
+                          测试失败自动修复（最多2次）
+                        </Checkbox>
+                      )}
+                      {send.confirming && (
+                        <p className="muted">
+                          重试确认仍使用原请求的技能选择；这里的修改用于下一条新消息。
+                        </p>
+                      )}
+                    </div>
+                  }
+                >
+                  <Tooltip title="技能、工具与下一轮设置">
+                    <Button
+                      type="text"
+                      className="composer-settings-trigger"
+                      aria-label="下一轮设置"
+                      icon={<SettingOutlined />}
+                    >
+                      {send.skills.length > 0 ? `技能 ${send.skills.length}` : null}
+                    </Button>
+                  </Tooltip>
+                </Popover>
+              )}
+              <div className="composer-send-area">
+                {run?.active && (
+                  <Select
+                    className="composer-delivery"
+                    aria-label="运行中消息生效时机"
+                    value={runtime.delivery}
+                    onChange={runtime.setDelivery}
+                    disabled={Boolean(runtime.pending)}
+                    variant="borderless"
+                    size="small"
+                    popupMatchSelectWidth={180}
+                    options={[
+                      { value: 'steer', label: '补充当前任务' },
+                      { value: 'next', label: '排到下一轮' },
+                    ]}
+                  />
+                )}
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  className="send-message"
+                  aria-label={runtime.pending || send.confirming ? '重试确认' : '发送消息'}
+                  disabled={
+                    run?.active || runtime.pending
+                      ? conversation.management.state !== 'active' ||
+                        runtime.sending ||
+                        (!runtime.pending &&
+                          (!send.text.trim() ||
+                            send.text.length > 16000 ||
+                            runtime.query.data?.state?.status !== 'running'))
+                      : !send.canSend
+                  }
+                  loading={runtime.sending || send.sending}
+                  icon={
+                    runtime.pending || send.confirming ? <ReloadOutlined /> : <ArrowUpOutlined />
+                  }
+                >
+                  {runtime.pending || send.confirming
+                    ? '重试确认'
+                    : run?.active
+                      ? runtime.delivery === 'next'
+                        ? '排队'
+                        : '补充'
+                      : '发送'}
+                </Button>
+              </div>
             </div>
           </form>
         </div>

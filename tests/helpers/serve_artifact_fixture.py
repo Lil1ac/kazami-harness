@@ -12,7 +12,7 @@ import uvicorn
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -77,8 +77,8 @@ def main() -> None:
     config = WebConfig(project_dir=project, worktrees_root=root / 'worktrees', frontend_dist=project / 'frontend/dist',
                        projects=[ProjectPreset(id='artifact-code', label='自动产物代码项目', path=git_root, test_argv=[sys.executable, '-c', check])],
                        workspaces=[WebWorkspace(id='artifact-files', label='普通目录', path=files_root)])
-    os.environ['DEEPSEEK_API_KEY'] = 'offline-artifacts-browser'
-    app = create_app(config, RunConfig(requested_model='offline-artifacts', tools=['run_command']), root / 'runs', model_client=ArtifactBrowserModel())
+    os.environ['HARNESS_TEST_MODEL_KEY'] = 'offline-artifacts-browser'
+    app = create_app(config, configured_run(requested_model='offline-artifacts', tools=['run_command']), root / 'runs', model_client=ArtifactBrowserModel())
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', timeout_graceful_shutdown=2)
 
 

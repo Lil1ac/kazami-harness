@@ -1,14 +1,28 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Select, Skeleton } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Collapse,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Skeleton,
+  Tabs,
+} from 'antd';
 import { CheckOutlined, UndoOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router';
 import { McpSettings } from '../components/McpSettings';
+import { SkillSettings } from '../components/SkillSettings';
 import { errorMessage, getOptions, saveDesktopSettings } from '../api';
-import { DesktopCredentials } from '../components/DesktopCredentials';
-import { CustomProviderPanel } from '../components/CustomProviderPanel';
+import { ModelServices } from '../components/ModelServices';
 import { HookSettings } from '../components/HooksPanel';
 import { effectiveConfig, useConfigDraft } from '../config';
-import type { ModelProvider, OptionsResponse, RoleModels, RunConfig, RunLimits, ToolName } from '../types';
+import { modelChoices, modelChoiceValue } from '../modelSelection';
+import './SettingsPage.css';
+import type { OptionsResponse, RoleModels, RunConfig, RunLimits, ToolName } from '../types';
 
 /** 用户可调整的总体预算；重试、清理和输出等内部限制由宿主配置维护。 */
 type TaskBudget = Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_timeout_seconds'>;
@@ -16,9 +30,8 @@ type TaskBudget = Pick<RunLimits, 'max_model_turns' | 'max_tool_calls' | 'run_ti
 /** 设置页仅收集直接影响下一次任务的模型、权限和总体预算。 */
 interface SettingsValues {
   downloads_directory?: string; // 桌面专用绝对下载目录，浏览器模式不提交。
-  provider: ModelProvider; // 默认使用的模型供应商。
-  requested_model: string; // 提交前去除首尾空白，不能为空。
-  role_models: RoleModels; // 未填写的角色沿用父会话模型。
+  model?: string; // 已登记的默认模型选项，空值表示交给宿主。
+  role_choices?: Partial<Record<keyof RoleModels, string>>; // 空值表示该角色继承会话。
   tools: ToolName[]; // 用户明确允许的基础工具，至少选择一项。
   limits: TaskBudget; // 三项总体预算，不包含隐藏的运行器阈值。
 }
@@ -50,9 +63,11 @@ const modelRoles = { explore: '探索', review: '审阅' } as const;
 /** 从完整 config 提取可编辑字段并返回独立表单值，不修改宿主配置或配置草稿。 */
 function settingsValues(config: RunConfig): SettingsValues {
   return {
-    provider: config.provider,
-    requested_model: config.requested_model,
-    role_models: { ...config.role_models },
+    model: modelChoiceValue(config),
+    role_choices: {
+      explore: modelChoiceValue(config.role_models.explore),
+      review: modelChoiceValue(config.role_models.review),
+    },
     tools: [...config.tools],
     limits: {
       max_model_turns: config.limits.max_model_turns,
@@ -77,33 +92,69 @@ export function SettingsPage() {
 /** 编辑后续任务配置；options 为宿主能力，桌面跨启动保存，浏览器使用临时覆盖。 */
 function SettingsForm({ options }: { options: OptionsResponse }) {
   const cache = useQueryClient();
+  const { hash } = useLocation(); // 新建任务的配置链接直接打开模型分类。
   const { draft, setDraft } = useConfigDraft();
   const [form] = Form.useForm<SettingsValues>();
   const [applied, setApplied] = useState(false); // 仅确认浏览器草稿已更新，不代表任务启动。
   const [saving, setSaving] = useState(false); // 桌面设置保存期间防止重复提交。
   const [failure, setFailure] = useState<string | null>(null); // 保存失败的受控提示。
-  const providerOptions = (Object.keys(options.model_providers) as ModelProvider[]).map(
-    /* 停用项仍显示已保存配置，但不允许新选。 */ (value) => ({
-      value, label: options.model_providers[value].name, disabled: !options.model_providers[value].enabled,
-    }),
+  const [section, setSection] = useState(
+    hash === '#model-services' || !Object.keys(options.model_providers).length
+      ? 'models'
+      : 'defaults',
+  ); // 当前设置分类；切换时保留未保存表单。
+  const [advanced, setAdvanced] = useState<string[]>([]); // 角色模型和预算默认收起，校验失败时展开对应区。
+  const [invalidField, setInvalidField] = useState<Parameters<typeof form.scrollToField>[0]>(); // 待分类与展开状态生效后定位。
+  const choices = modelChoices(options.model_providers);
+  useEffect(
+    /* 从配置直达链接进入时打开模型分类。 */ () => {
+      if (hash === '#model-services') setSection('models');
+    },
+    [hash],
   );
-  const builtinProviders = providerOptions.filter(/* 自定义连接在独立区管理。 */ ({ value }) => !options.model_providers[value].version);
+  useEffect(
+    /* 校验失败先显示字段所在分类，再把焦点交给首个无效控件。 */ () => {
+      if (!invalidField) return;
+      const frame = requestAnimationFrame(() => {
+        form.scrollToField(invalidField, { focus: true, block: 'center' });
+        setInvalidField(undefined);
+      });
+      return /* 分类变化或卸载时取消旧定位。 */ () => cancelAnimationFrame(frame);
+    },
+    [advanced, form, invalidField, section],
+  );
+  useEffect(
+    /* 新增、停用或调整服务商后同步模型字段，保留正在编辑的预算和工具。 */ () => {
+      const valid = new Set(modelChoices(options.model_providers).map(({ value }) => value));
+      const model = form.getFieldValue('model');
+      if (!model || !valid.has(model))
+        form.setFieldValue('model', modelChoiceValue(options.config));
+      for (const role of Object.keys(modelRoles) as (keyof RoleModels)[]) {
+        const value = form.getFieldValue(['role_choices', role]);
+        if (value && !valid.has(value)) form.setFieldValue(['role_choices', role], undefined);
+      }
+    },
+    [form, options.config, options.model_providers],
+  );
 
   /** 保存校验后的 values；桌面持久化公开设置，浏览器合入草稿，失败时保留输入供重试。 */
   async function apply(values: SettingsValues): Promise<void> {
     setFailure(null);
     const roleModels: RoleModels = {};
     for (const role of Object.keys(modelRoles) as (keyof RoleModels)[]) {
-      const selection = values.role_models?.[role];
-      if (selection?.provider) roleModels[role] = { ...selection, requested_model: selection.requested_model.trim() };
+      const choice = choices.find(({ value }) => value === values.role_choices?.[role]);
+      if (choice) roleModels[role] = choice.selection;
     }
-    const selection = { provider: values.provider, requested_model: values.requested_model.trim(), role_models: roleModels };
+    const main = choices.find(({ value }) => value === values.model)?.selection;
+    const selection = { ...main, role_models: roleModels };
     if (options.desktop) {
       setSaving(true);
       try {
         const updated = await saveDesktopSettings(
           {
             ...selection,
+            provider: main?.provider ?? null,
+            requested_model: main?.requested_model ?? null,
             tools: values.tools,
             limits: values.limits,
           },
@@ -139,156 +190,266 @@ function SettingsForm({ options }: { options: OptionsResponse }) {
     setDraft({});
     const values = settingsValues(options.config);
     form.setFieldsValue({ ...values, downloads_directory: options.desktop?.downloads_directory });
-    // 显式清理宿主未配置的角色，避免 rc-field-form 的对象合并保留原草稿。
-    form.setFieldValue('role_models', values.role_models);
+    // 显式清理宿主未配置的角色，避免表单合并保留原草稿。
+    form.setFieldValue('role_choices', values.role_choices);
     setApplied(false);
     setFailure(null);
   }
 
+  /** 提交可见分类的原生表单；两组字段合并校验，保存中忽略重复的 Enter。 */
+  function submitSettings(event: React.FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!saving) form.submit();
+  }
+
+  const editingDefaults = section === 'defaults' || section === 'desktop';
   return (
     <div className="settings-workspace">
-      <header className="page-heading">
-        <div>
-          <h1>运行配置</h1>
-          <p className="muted">
-            {options.desktop
-              ? '用于后续任务，退出后继续保留。'
-              : '用于本浏览器后续任务；刷新后恢复宿主默认。'}
-          </p>
-        </div>
+      <header className="page-heading settings-heading">
+        <h1>运行配置</h1>
       </header>
-      <div className="settings-layout">
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{
-            ...settingsValues(effectiveConfig(options.config, draft)),
-            downloads_directory: options.desktop?.downloads_directory,
-          }}
-          onFinish={apply}
-          onValuesChange={/* 继续编辑时撤去过期的应用确认。 */ () => setApplied(false)}
-          requiredMark={false}
-        >
-          <section className="settings-section">
-            <h2>模型与工具</h2>
-            <Form.Item name="provider" label="默认供应商" rules={[{ required: true }]}>
-              <Select virtual={false} options={providerOptions} onChange={/* 切换后使用该供应商自己的默认标识。 */ (provider: ModelProvider) =>
-                form.setFieldValue('requested_model', options.model_providers[provider].default_model)} />
-            </Form.Item>
-            <Form.Item
-              name="requested_model"
-              label="模型名称"
-              rules={[{ required: true, whitespace: true, message: '请填写模型名称' }]}
-            >
-              <Input maxLength={200} />
-            </Form.Item>
-            {(Object.keys(modelRoles) as (keyof RoleModels)[]).map((role) => (
-              <div key={role} className="limits-grid">
-                <Form.Item name={['role_models', role, 'provider']} label={modelRoles[role] + '供应商'}>
-                  <Select allowClear virtual={false} placeholder="继承会话" options={providerOptions}
-                    onChange={/* 继承时清空模型标识，显式选择时填入对应默认模型。 */ (provider?: ModelProvider) =>
-                      form.setFieldValue(['role_models', role, 'requested_model'], provider ? options.model_providers[provider].default_model : undefined)} />
-                </Form.Item>
-                <Form.Item noStyle dependencies={[[ 'role_models', role, 'provider' ]]}>
-                  {/* 只有独立供应商选择时才收集该角色模型。 */}
-                  {({ getFieldValue }) => getFieldValue(['role_models', role, 'provider']) && (
-                    <Form.Item name={['role_models', role, 'requested_model']} label={modelRoles[role] + '模型'}
-                      rules={[{ required: true, whitespace: true, message: '请填写模型名称' }]}>
-                      <Input maxLength={200} />
+      <Form
+        component={false}
+        form={form}
+        layout="vertical"
+        initialValues={{
+          ...settingsValues(effectiveConfig(options.config, draft)),
+          downloads_directory: options.desktop?.downloads_directory,
+        }}
+        onFinish={apply}
+        onFinishFailed={
+          /* 下载与默认项共用宿主保存接口，校验可能需要切到另一分类。 */ ({ errorFields }) => {
+            const field = errorFields[0]?.name;
+            if (!field) return;
+            setSection(field[0] === 'downloads_directory' ? 'desktop' : 'defaults');
+            if (field[0] === 'limits' || field[0] === 'role_choices') {
+              const key = field[0] === 'limits' ? 'budget' : 'roles';
+              setAdvanced((open) => (open.includes(key) ? open : [...open, key]));
+            }
+            setInvalidField(field);
+          }
+        }
+        onValuesChange={/* 新编辑撤去旧保存结果，错误保留到下一次提交。 */ () => setApplied(false)}
+        requiredMark={false}
+      >
+        <Tabs
+          className="settings-tabs"
+          activeKey={section}
+          onChange={setSection}
+          items={[
+            {
+              key: 'defaults',
+              label: '运行默认值',
+              forceRender: true,
+              children: (
+                <form
+                  id="settings-defaults-form"
+                  className="settings-tab-body"
+                  onSubmit={submitSettings}
+                >
+                  <section className="settings-primary settings-inline-field">
+                    <h2>默认模型</h2>
+                    {choices.length > 0 ? (
+                      <Form.Item name="model" label="默认模型">
+                        <Select virtual={false} options={choices} />
+                      </Form.Item>
+                    ) : (
+                      <p className="settings-inline-notice">
+                        尚无可用模型。{' '}
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={
+                            /* 模型管理独立保存，不覆盖当前运行草稿。 */ () => setSection('models')
+                          }
+                        >
+                          前往模型服务
+                        </button>
+                      </p>
+                    )}
+                  </section>
+                  <section className="settings-primary settings-inline-field">
+                    <h2>允许的工具</h2>
+                    <Form.Item
+                      name="tools"
+                      label="允许的工具"
+                      rules={[
+                        { required: true, type: 'array', min: 1, message: '至少选择一类工具' },
+                      ]}
+                    >
+                      <Checkbox.Group options={toolOptions} className="tools-options" />
                     </Form.Item>
-                  )}
-                </Form.Item>
-              </div>
-            ))}
-            <Form.Item
-              name="tools"
-              label="允许的工具"
-              rules={[{ required: true, type: 'array', min: 1, message: '至少选择一类工具' }]}
-            >
-              <Checkbox.Group options={toolOptions} className="tools-options" />
-            </Form.Item>
-          </section>
-          <section className="settings-section">
-            <h2>执行预算</h2>
-            <div className="limits-grid">
-              {limitFields.map(
-                /* 只开放总体预算；进程清理等内部限制继续按宿主快照执行。 */ (field) => (
-                  <Form.Item
-                    key={field.key}
-                    name={['limits', field.key]}
-                    label={field.label + '（' + field.unit + '）'}
-                    rules={[
-                      { required: true, message: '请填写大于零的预算' },
+                  </section>
+                  <Collapse
+                    ghost
+                    className="settings-advanced"
+                    activeKey={advanced}
+                    onChange={setAdvanced}
+                    items={[
+                      ...(choices.length > 0
+                        ? [
+                            {
+                              key: 'roles',
+                              label: '角色模型',
+                              forceRender: true,
+                              children: (
+                                <div className="settings-role-grid">
+                                  {Object.entries(modelRoles).map(([role, label]) => (
+                                    <Form.Item
+                                      key={role}
+                                      name={['role_choices', role]}
+                                      label={label}
+                                    >
+                                      <Select
+                                        allowClear
+                                        virtual={false}
+                                        placeholder="继承会话模型"
+                                        options={choices}
+                                      />
+                                    </Form.Item>
+                                  ))}
+                                </div>
+                              ),
+                            },
+                          ]
+                        : []),
                       {
-                        type: 'number',
-                        min: field.unit === '秒' ? 0.1 : 1,
-                        message: '预算必须大于零',
+                        key: 'budget',
+                        label: '执行预算',
+                        forceRender: true,
+                        children: (
+                          <div className="limits-grid">
+                            {limitFields.map((field) => (
+                              <Form.Item
+                                key={field.key}
+                                name={['limits', field.key]}
+                                label={field.label + '（' + field.unit + '）'}
+                                rules={[
+                                  { required: true, message: '请填写大于零的预算' },
+                                  {
+                                    type: 'number',
+                                    min: field.unit === '秒' ? 0.1 : 1,
+                                    message: '预算必须大于零',
+                                  },
+                                ]}
+                              >
+                                <InputNumber
+                                  min={field.unit === '秒' ? 0.1 : 1}
+                                  precision={field.unit === '秒' ? 1 : 0}
+                                />
+                              </Form.Item>
+                            ))}
+                          </div>
+                        ),
                       },
                     ]}
-                  >
-                    <InputNumber
-                      min={field.unit === '秒' ? 0.1 : 1}
-                      precision={field.unit === '秒' ? 1 : 0}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                ),
-              )}
-            </div>
-          </section>
-          {options.desktop && (
-            <section className="settings-section">
-              <h2>下载</h2>
-              <Form.Item
-                name="downloads_directory"
-                label="保存目录"
-                rules={[{ required: true, whitespace: true, message: '请填写绝对下载路径' }]}
-              >
-                <Input maxLength={4096} />
-              </Form.Item>
-            </section>
-          )}
-          {failure && <Alert type="error" title={failure} />}
-          <div className="settings-actions">
-            <Button type="primary" htmlType="submit" icon={<CheckOutlined />} loading={saving}>
-              {options.desktop ? '保存设置' : '应用到后续任务'}
-            </Button>
-            <Button onClick={reset} icon={<UndoOutlined />}>
-              {options.desktop ? '撤销更改' : '恢复宿主默认'}
-            </Button>
-            {applied && (
-              <span role="status" className="applied-note">
-                {options.desktop ? '已保存' : '已应用到本浏览器'}
+                  />
+                </form>
+              ),
+            },
+            {
+              key: 'models',
+              label: '模型服务',
+              children: (
+                <div className="settings-tab-body">
+                  <ModelServices options={options} />
+                </div>
+              ),
+            },
+            {
+              key: 'integrations',
+              label: '技能与集成',
+              children: (
+                <div className="settings-tab-body">
+                  <Tabs
+                    className="integration-tabs"
+                    defaultActiveKey="skills"
+                    animated={false}
+                    items={[
+                      {
+                        key: 'skills',
+                        label: '技能',
+                        children: <SkillSettings skills={options.skills || []} />,
+                      },
+                      { key: 'mcp', label: 'MCP', children: <McpSettings /> },
+                      {
+                        key: 'hooks',
+                        label: 'Hooks',
+                        children: <HookSettings projects={options.recent_projects} />,
+                      },
+                    ]}
+                  />
+                </div>
+              ),
+            },
+            ...(options.desktop
+              ? [
+                  {
+                    key: 'desktop',
+                    label: '桌面',
+                    forceRender: true,
+                    children: (
+                      <form
+                        id="settings-desktop-form"
+                        className="settings-tab-body"
+                        onSubmit={submitSettings}
+                      >
+                        <section className="settings-primary">
+                          <h2>下载</h2>
+                          <Form.Item
+                            name="downloads_directory"
+                            label="保存目录"
+                            rules={[
+                              { required: true, whitespace: true, message: '请填写绝对下载路径' },
+                            ]}
+                          >
+                            <Input maxLength={4096} />
+                          </Form.Item>
+                        </section>
+                        <section className="settings-primary settings-data">
+                          <h2>应用数据</h2>
+                          <code>{options.desktop.data_directory}</code>
+                        </section>
+                      </form>
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        {editingDefaults && (
+          <footer className="settings-save-bar">
+            {failure && <Alert type="error" title={failure} />}
+            <div className="settings-save-row">
+              <span className="settings-save-scope">
+                {applied ? (
+                  <span role="status" className="applied-note">
+                    {options.desktop ? '已保存' : '已应用到本浏览器'}
+                  </span>
+                ) : options.desktop ? (
+                  '用于后续任务，退出后保留。'
+                ) : (
+                  '应用于当前浏览器，刷新后恢复。'
+                )}
               </span>
-            )}
-          </div>
-        </Form>
-        <aside className="settings-aside">
-          {options.desktop ? builtinProviders.map(({ value }) => (
-            <DesktopCredentials key={value} provider={value} configured={options.model_providers[value].key_configured} />
-          )) : (
-            <section>
-              <h2>模型凭据</h2>
-              {builtinProviders.map(({ value, label }) => (
-                <p key={value}>{label} · <code>{options.model_providers[value].api_key_env}</code>{' '}
-                  {options.model_providers[value].key_configured ? '已配置' : '未配置'}</p>
-              ))}
-            </section>
-          )}
-          {options.desktop && (
-            <section>
-              <h2>应用数据</h2>
-              <p className="muted" style={{ overflowWrap: 'anywhere' }}>
-                {options.desktop.data_directory}
-              </p>
-            </section>
-          )}
-          <p className="muted">上下文、重试与输出限制由宿主 TOML 配置维护。</p>
-        </aside>
-      </div>
-      <CustomProviderPanel options={options} />
-      <HookSettings projects={options.recent_projects} />
-      <McpSettings />
+              <div className="settings-actions">
+                <Button onClick={reset} disabled={saving} icon={<UndoOutlined />}>
+                  {options.desktop ? '撤销更改' : '恢复宿主默认'}
+                </Button>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  form={section === 'desktop' ? 'settings-desktop-form' : 'settings-defaults-form'}
+                  icon={<CheckOutlined />}
+                  loading={saving}
+                >
+                  {options.desktop ? '保存设置' : '应用到后续任务'}
+                </Button>
+              </div>
+            </div>
+          </footer>
+        )}
+      </Form>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { errorMessage, getPermissions } from '../api';
 import type { ActionDecision, PermissionAction, PermissionMode, RunView } from '../types';
 import './PermissionPanel.css';
 import { readableCommand, ReviewDiff, ReviewFooter, ReviewHeading } from './ReviewSurface';
-import { DownOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { CheckOutlined, DownOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import './ComposerSelect.css';
 
 const modes = [
@@ -16,7 +16,14 @@ const modes = [
     description: '允许修改文件，命令与验收默认逐次审批',
   },
   { value: 'strict', label: '严格审批', description: '文件修改、命令与验收均需明确批准' },
-]; // 模式选择不能修改宿主策略，实际有效范围以服务端快照为准。
+].map(
+  /* 权限解释供悬停和读屏查阅，菜单仅显示模式名称。 */ ({ value, label, description }) => ({
+    value,
+    label,
+    title: description,
+    'aria-description': description,
+  }),
+); // 模式选择不能修改宿主策略，实际有效范围以服务端快照为准。
 const statusLabels: Record<string, string> = {
   pending: '待批准',
   approved: '已批准，等待执行',
@@ -47,9 +54,9 @@ export const PermissionSelect = memo(function PermissionSelect({
   onChange,
   disabled = false,
 }: {
-  value: PermissionMode;
-  onChange: (value: PermissionMode) => void;
-  disabled?: boolean;
+  value: PermissionMode; // 当前会话或草稿选择的权限模式。
+  onChange: (value: PermissionMode) => void; // 接收选中的权限模式，供下次提交。
+  disabled?: boolean; // 待确认或运行中锁定选择时为 true，默认允许编辑。
 }) {
   return (
     <Select
@@ -63,8 +70,8 @@ export const PermissionSelect = memo(function PermissionSelect({
       variant="borderless"
       size="small"
       suffixIcon={<DownOutlined />}
-      popupMatchSelectWidth={248}
-      classNames={{ popup: { root: 'composer-select-menu' } }}
+      popupMatchSelectWidth={136}
+      classNames={{ popup: { root: 'composer-mode-menu' } }}
       labelRender={
         /* 收起时仅保留图标与当前模式，不用解释文字撑大输入栏。 */ (option) => (
           <span className="mode-current">
@@ -74,14 +81,12 @@ export const PermissionSelect = memo(function PermissionSelect({
         )
       }
       optionRender={
-        /* 完整模式名称与行为说明只在选择时展示，不增加权限。 */ (option) => (
-          <div className="mode-option">
+        /* 与自动和先规划菜单共用单行布局，勾选仅反映当前值。 */ (option) => (
+          <span className="composer-mode-option">
             <SafetyCertificateOutlined aria-hidden />
-            <div>
-              <strong>{option.data.label}</strong>
-              <small>{option.data.description}</small>
-            </div>
-          </div>
+            <span>{option.data.label}</span>
+            {option.value === value && <CheckOutlined aria-hidden />}
+          </span>
         )
       }
     />
@@ -171,11 +176,13 @@ export function PermissionPanel({
   historical = false,
   disabled = false,
   onDecision,
+  hidePending = false,
 }: {
   run: RunView; // 本轮固定状态与实际宿主策略。
   historical?: boolean; // 历史使用当轮快照，不回查后续决定覆盖旧事实。
   disabled?: boolean; // 忙碌、归档或请求结果不明时禁止新决定。
   onDecision?: (action: ActionDecision['action']) => void; // 明确按钮事件，缺省仅供阅读。
+  hidePending?: boolean; // 审批正文已在对话时，诊断保留权限与历史而不重复展示。
 }) {
   const [historyOpen, setHistoryOpen] = useState(false); // 历史按需加载，打开不会批准或启动动作。
   const [historyOffset, setHistoryOffset] = useState(0); // 每页50项，分页只读取，不复制或修改动作。
@@ -197,8 +204,8 @@ export function PermissionPanel({
     queryKey: ['permissions', run.run_id, historical, historyOffset],
     queryFn: /* 仅读取审批历史，保留历史轮次绑定。 */ () =>
       getPermissions(run.run_id, historical, historyOffset),
-    enabled: historyOpen || Boolean(pending && !historical),
-    refetchInterval: !historical && (run.active || pending) ? 2000 : false,
+    enabled: historyOpen || Boolean(pending && !historical && !hidePending),
+    refetchInterval: !historical && (run.active || pending) && (historyOpen || !hidePending) ? 2000 : false,
   });
   const current =
     !historical && pending
@@ -251,7 +258,7 @@ export function PermissionPanel({
           Token{state.spent_usage_complete && run.result.usage_complete ? '' : '（不完整）'}
         </p>
       </details>
-      {pending && (
+      {pending && !hidePending && (
         <article className="permission-request" aria-label="动作审批">
           <ReviewHeading
             title={pending.name.startsWith('mcp_') ? '外部工具调用' : toolLabels[pending.name] || pending.name}

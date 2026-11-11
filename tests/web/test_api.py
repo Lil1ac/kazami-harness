@@ -151,7 +151,7 @@ def sse_frames(content: str) -> list[dict]:
 
 def test_submit_finishes_in_background_and_persists_unverified(web_config: WebConfig, monkeypatch):
     """使用事件模型验证提交后请求可返回、跨HTTP请求继续运行且最终结果与磁盘一致；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """在模型阻塞时检查运行，再释放并比较运行记录；所有等待均有5秒上限。"""
@@ -180,7 +180,7 @@ def test_submit_finishes_in_background_and_persists_unverified(web_config: WebCo
 
 def test_busy_queues_second_submission_without_second_record(web_config: WebConfig, monkeypatch):
     """首任务等待时第二请求排队且没有额外 Run；取消排队项后正常收尾，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """通过开始事件确定并发窗口，读取真实目录确认只创建一次运行记录。"""
@@ -201,7 +201,7 @@ def test_busy_queues_second_submission_without_second_record(web_config: WebConf
 
 def test_api_cancel_is_idempotent_and_keeps_unique_terminal(web_config: WebConfig, monkeypatch):
     """网页取消必须记录api_user来源；重复取消无重复终态，模型确实收到取消，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """模型开始后请求两次取消，检查落盘事实和取消来源，不依赖固定睡眠时机。"""
@@ -236,7 +236,7 @@ def test_api_cancel_is_idempotent_and_keeps_unique_terminal(web_config: WebConfi
 ])
 def test_invalid_submission_has_safe_error_and_no_record(web_config: WebConfig, monkeypatch, payload: dict):
     """payload为无效或越界的任务覆盖；要求启动前拒绝且不回显敏感输入、不落盘，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """提交非法字段或预置ID，并检查统一错误包装和记录根目录的零副作用。"""
@@ -254,12 +254,12 @@ def test_invalid_submission_has_safe_error_and_no_record(web_config: WebConfig, 
 
 def test_missing_key_is_rejected_before_record_creation(web_config: WebConfig, monkeypatch):
     """未配置模型密钥时网页可读取选项，但提交任务应在创建记录前失败；返回 None。"""
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("HARNESS_TEST_MODEL_KEY", raising=False)
 
     async def scenario():
         """读取脱敏选项后尝试提交，再确认运行根目录没有任务文件。"""
         async with api_client(web_config) as (client, app):
-            assert (await client.get("/api/options")).json()["model_providers"]["deepseek"]["key_configured"] is False
+            assert (await client.get("/api/options")).json()["model_providers"]["custom-fixture"]["key_configured"] is False
             response = await submit_run(client, json={"prompt": "离线任务", "workspace_id": "sample"})
             assert response.status_code in {400, 422, 503}
             assert response.json()["error"]["code"]
@@ -272,7 +272,7 @@ def test_missing_key_is_rejected_before_record_creation(web_config: WebConfig, m
 @pytest.mark.parametrize("valid", [True, False])
 def test_host_log_verifier_runs_after_model_and_exposes_real_result(web_config: WebConfig, monkeypatch, valid: bool):
     """valid控制真实报告是否正确，要求宿主检查器得到对应passed/failed并公开双流产物，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
     report = {"counts": {"auth": 1, "database": 2, "timeout": 3}, "total_errors": 6}
     if not valid:
         report["total_errors"] = 7
@@ -308,7 +308,7 @@ def test_host_log_verifier_runs_after_model_and_exposes_real_result(web_config: 
 
 def test_history_pagination_filter_and_options_never_serialize_key(web_config: WebConfig, monkeypatch):
     """顺序创建两次真实运行后验证历史分页和状态过滤，所有API响应均不泄露凭据，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """保存两个完成任务后读取不同页和脱敏配置，确认任务身份未被分页重复。"""
@@ -327,7 +327,7 @@ def test_history_pagination_filter_and_options_never_serialize_key(web_config: W
             assert second_view["config"]["limits"]["max_model_turns"] == 2
             assert second_view["config"]["limits"]["max_tool_calls"] == trusted_config().limits.max_tool_calls
             options = await client.get("/api/options")
-            assert options.json()["model_providers"]["deepseek"]["key_configured"] is True
+            assert options.json()["model_providers"]["custom-fixture"]["key_configured"] is True
             assert SECRET not in "".join([page1.text, page2.text, options.text, json.dumps(second_view)])
 
     asyncio.run(scenario())
@@ -335,7 +335,7 @@ def test_history_pagination_filter_and_options_never_serialize_key(web_config: W
 
 def test_sse_replays_exclusive_cursor_and_finite_terminal(web_config: WebConfig, monkeypatch):
     """已完成任务SSE按独占游标补发，事件唯一连续，Last-Event-ID生效且最后关闭；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """以分页事件作为事实源，分别比较query游标和重连header得到的有限SSE。"""
@@ -368,7 +368,7 @@ def test_sse_replays_exclusive_cursor_and_finite_terminal(web_config: WebConfig,
 
 def test_sse_disconnect_keeps_background_run_alive(web_config: WebConfig, monkeypatch):
     """用真实ASGI断连事件关闭订阅，确认这不会把模型任务取消，重新查询后仍可完成；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """在首条SSE消息发送后通知http.disconnect，使用ASGI2.3保证真实断流清理路径。"""
@@ -414,7 +414,7 @@ def test_sse_disconnect_keeps_background_run_alive(web_config: WebConfig, monkey
 
 def test_artifacts_require_registered_relative_reference(web_config: WebConfig, monkeypatch):
     """只允许访问已登记产物，拒绝穿越、绝对路径、未登记文件及内部manifest；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
     workspace = web_config.workspaces[0].path
     (workspace / "private.txt").write_text(SECRET, encoding="utf-8")
 
@@ -442,7 +442,7 @@ def test_artifacts_require_registered_relative_reference(web_config: WebConfig, 
 
 def test_registered_artifact_retargeted_to_outside_symlink_is_denied(web_config: WebConfig, monkeypatch):
     """登记后将文件替换为指向工作区外的链接，下载必须再次核查边界；平台无权限时跳过。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
     artifact = web_config.workspaces[0].path / "answer.txt"
     artifact.write_text("原始产物", encoding="utf-8")
     outside = web_config.project_dir / "outside.txt"
@@ -490,7 +490,7 @@ def test_static_spa_fallback_never_masks_api_or_asset_errors(web_config: WebConf
 
 def test_shutdown_cancels_and_persists_active_run(web_config: WebConfig, monkeypatch):
     """应用停服主动收尾后台任务，记录service_shutdown且唯一终态完整落盘；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """退出生命周期触发停服取消，不手动释放模型，再读取持久化终态检查未遗留运行。"""
@@ -610,7 +610,7 @@ def test_current_navigation_contract_has_one_project_list_and_no_retired_routes(
 
 def test_completed_history_survives_new_app_instance(web_config: WebConfig, monkeypatch):
     """完成任务可以由新应用实例恢复详情和事件，无需再次调用模型；返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """关闭第一实例后创建第二实例，比较磁盘恢复的终态与事件序号。"""
@@ -633,7 +633,7 @@ def test_completed_history_survives_new_app_instance(web_config: WebConfig, monk
 
 def test_cross_origin_or_foreign_host_cannot_create_task(web_config: WebConfig, monkeypatch):
     """跨站页面和外来Host请求在任务创建前拒绝；正常同源仍可提交，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """逐一请求跨Origin、跨站标记和伪造Host，再用同源请求证明服务仍可用。"""
@@ -657,7 +657,7 @@ def test_cross_origin_or_foreign_host_cannot_create_task(web_config: WebConfig, 
 
 def test_binary_download_and_bounded_unicode_preview(web_config: WebConfig, monkeypatch):
     """二进制拒绝文本预览但可完整下载，大文本按字节截断仍保持有效UTF8，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
     workspace = web_config.workspaces[0].path
     binary = b"\x89PNG\x00\xff\x01"
     text = "a" * 65535 + "中" + "文" * 20
@@ -687,7 +687,7 @@ def test_binary_download_and_bounded_unicode_preview(web_config: WebConfig, monk
 
 def test_sse_flushes_terminal_added_while_old_page_is_sending(web_config: WebConfig, monkeypatch):
     """旧事件页发送期间任务完成时，SSE仍必须补齐新增事件，再发送stream_end，返回 None。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
 
     async def scenario():
         """发送首条旧事件时释放模型并等后台结束，确定制造分页快照与终态之间的竞争窗口。"""

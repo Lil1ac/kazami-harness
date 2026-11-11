@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from agent_harness.schemas import RunConfig, RunLimits
+from tests.helpers.models import configured_run
 from agent_harness.tools import ToolExecutor
 
 
@@ -18,7 +19,7 @@ def executor(tmp_path: Path, *, preview_chars: int = 12000) -> ToolExecutor:
     return ToolExecutor(
         workspace,
         workspace / ".runs",
-        RunConfig(tools=["read_file"], limits=RunLimits(tool_output_preview_chars=preview_chars)),
+        configured_run(tools=["read_file"], limits=RunLimits(tool_output_preview_chars=preview_chars)),
     )
 
 

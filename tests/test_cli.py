@@ -1,6 +1,7 @@
 """通过真实 CLI 进程验证首个切片，不依赖密钥或网络。"""
 
 from tests.helpers.streaming import model_stream_response
+from tests.helpers.models import MODEL_TEST_TOML
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,14 +37,22 @@ def test_invalid_workspace_does_not_create_run(tmp_path: Path):
     assert not records.exists()
 
 
-@pytest.mark.parametrize("provider,key_env", [("deepseek", "DEEPSEEK_API_KEY"), ("qwen", "DASHSCOPE_API_KEY")])
+@pytest.mark.parametrize("provider,key_env", [("custom-fixture", "HARNESS_TEST_MODEL_KEY"), ("custom-secondary", "HARNESS_TEST_OTHER_KEY")])
 def test_missing_key_does_not_create_run_or_send_request(tmp_path: Path, provider: str, key_env: str):
     """验证显式 provider 缺少对应 key_env 时提前退出，另一供应商凭据不能代用。"""
     records = tmp_path / "records"
     env = os.environ.copy()
-    env.update(DEEPSEEK_API_KEY="offline-deepseek", DASHSCOPE_API_KEY="offline-qwen")
+    env.update(HARNESS_TEST_MODEL_KEY="offline-first", HARNESS_TEST_OTHER_KEY="offline-second")
     env.pop(key_env)
-    result = invoke("run", "--provider", provider, "--task", "测试任务", "--workspace", tmp_path, "--runs-dir", records, env=env)
+    config = tmp_path / "providers.toml"
+    config.write_text(MODEL_TEST_TOML + """
+[custom_providers.custom-secondary]
+name = "另一条测试连接"
+base_url = "https://secondary.example.test/v1"
+default_model = "second-model"
+api_key_env = "HARNESS_TEST_OTHER_KEY"
+""", encoding="utf-8")
+    result = invoke("run", "--config", config, "--provider", provider, "--task", "测试任务", "--workspace", tmp_path, "--runs-dir", records, env=env)
     assert result.returncode == 2
     assert key_env in result.stderr
     assert not records.exists()
@@ -80,9 +89,10 @@ def test_custom_provider_cli_uses_toml_and_real_loopback_stream(tmp_path: Path):
 name = "本机测试"
 base_url = "http://localhost:{server.server_port}/v1/"
 default_model = "loopback-model"
+models = ["loopback-other"]
 auth = "none"
 ''', encoding="utf-8")
-            result = invoke("run", "--provider", "custom-loopback", "--task", "离线连通测试",
+            result = invoke("run", "--provider", "custom-loopback", "--model", "loopback-other", "--task", "离线连通测试",
                             "--workspace", tmp_path, "--config", config, "--runs-dir", tmp_path / "records", "--json")
             assert result.returncode == 3, result.stderr  # 没有独立验收器时，CLI 用 3 表示执行完成但未验收。
             summary = json.loads(result.stdout)
@@ -90,7 +100,7 @@ auth = "none"
             assert len(requests) == 1
             path, auth, body = requests[0]
             assert path == "/v1/chat/completions" and auth is None
-            assert body["model"] == "loopback-model" and body["stream"] is True
+            assert body["model"] == "loopback-other" and body["stream"] is True
         finally:
             server.shutdown()
             thread.join(timeout=5)
@@ -125,7 +135,7 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
     from agent_harness.runtime.runner import run_task as actual_run
 
     secret = "dummy-cli-key"
-    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", secret)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "app.log").write_text("ERROR timeout", encoding="utf-8")
@@ -153,7 +163,7 @@ def test_cli_execution_and_history_preserve_unverified_answer(tmp_path: Path, mo
     monkeypatch.setattr(cli, "run_task", offline_run)
     records = tmp_path / "records"
     profile = tmp_path / "harness.toml"
-    profile.write_text("[limits]\nmax_model_turns = 4\nmax_tool_calls = 9\n", encoding="utf-8")
+    profile.write_text("[limits]\nmax_model_turns = 4\nmax_tool_calls = 9\n" + MODEL_TEST_TOML, encoding="utf-8")
     code = cli.main(["run", "--task", "统计 app.log", "--workspace", str(workspace), "--runs-dir", str(records), "--config", str(profile), "--max-model-turns", "7", "--json"])
     captured = capsys.readouterr()
     assert code == 3
@@ -176,7 +186,7 @@ def test_unknown_tool_fails_before_creating_run(tmp_path: Path):
     config = tmp_path / "unsupported.toml"
     config.write_text('tools = ["read_file", "unknown_tool"]\n', encoding="utf-8")
     env = os.environ.copy()
-    env["DEEPSEEK_API_KEY"] = "dummy-unused"
+    env["HARNESS_TEST_MODEL_KEY"] = "dummy-unused"
     records = tmp_path / "records"
     result = invoke("run", "--task", "测试", "--workspace", tmp_path, "--config", config, "--runs-dir", records, env=env)
     assert result.returncode == 2
@@ -191,7 +201,7 @@ def test_invalid_verifier_fails_before_creating_run(tmp_path: Path):
     verifier = tmp_path / "verifier.toml"
     verifier.write_text("argv = [" + json_module.dumps(str(tmp_path / "missing-verifier.exe")) + "]\n", encoding="utf-8")
     env = os.environ.copy()
-    env["DEEPSEEK_API_KEY"] = "dummy-unused"
+    env["HARNESS_TEST_MODEL_KEY"] = "dummy-unused"
     records = tmp_path / "records"
     result = invoke("run", "--task", "测试", "--workspace", tmp_path, "--verifier", verifier, "--runs-dir", records, env=env)
     assert result.returncode == 2
@@ -206,7 +216,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     from agent_harness import cli
     from agent_harness.runtime.runner import run_task as actual_run
 
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "dummy-cli-verifier-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "dummy-cli-verifier-key")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     report = {"counts": {"timeout": 3, "database": 2, "auth": 1}, "total_errors": 6 if correct else 7}
@@ -215,7 +225,7 @@ def test_cli_verifier_and_show_preserve_independent_details(tmp_path: Path, monk
     verifier = tmp_path / "verifier.toml"
     verifier.write_text("argv = " + json.dumps([sys.executable, str(checker)]) + "\ntimeout_seconds = 5.0\n", encoding="utf-8")
     profile = tmp_path / "trusted.toml"
-    profile.write_text('[permission_policy]\nverification="allow"\n', encoding="utf-8")  # 本用例显式预授权独立检查，默认审批由专门测试覆盖。
+    profile.write_text('[permission_policy]\nverification="allow"\n' + MODEL_TEST_TOML, encoding="utf-8")  # 本用例显式预授权独立检查。
     requests = []
 
     def handler(request):

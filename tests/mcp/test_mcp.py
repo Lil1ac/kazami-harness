@@ -15,10 +15,11 @@ import httpx
 import pytest
 
 from agent_harness.mcp.client import McpError, local_identity, perform, validate_schema
+from agent_harness.mcp.controller import sources
 from agent_harness.mcp.models import McpServerConfig
 from agent_harness.mcp.store import McpStore, tool_name
 from agent_harness.permissions.models import PermissionPolicy
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.work.tasks import TaskError
 from mcp.client.stdio import get_default_environment
 from tests.permissions.test_permissions import setup_app, decide
@@ -78,6 +79,20 @@ def test_external_schema_references_are_rejected():
     """目录和参数校验不能根据外部 $ref 发起额外网络请求。"""
     with pytest.raises(ValueError):
         validate_schema({"$ref": "https://example.test/secret-schema"})
+
+
+@pytest.mark.parametrize(("tool", "heading"), [("web_search_exa", "Title: "), ("web_fetch_exa", "# ")])
+def test_exa_sources_exclude_links_in_page_content(tool, heading):
+    """用 tool 对应的 heading 模拟真实 Exa 回执，核对来源、错误和截断。无返回值。"""
+    result = {"content": [{"type": "text", "text": (
+        f"{heading}迁移指南\nURL: https://example.test/guide\n\n"
+        "查看索引 https://example.test/llms.txt 或 `https://example.test/guide?goal=`。\n\n"
+        f"{heading}讨论\nURL: https://example.test/discussion\n\n正文"
+    )}]}
+    target = {"service_url": "https://mcp.exa.ai/mcp", "tool": tool}
+    assert sources(result, **target) == ["https://example.test/guide", "https://example.test/discussion"]
+    assert sources({**result, "isError": True}, **target) == []
+    assert sources({**result, "truncated": True}, **target) == []
 
 
 def test_page_approval_executes_exact_call_once_and_preserves_history(tmp_path, monkeypatch):
@@ -198,7 +213,7 @@ def test_timeout_or_cancel_disables_connection_without_replaying(tmp_path, monke
         """cancel=True 显式停止活动 Run；否则使用1秒调用时限，返回 None 并检查持久证据。"""
         config = config_for(tmp_path, monkeypatch, tool_timeout_seconds=1.0 if not cancel else 60.0)
         catalog = (await perform(config))["catalog"]
-        app, _, _ = setup_app(tmp_path, monkeypatch, [reply(call(tool_name("docs", "slow"), value="1"))], config=RunConfig(permission_policy=PermissionPolicy(external="allow")))
+        app, _, _ = setup_app(tmp_path, monkeypatch, [reply(call(tool_name("docs", "slow"), value="1"))], config=configured_run(permission_policy=PermissionPolicy(external="allow")))
         item, _ = register(app.state.manager.mcp, config, catalog)
         selection = {"name": tool_name("docs", "slow"), "fingerprint": item["fingerprint"]}
         async with app.router.lifespan_context(app):
@@ -241,7 +256,7 @@ def test_research_and_host_permissions_apply_to_dynamic_tools(tmp_path, monkeypa
         server = McpServerConfig(id="docs", label="文档", transport="http", url="https://example.test/mcp")
         catalog = [{"name": "lookup", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}]
         app, _, _ = setup_app(tmp_path, monkeypatch, [reply(call(tool_name("docs", "lookup"), query="research")), reply(text="结束")],
-            config=RunConfig(permission_policy=PermissionPolicy(external=host)))
+            config=configured_run(permission_policy=PermissionPolicy(external=host)))
         _, selection = register(app.state.manager.mcp, server, catalog, research=("lookup",) if research else ())
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
@@ -263,7 +278,7 @@ def test_readonly_child_inherits_only_reviewed_parent_tools_and_real_evidence(tm
         monkeypatch.setattr("agent_harness.mcp.controller.perform", perform_tool)
         child_call = call(tool_name("docs", "lookup"), query="child")
         report = json.dumps({"summary": "查询完成", "findings": [{"category": "observation", "title": "文档来源", "detail": "实际工具返回来源", "evidence_call_ids": [child_call.call_id]}], "limitations": [], "pending": [], "complete": True}, ensure_ascii=False)
-        app, model, _ = setup_app(tmp_path, monkeypatch, [reply(call("delegate_readonly", title="文档研究", objective="查询指定参考资料", max_model_turns=3)), reply(child_call), reply(text=report), reply(text="父总结")], config=RunConfig(tools=["read_file"], permission_policy=PermissionPolicy(external="allow")))
+        app, model, _ = setup_app(tmp_path, monkeypatch, [reply(call("delegate_readonly", title="文档研究", objective="查询指定参考资料", max_model_turns=3)), reply(child_call), reply(text=report), reply(text="父总结")], config=configured_run(tools=["read_file"], permission_policy=PermissionPolicy(external="allow")))
         server = McpServerConfig(id="docs", label="文档", transport="http", url="https://example.test/mcp")
         catalog = [{"name": "lookup", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}, {"name": "change", "inputSchema": {"type": "object"}}]
         item, selection = register(app.state.manager.mcp, server, catalog)
@@ -346,8 +361,8 @@ def test_desktop_credential_update_revokes_old_authority_and_blocks_retrust(tmp_
                 return None
 
         native = Native()
-        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64, {"deepseek": "test-key"})
-        app = create_app(WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist"), RunConfig(), tmp_path / "runs", desktop=host)
+        host = DesktopHost(PreferenceStore(tmp_path / "data"), native, "a" * 64)
+        app = create_app(WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist"), configured_run(), tmp_path / "runs", desktop=host)
         server = McpServerConfig(id="docs", label="文档", transport="http", url="https://example.test/mcp")
         item, _ = register(app.state.manager.mcp, server, [])
         async with app.router.lifespan_context(app):

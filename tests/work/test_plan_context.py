@@ -14,6 +14,7 @@ from agent_harness.work.planning import PlanningController, PlanningError, ReadP
 from agent_harness.providers.base import ModelResponse
 from agent_harness.runtime.runner import run_task
 from agent_harness.schemas import DecisionRecord, PlanRevision, PlanningState, PlanStep, RunConfig, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore
 from agent_harness.execution.workspace import Workspace
 from tests.context.test_compression import _manifest, _summary
@@ -47,7 +48,7 @@ def test_current_plan_projection_shrinks_history_and_refreshes_without_mutating_
         events.append((kind, deepcopy(payload)))
 
     controller = PlanningController(state, tmp_path, emit)
-    builder = ContextBuilder(Workspace(tmp_path, tmp_path / "runs"), TaskSpec(prompt="继续执行", workspace=tmp_path), RunConfig())
+    builder = ContextBuilder(Workspace(tmp_path, tmp_path / "runs"), TaskSpec(prompt="继续执行", workspace=tmp_path), configured_run())
     messages = builder.initial_messages()
     builder.bind_planning(controller, messages[0]["content"])
     messages[0]["content"] += controller.instructions()
@@ -63,7 +64,7 @@ def test_current_plan_projection_shrinks_history_and_refreshes_without_mutating_
     assert messages == original and len(controller.state.plans) == 12
     from agent_harness.work.tasks import WorkStore, TaskController, TaskUpdate
     from agent_harness.schemas import RunManifest
-    tasks = TaskController(WorkStore(tmp_path / "records"), RunManifest(run_id=uuid4(), task=TaskSpec(prompt="继续", workspace=tmp_path), config=RunConfig(), planning=state), controller)
+    tasks = TaskController(WorkStore(tmp_path / "records"), RunManifest(run_id=uuid4(), task=TaskSpec(prompt="继续", workspace=tmp_path), config=configured_run(), planning=state), controller)
     builder.tasks = tasks
     task = tasks.service.store.snapshot(tasks.service.session)["items"][0]
     tasks.service.update(TaskUpdate(request_id="start", task_id=task["id"], expected_revision=1, status="in_progress"))

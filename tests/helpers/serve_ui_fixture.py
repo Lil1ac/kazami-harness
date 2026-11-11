@@ -12,6 +12,7 @@ import uvicorn
 from agent_harness.providers.base import ModelDelta, ModelResponse, ToolCall
 from agent_harness.runtime.runner import REQUEST_CONTEXT
 from agent_harness.schemas import RunConfig, RunLimits
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 
@@ -71,7 +72,7 @@ class WorkspaceFixtureModel:
 def application(root: Path, fast: bool = False):
     """为专属 root 构造应用；fast 控制演示速度，返回 ASGI 应用，不读取真实模型密钥。"""
     config = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=Path(__file__).resolve().parents[2] / "frontend/dist", workspaces=[WebWorkspace(id="workspace", label="计算工具", path=root / "project"), WebWorkspace(id="notes", label="项目文档", path=root / "notes")])
-    app = create_app(config, RunConfig(tools=["read_file", "search_files", "write_file"], limits=RunLimits(max_model_turns=24, max_tool_calls=40)), root / "runs", model_client=WorkspaceFixtureModel(fast))
+    app = create_app(config, configured_run(tools=["read_file", "search_files", "write_file"], limits=RunLimits(max_model_turns=24, max_tool_calls=40)), root / "runs", model_client=WorkspaceFixtureModel(fast))
     app.state.manager._key_provider = lambda config: "offline-ui-fixture"  # config 仅遵循固定接口，无真实凭据。
     return app
 

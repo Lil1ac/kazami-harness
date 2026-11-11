@@ -9,7 +9,7 @@ import httpx
 
 from agent_harness.desktop.host import DesktopHost
 from agent_harness.desktop.storage import PreferenceStore
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from tests.web.test_planning_api import PLAN, ScriptModel, call, finished, planning_config, reply
 
@@ -35,9 +35,9 @@ def test_desktop_download_uses_same_plan_artifact_and_configured_directory(plann
     preferences = PreferenceStore(config.project_dir / "desktop")
     destination = config.project_dir / "downloads"
     preferences.update(downloads_directory=destination)
-    host = DesktopHost(preferences, native, "offline-token", {"deepseek": "offline-key"})
+    host = DesktopHost(preferences, native, "offline-token")
     model = ScriptModel([reply(call("submit_plan", **PLAN))])
-    app = create_app(config, RunConfig(tools=["read_file"]), config.project_dir / "records", model_client=model, desktop=host)
+    app = create_app(config, configured_run(local=True, tools=["read_file"]), config.project_dir / "records", model_client=model, desktop=host)
 
     async def scenario() -> None:
         """在真实认证 HTTP 服务中提交和下载；校验原生参数与状态，不模拟计划或附件服务。"""

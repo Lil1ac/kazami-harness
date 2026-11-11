@@ -192,6 +192,8 @@ def validate_execution(manifest: RunManifest, api_key: str) -> None:
     验收入口由配置模块启动预检并固定，密钥不写入 manifest 或日志。
     """
     config = manifest.config
+    if config.provider is None:
+        raise ConfigurationError("请先添加模型服务并选择模型。")
     if any(not config.custom_providers[provider].enabled for provider in config.selected_providers() & config.custom_providers.keys()):
         raise ConfigurationError("所选自定义服务商已停用，请重新选择。")
     if config.requires_model_key and not valid_model_key(api_key):

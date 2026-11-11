@@ -14,6 +14,7 @@ import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import ContextPolicy, RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -101,7 +102,7 @@ async def _finished(client: httpx.AsyncClient, run_id: str) -> dict:
 
 def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """页面式提交和追加使用真实文件与持久记录，重启后只读恢复压缩证据且不重入模型。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-compression-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-compression-key")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "AGENTS.md").write_bytes("保留 RULE_COMPRESSION。\n".encode("utf-8"))
@@ -109,7 +110,7 @@ def test_compression_followup_and_restart_keep_evidence(tmp_path: Path, monkeypa
     (workspace / "app.py").write_bytes(b"def add(a,b):\n    return a-b\n")
     config = WebConfig(project_dir=tmp_path, worktrees_root=tmp_path / "copies", frontend_dist=tmp_path / "dist",
                        workspaces=[WebWorkspace(id="code", label="压缩任务", path=workspace)])
-    host = RunConfig(tools=["read_file", "write_file"], context=ContextPolicy(
+    host = configured_run(tools=["read_file", "write_file"], context=ContextPolicy(
         compression="hybrid", max_input_bytes=15000, keep_recent_groups=1, inline_tool_bytes=1024, max_summary_calls=4,
     ))
     include_planning_overhead(host, workspace, tmp_path / "runs")

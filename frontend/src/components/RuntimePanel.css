@@ -7,15 +7,33 @@
 }
 .runtime-command {
   min-width: 0;
-  border-block: 1px solid var(--line);
-  padding: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 .runtime-command summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  list-style: none;
   cursor: pointer;
+}
+.runtime-command summary:hover {
+  background: var(--hover);
+}
+.runtime-command summary::-webkit-details-marker {
+  display: none;
+}
+.runtime-chevron {
+  color: var(--muted);
+  font-size: 10px;
+  transform: rotate(-90deg);
+}
+.runtime-command[open] > summary .runtime-chevron {
+  transform: none;
 }
 .runtime-command summary code {
   min-width: 0;
@@ -23,46 +41,73 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.runtime-command summary span {
-  flex-shrink: 0;
-  font-size: 12px;
+.runtime-command-status {
+  font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
+}
+.runtime-command-status[data-status='failed'] {
+  color: var(--danger);
+}
+.runtime-command-body {
+  min-width: 0;
+  padding: 0 10px 10px;
 }
 .runtime-command-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-block: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .runtime-command-meta code {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  flex: 1 1 140px;
+}
+.runtime-command-issue {
+  color: var(--danger);
 }
 .runtime-command pre {
   margin: 8px 0 0;
-  max-height: 260px;
+  max-height: min(40vh, 340px);
   overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  padding: 10px;
+  overscroll-behavior: contain;
+  white-space: pre;
+  padding: 10px 12px;
   background: var(--code-bg);
   border-radius: 6px;
   font-size: 12px;
+  line-height: 1.65;
 }
 .runtime-stream {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  margin-top: 10px;
 }
-.runtime-stream select {
-  padding: 3px 6px;
+.runtime-log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.runtime-output-link {
+  justify-self: start;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 4px 9px;
+  background: transparent;
   color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.runtime-output-link:hover {
+  background: var(--hover);
+}
+.runtime-output-link span {
+  color: var(--muted);
+  padding-inline-start: 4px;
 }
 .runtime-message {
   margin-left: auto;
@@ -91,14 +136,6 @@
   font-size: 12px;
 }
 @media (max-width: 600px) {
-  .runtime-command summary {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .runtime-command summary code {
-    max-width: 100%;
-  }
   .runtime-message {
     width: 96%;
   }

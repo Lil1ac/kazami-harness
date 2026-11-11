@@ -12,7 +12,7 @@ import uvicorn
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -63,8 +63,8 @@ def main() -> None:
                 subprocess.run(['git',*argv],cwd=source,capture_output=True,check=True,timeout=15)
             (source/'local.txt').write_text('用户未提交文件保持。\n',encoding='utf-8')
         presets.append(ProjectPreset(id='nav-'+name,label=label,path=source,test_argv=[sys.executable,'-m','pytest','-q'],test_timeout_seconds=30))
-    os.environ['DEEPSEEK_API_KEY']='offline-navigation-browser'
-    app=create_app(WebConfig(project_dir=project,worktrees_root=root/'copies',frontend_dist=project/'frontend/dist',projects=presets),RunConfig(tools=['read_file','write_file']),root/'runs',model_client=NavigationModel())
+    os.environ['HARNESS_TEST_MODEL_KEY']='offline-navigation-browser'
+    app=create_app(WebConfig(project_dir=project,worktrees_root=root/'copies',frontend_dist=project/'frontend/dist',projects=presets),configured_run(tools=['read_file','write_file']),root/'runs',model_client=NavigationModel())
     uvicorn.run(app,host='127.0.0.1',port=args.port,loop='asyncio',timeout_graceful_shutdown=2)
 
 

@@ -14,19 +14,17 @@ async function check(): Promise<void> {
   const native = new NativeService(directory, /* 密钥测试不创建任何原生窗口。 */ () => undefined);
   try {
     const secret = 'electron-native-smoke-test-secret';
-    await native.writeCredential('model', 'deepseek', secret);
-    await native.writeCredential('model', 'qwen', 'qwen-smoke-secret');
-    assert.equal(await native.readCredential('model', 'deepseek'), secret);
-    assert.ok(!(await readFile(path.join(directory, 'model-credentials', 'deepseek.enc'))).includes(secret));
-    await native.writeCredential('model', 'deepseek', '');
-    assert.equal(await native.readCredential('model', 'deepseek'), '');
-    assert.equal(await native.readCredential('model', 'qwen'), 'qwen-smoke-secret');
-    await native.writeCredential('model', 'qwen', '');
-    const custom = 'custom-smoke-' + 'a'.repeat(64); // 自定义连接版本对应的密钥分区。
-    await native.writeCredential('model', custom, 'custom-smoke-secret');
-    assert.equal(await native.readCredential('model', custom), 'custom-smoke-secret');
-    assert.equal(await native.readCredential('model', 'custom-smoke-' + 'b'.repeat(64)), '');
-    await native.writeCredential('model', custom, '');
+    const first = 'custom-smoke-' + 'a'.repeat(64); // 同一连接的第一个凭据分区。
+    const second = 'custom-smoke-' + 'b'.repeat(64); // 改址后的独立分区。
+    await native.writeCredential('model', first, secret);
+    assert.equal(await native.readCredential('model', second), '');
+    await native.writeCredential('model', second, 'second-smoke-secret');
+    assert.equal(await native.readCredential('model', first), secret);
+    assert.ok(!(await readFile(path.join(directory, 'model-credentials', first + '.enc'))).includes(secret));
+    await native.writeCredential('model', first, '');
+    assert.equal(await native.readCredential('model', first), '');
+    assert.equal(await native.readCredential('model', second), 'second-smoke-secret');
+    await native.writeCredential('model', second, '');
     await native.writeCredential('mcp', 'docs-a', 'connection-a-secret');
     await native.writeCredential('mcp', 'docs-b', 'connection-b-secret');
     assert.equal(await native.readCredential('mcp', 'docs-a'), 'connection-a-secret');

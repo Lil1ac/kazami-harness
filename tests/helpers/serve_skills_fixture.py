@@ -13,7 +13,7 @@ import uvicorn
 
 from agent_harness.projects.models import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -155,7 +155,7 @@ def main() -> None:
     skills = root / "skills"
     initialize_skills(skills)
     # 只在本辅助进程设置占位值以通过预检；离线模型不读取真实凭据或访问供应商。
-    os.environ["DEEPSEEK_API_KEY"] = "offline-skills-browser-key"
+    os.environ["HARNESS_TEST_MODEL_KEY"] = "offline-skills-browser-key"
     config = WebConfig(
         project_dir=project, worktrees_root=root / "worktrees", frontend_dist=project / "frontend/dist",
         workspaces=[], projects=[ProjectPreset(
@@ -164,7 +164,7 @@ def main() -> None:
         )],
     )
     app = create_app(
-        config, RunConfig(requested_model="offline-skills-browser", tools=["read_file", "write_file"],
+        config, configured_run(requested_model="offline-skills-browser", tools=["read_file", "write_file"],
                           skill_roots=[skills]),
         root / "runs", model_client=SkillsBrowserModel(root),
     )

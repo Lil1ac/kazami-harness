@@ -145,7 +145,7 @@ export function IntegrationPanel({ runId, sourceTest, parentRunId, siblings = []
     <section className="integration-panel" aria-labelledby={headingId}>
       <div className="section-heading">
         <h3 id={headingId}>成果采纳</h3>
-        <Link to="/jobs">后台工作</Link>
+        <Link to="/jobs">运行队列</Link>
       </div>
       {(targets.error || history.error || create.error || action.error || resolution.error) && (
         <Alert

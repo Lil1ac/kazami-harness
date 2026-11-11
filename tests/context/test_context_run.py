@@ -12,13 +12,14 @@ import pytest
 
 from agent_harness.runtime.runner import run_task
 from agent_harness.schemas import ContextPolicy, RunConfig, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore
 from tests.helpers.planning import initial_input
 
 
 def make_manifest(workspace: Path, *, budget: int = 256 * 1024, load: bool = True, instruction_limit: int = 32 * 1024) -> RunManifest:
     """创建固定任务清单；budget 和 instruction_limit 均按字节，load 控制读取根项目约定。"""
-    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="按项目约定写出结果", workspace=workspace), config=RunConfig(tools=["read_file", "write_file"], context=ContextPolicy(max_input_bytes=budget, max_project_instruction_bytes=instruction_limit, load_project_instructions=load)))
+    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="按项目约定写出结果", workspace=workspace), config=configured_run(tools=["read_file", "write_file"], context=ContextPolicy(max_input_bytes=budget, max_project_instruction_bytes=instruction_limit, load_project_instructions=load)))
 
 
 def model_reply(*calls: dict, content: str | None = None, reasoning: str = "") -> dict:

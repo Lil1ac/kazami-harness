@@ -155,11 +155,11 @@ def _parse_response(payload: object) -> ModelResponse:
     )
 
 
-def _http_error(status_code: int, *, custom_endpoint: bool = False) -> ModelError:
-    """把 HTTP 状态转为受控错误。custom_endpoint 可区分需要修正地址的重定向。"""
+def _http_error(status_code: int) -> ModelError:
+    """把响应 status_code 转为受控错误，不读取或返回供应商错误正文。"""
     if status_code in {401, 403}:
-        return ModelError("model_authentication", "模型服务拒绝认证，请检查当前供应商的 API 密钥及地域。")
-    if custom_endpoint and 300 <= status_code < 400:
+        return ModelError("model_authentication", "模型服务拒绝认证，请检查该连接的 API Key。")
+    if 300 <= status_code < 400:
         return ModelError("model_redirect", "模型端点返回重定向，请配置实际服务地址。")
     if status_code == 429:
         return ModelError("model_rate_limited", "模型服务请求过于频繁，已用完本轮重试次数。")
@@ -173,10 +173,6 @@ def _http_error(status_code: int, *, custom_endpoint: bool = False) -> ModelErro
 class ChatCompletionsClient:
     """在宿主绑定的端点发送流式请求，封装有界重试、超时及协议校验。"""
 
-    endpoint: str  # 内置官方地址或本次运行固定的自定义地址。
-    options: dict  # 子类固定的协议开关，每次请求合并到独立请求体。
-    request_usage = True  # 内置适配器支持请求流式用量。兼容端点可省略这一扩展。
-
     def __init__(
         self,
         api_key: str,
@@ -187,6 +183,10 @@ class ChatCompletionsClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """保存凭据、config 和测试 transport；on_attempt 观察重试，on_delta 观察真实增量，None 不通知。"""
+        definition = config.custom_providers.get(config.provider)
+        if definition is None or not config.requested_model:
+            raise ModelError("model_not_configured", "请先添加模型服务并选择模型。")
+        self.endpoint = definition.endpoint  # 只向创建客户端时绑定的地址发送请求和凭据。
         # 提前拒绝非法 header 字符，避免第三方异常包含原始凭据。
         if config.requires_model_key and not valid_model_key(api_key):
             raise ModelError("model_credentials_invalid", "模型 API 密钥格式无效，请检查当前供应商凭据。")
@@ -227,13 +227,10 @@ class ChatCompletionsClient:
             raise ModelError("model_not_ready", "模型客户端必须在异步上下文中使用。")
         body = {
             "model": self._config.requested_model,
-            "messages": self._request_messages(messages),
+            "messages": messages,
             "stream": True,
-            **self.options,
             "max_tokens": self._config.limits.model_max_output_tokens,
         }
-        if self.request_usage:
-            body["stream_options"] = {"include_usage": True}
         if tools:
             body["tools"] = tools
         try:
@@ -242,10 +239,6 @@ class ChatCompletionsClient:
                 return await self._complete_with_retries(body)
         except TimeoutError:
             raise ModelError("model_timeout", "模型轮次超时，已停止本轮请求。") from None
-
-    def _request_messages(self, messages: list[dict]) -> list[dict]:
-        """返回发送给供应商的 messages；默认直接使用已校验的历史，适配器可调整请求格式。"""
-        return messages
 
     async def _complete_with_retries(self, body: dict) -> ModelResponse:
         """发送 body，首个内容片段前可重试临时故障；开始输出后断流立即停止，返回完整校验结果。"""
@@ -259,7 +252,7 @@ class ChatCompletionsClient:
                     if response.status_code in _RETRYABLE_STATUSES and attempt < attempts:
                         pass
                     elif response.status_code != 200:
-                        raise _http_error(response.status_code, custom_endpoint=self._config.provider in self._config.custom_providers)
+                        raise _http_error(response.status_code)
                     else:
                         return _parse_response(await assembler.read(response))
             except _RETRYABLE_TRANSPORT_ERRORS as error:
@@ -276,15 +269,3 @@ class ChatCompletionsClient:
             # 固定上限防止服务端 Retry-After 或连续故障消耗无界等待时间。
             await asyncio.sleep(min(0.1 * (2 ** min(attempt - 1, 4)), 1.0))
         raise ModelError("model_unavailable", "模型服务暂时不可用，已停止本轮请求。")
-
-
-class CustomChatClient(ChatCompletionsClient):
-    """使用已登记兼容端点的基础 Chat Completions 协议。"""
-
-    options = {}  # 只发送公共请求字段，供应商专有选项不参与兼容协议。
-    request_usage = False  # 服务主动返回用量时仍解析和保存。
-
-    @property
-    def endpoint(self) -> str:
-        """返回当前客户端冻结的自定义接口地址。"""
-        return self._config.custom_providers[self._config.provider].endpoint

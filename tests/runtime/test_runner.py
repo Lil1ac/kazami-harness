@@ -12,6 +12,7 @@ import pytest
 
 from agent_harness.config import ConfigurationError
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.runtime.runner import exit_code, run_task
 from agent_harness.storage.runs import RunStore, StorageError
 
@@ -23,7 +24,7 @@ def manifest(workspace: Path, **limits) -> RunManifest:
     """创建带固定文件分析任务的运行清单，并允许覆盖预算以触发控制边界。"""
     return RunManifest(
         run_id=uuid4(), task=TaskSpec(prompt="读取 app.log，统计 ERROR 类型。", workspace=workspace),
-        config=RunConfig(limits=RunLimits(**limits)),
+        config=configured_run(limits=RunLimits(**limits)),
     )
 
 

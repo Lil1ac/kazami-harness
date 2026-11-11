@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 from tests.web.test_project_catalog import EditingModel, repository
@@ -50,10 +50,10 @@ def main() -> None:
         plain.mkdir()
         (plain / "app.py").write_text("value = 1\n", encoding="utf-8")
     project = Path(__file__).resolve().parents[2]
-    os.environ["DEEPSEEK_API_KEY"] = "offline-project-binding"
+    os.environ["HARNESS_TEST_MODEL_KEY"] = "offline-project-binding"
     app = create_app(
         WebConfig(project_dir=project, worktrees_root=root / "copies", frontend_dist=project / "frontend" / "dist"),
-        RunConfig(tools=["write_file"]), root / "runs", model_client=EditingModel(),
+        configured_run(tools=["write_file"]), root / "runs", model_client=EditingModel(),
     )
     app.state.manager.folder_picker = FixturePicker(git, plain)
     uvicorn.run(app, host="127.0.0.1", port=args.port, loop="asyncio", timeout_graceful_shutdown=2)

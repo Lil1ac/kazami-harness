@@ -11,7 +11,9 @@ import httpx
 import pytest
 
 from agent_harness.schemas import RunConfig, RunLimits
-from agent_harness.providers import DeepSeekClient, ModelError, ToolCall
+from tests.helpers.models import configured_run
+from agent_harness.providers import ModelError, ToolCall
+from agent_harness.providers.chat import ChatCompletionsClient
 
 
 SECRET = "test-only-api-key-never-record-this"
@@ -49,8 +51,8 @@ def invoke(handler, config=None, on_attempt=None):
     """使用离线 HTTP 处理器同步完成一次真实适配器请求，并可观察重试次数。"""
     async def operation():
         """在异步上下文中打开客户端并发送消息，退出时关闭 HTTP 资源。"""
-        async with DeepSeekClient(
-            SECRET, config or RunConfig(),
+        async with ChatCompletionsClient(
+            SECRET, config or configured_run(),
             transport=httpx.MockTransport(handler), on_attempt=on_attempt,
         ) as client:
             return await client.complete(deepcopy(MESSAGES), deepcopy(TOOLS))
@@ -70,15 +72,15 @@ def test_request_and_response_metadata_are_preserved():
                 "prompt_cache_hit_tokens": 2, "unknown_cost": SECRET,
             },
         ))
-    config = RunConfig(requested_model="requested-model", limits=RunLimits(model_max_output_tokens=123))
+    config = configured_run(requested_model="requested-model", limits=RunLimits(model_max_output_tokens=123))
     result = invoke(handler, config=config)
     request = captured[0]
     body = json.loads(request.content)
-    assert str(request.url) == "https://api.deepseek.com/chat/completions"
+    assert str(request.url) == "https://fixture.example.test/v1/chat/completions"
     assert request.headers["Authorization"] == f"Bearer {SECRET}"
     assert body == {
         "model": "requested-model", "messages": MESSAGES, "tools": TOOLS,
-        "stream": True, "stream_options": {"include_usage": True}, "thinking": {"type": "disabled"}, "max_tokens": 123,
+        "stream": True, "max_tokens": 123,
     }
     assert result.response_model == "actual-response-model"
     assert result.response_id == "response-123"
@@ -104,8 +106,8 @@ def test_multiple_calls_keep_arguments_and_reasoning_for_followup():
         return model_stream_response(200, json=envelope(message, "tool_calls"))
     async def operation():
         """连续请求两轮，将首轮完整 assistant 消息放入第二轮历史以验证回传。"""
-        async with DeepSeekClient(
-            SECRET, RunConfig(), transport=httpx.MockTransport(handler), on_attempt=attempts.append,
+        async with ChatCompletionsClient(
+            SECRET, configured_run(), transport=httpx.MockTransport(handler), on_attempt=attempts.append,
         ) as client:
             first = await client.complete(deepcopy(MESSAGES), deepcopy(TOOLS))
             await client.complete([*MESSAGES, first.message], deepcopy(TOOLS))
@@ -164,7 +166,7 @@ def test_incomplete_response_never_returns_executable_tools(finish_reason, code)
 @pytest.mark.parametrize("status,code", [
     (400, "model_bad_request"), (401, "model_authentication"),
     (403, "model_authentication"), (422, "model_bad_request"),
-    (501, "model_unavailable"), (302, "model_protocol_error"),
+    (501, "model_unavailable"), (302, "model_redirect"),
 ])
 def test_non_retryable_status_never_exposes_body_or_follows_redirect(status, code):
     """验证不可重试状态只尝试一次，错误不含正文，且不跟随重定向。"""
@@ -179,7 +181,7 @@ def test_non_retryable_status_never_exposes_body_or_follows_redirect(status, cod
     assert error.value.code == code
     assert SECRET not in str(error.value)
     assert attempts == [1]
-    assert seen_urls == ["https://api.deepseek.com/chat/completions"]
+    assert seen_urls == ["https://fixture.example.test/v1/chat/completions"]
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
@@ -189,7 +191,7 @@ def test_retryable_status_has_bounded_attempts(status):
     with pytest.raises(ModelError) as error:
         invoke(
             lambda request: httpx.Response(status, text=SECRET),
-            config=RunConfig(limits=RunLimits(max_http_attempts_per_turn=2)),
+            config=configured_run(limits=RunLimits(max_http_attempts_per_turn=2)),
             on_attempt=attempts.append,
         )
     assert error.value.code in {"model_rate_limited", "model_unavailable"}
@@ -219,7 +221,7 @@ def test_transient_transport_failure_is_retried_and_sanitized(exception_type):
         raise exception_type(SECRET, request=request)
     with pytest.raises(ModelError) as error:
         invoke(
-            handler, config=RunConfig(limits=RunLimits(max_http_attempts_per_turn=2)),
+            handler, config=configured_run(limits=RunLimits(max_http_attempts_per_turn=2)),
             on_attempt=attempts.append,
         )
     assert error.value.code == "model_transport"
@@ -275,7 +277,7 @@ def test_single_turn_timeout_includes_http_request():
         await asyncio.sleep(1)
         return model_stream_response(200, json=envelope())
     with pytest.raises(ModelError) as error:
-        invoke(handler, config=RunConfig(limits=RunLimits(model_turn_timeout_seconds=0.02)), on_attempt=attempts.append)
+        invoke(handler, config=configured_run(limits=RunLimits(model_turn_timeout_seconds=0.02)), on_attempt=attempts.append)
     assert error.value.code == "model_timeout"
     assert attempts == [1]
 
@@ -286,7 +288,7 @@ def test_single_turn_timeout_includes_retry_backoff():
     with pytest.raises(ModelError) as error:
         invoke(
             lambda request: httpx.Response(429, text=SECRET),
-            config=RunConfig(limits=RunLimits(model_turn_timeout_seconds=0.02)),
+            config=configured_run(limits=RunLimits(model_turn_timeout_seconds=0.02)),
             on_attempt=attempts.append,
         )
     assert error.value.code == "model_timeout"
@@ -308,7 +310,7 @@ def test_cancellation_propagates_without_retry_or_reclassification():
 def test_invalid_credentials_never_reach_header_encoding(invalid_key):
     """验证空白、控制字符和非 ASCII 密钥在构造认证头之前即被安全拒绝。"""
     with pytest.raises(ModelError) as error:
-        DeepSeekClient(invalid_key, RunConfig())
+        ChatCompletionsClient(invalid_key, configured_run())
     assert error.value.code == "model_credentials_invalid"
     assert not invalid_key or invalid_key not in str(error.value)
 
@@ -322,7 +324,7 @@ def test_client_requires_async_context_and_can_omit_tools():
         return model_stream_response(200, json=envelope())
     async def operation():
         """先验证上下文外请求失败，再进入上下文发送一次无工具请求。"""
-        client = DeepSeekClient(SECRET, RunConfig(), transport=httpx.MockTransport(handler))
+        client = ChatCompletionsClient(SECRET, configured_run(), transport=httpx.MockTransport(handler))
         with pytest.raises(ModelError) as error:
             await client.complete(MESSAGES, [])
         assert error.value.code == "model_not_ready"
@@ -367,7 +369,7 @@ def test_client_keeps_system_tls_verification_and_ignores_proxy_environment(monk
 
     async def scenario():
         """按生产生命周期创建并关闭客户端，返回None；无需真实密钥或网络。"""
-        async with DeepSeekClient(SECRET, RunConfig()):
+        async with ChatCompletionsClient(SECRET, configured_run()):
             pass
 
     asyncio.run(scenario())

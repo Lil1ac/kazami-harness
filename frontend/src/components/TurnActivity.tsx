@@ -23,6 +23,8 @@ interface TurnActivityProps {
   phase: string; // 无新文字时显示实际运行阶段。
   finalAnswer?: string | null; // 已固定答复从过程排除，避免正文重复。
   onInspect: () => void; // 打开完整证据视图，不触发执行。
+  onReveal?: () => void; // 用户展开时暂停对话自动跟随，保留过程标题的阅读位置。
+  onOpenOutput?: (callId: string) => void; // 按当前工具调用编号打开对应命令的已保存输出。
 }
 
 /** 按发生顺序展示模型过程与工具；自动展开随运行状态变化，用户的显式选择优先。 */
@@ -33,6 +35,8 @@ export function TurnActivity({
   phase,
   finalAnswer,
   onInspect,
+  onReveal,
+  onOpenOutput,
 }: TurnActivityProps) {
   const [expansion, setExpansion] = useState<{ runId: string; open: boolean } | null>(null); // null使用运行状态默认值；选择只对所属运行生效。
   const open = expansion?.runId === runId ? expansion.open : active; // 用户阅读时不因终态刷新强制收起。
@@ -90,6 +94,7 @@ export function TurnActivity({
             event,
           ) => {
             event.preventDefault();
+            if (!open) onReveal?.();
             setExpansion({ runId, open: !open });
           }
         }
@@ -169,6 +174,15 @@ export function TurnActivity({
                   <div>
                     <span className="activity-label">{step.label}</span>
                     {step.errorMessage && <p className="activity-error">{step.errorMessage}</p>}
+                    {event.payload.name === 'run_command' && onOpenOutput && (
+                      <button
+                        type="button"
+                        className="text-button activity-output-link"
+                        onClick={/* 命令归属由运行记录核对，不使用命令文本定位。 */ () => onOpenOutput(step.id)}
+                      >
+                        查看输出
+                      </button>
+                    )}
                     <details className="activity-payload">
                       <summary>参数与结果</summary>
                       {step.arguments !== null && <pre>{pretty(step.arguments)}</pre>}

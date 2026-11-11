@@ -26,7 +26,7 @@ async def finish(client: httpx.AsyncClient, response: httpx.Response) -> dict:
 
 def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_evidence(tmp_path: Path, monkeypatch):
     """两轮局部修改和真实测试通过，外部编辑与无关字节保留，旧产物/差异/事件保持。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-editing-tests")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-editing-tests")
     root = tmp_path / "fixture"
     app = fixture_app(root, tmp_path / "dist")
     selected = root / "局部编辑项目"
@@ -85,7 +85,7 @@ def test_local_editing_and_tests_continue_after_restart_without_overwriting_old_
 
 def test_failed_start_event_does_not_execute_edit(tmp_path: Path, monkeypatch):
     """编辑开始事实未能落盘时，不执行副作用；模型的读取成功不能绕过事件持久化门槛。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-editing-tests")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-editing-tests")
     root = tmp_path / "fixture"
     app = fixture_app(root, tmp_path / "dist")
     original_append = RunStore.append

@@ -12,7 +12,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 from agent_harness.permissions.models import PermissionPolicy, PermissionMode, PermissionResume, PermissionState
 from agent_harness.execution.budget import RunBudget
 from agent_harness.hooks.models import HookPolicy
-from agent_harness.model_selection import CustomProvider, DEFAULT_MODELS, MODEL_KEY_ENVS, ModelProvider, ModelRole
+from agent_harness.model_selection import CustomProvider, ModelId, ModelProvider, ModelRole
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -183,22 +183,34 @@ class ContextAction(DataModel):
 
 # 宿主发现的技能目录项；无效项保留普通字符串以便页面解释禁用原因。
 class SkillOption(DataModel):
+    """管理页及任务选择器共享的技能目录元数据。"""
+
     name: str  # 有效技能的选择编号；目录级故障可为空。
     description: str  # 技能用途；损坏目录无法解析时为空。
     source: str  # 宿主固定的 SKILL.md 或故障根目录绝对路径。
     available: bool = True  # 仅有效且无歧义的技能可选择。
     error_code: str | None = None  # 禁用时的稳定原因码。
     error_message: str | None = None  # 禁用时可展示的受控中文说明。
+    id: str = ""  # 管理入口的稳定标识，同名来源各自独立。
+    managed: bool = False  # True 表示由应用保存的导入副本。
+    enabled: bool = True  # 持久启停状态，与格式校验是否通过分别记录。
+    revision: str = ""  # 管理操作提交时核对的版本，空值表示不可管理。
+    manual_only: bool = False  # 技能声明仅能由用户选中。
 
 
 # 一轮实际加载的完整技能快照；后续修改源文件不会改变此记录。
 class SkillSnapshot(DataModel):
+    """固定技能正文和附属文件版本，供执行与历史回看。"""
+
     name: str  # 符合目录命名规范的技能编号。
     description: str  # 本次加载时的用途描述。
-    source: str  # 本次读取的绝对文件路径，仅用于来源展示。
+    source: str  # 本次读取的外部路径或受管来源标识。
     content: str  # 包含 YAML frontmatter 的完整 UTF-8 原文，不截断。
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 原始文件字节的 SHA-256 指纹。
     size_bytes: int = Field(ge=0)  # 原始 UTF-8 文件的字节数。
+    activation: Literal["manual", "automatic"] = "manual"  # 正文进入上下文的触发方式。
+    version: str | None = None  # 包内容或外部文件身份指纹，与正文 SHA-256 分开。
+    resources: dict[str, str] = Field(default_factory=dict)  # 允许读取的相对路径与固定版本。
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> "SkillSnapshot":
@@ -206,6 +218,24 @@ class SkillSnapshot(DataModel):
         raw = self.content.encode("utf-8")
         if len(raw) != self.size_bytes or hashlib.sha256(raw).hexdigest() != self.sha256:
             raise ValueError("技能正文与保存的字节指纹不一致")
+        return self
+
+
+class SkillResourceSnapshot(DataModel):
+    """本轮实际读取的技能资料正文及指纹。"""
+
+    name: str  # 已加载的所属技能名称。
+    path: str  # 相对技能根目录的公开路径。
+    content: str  # 已按 UTF-8 读取的完整正文。
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")  # 正文原字节的指纹。
+    size_bytes: int = Field(ge=0)  # 正文原字节数，参与技能资料总量检查。
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> "SkillResourceSnapshot":
+        """按本实例的正文复核字节数与指纹，不一致时抛 ValueError。"""
+        raw = self.content.encode("utf-8")
+        if len(raw) != self.size_bytes or hashlib.sha256(raw).hexdigest() != self.sha256:
+            raise ValueError("技能资料与保存的字节指纹不一致")
         return self
 
 
@@ -221,6 +251,7 @@ class ContextView(DataModel):
     memory: dict[str, JsonValue] | None = None  # 本轮固定记忆及实际回读；None 表示尚未记录，不读取当前数据库补造。
     instruction: ProjectInstructionSnapshot  # 本次运行固定的项目约定快照。
     skills: list[SkillSnapshot] = Field(default_factory=list)  # 本轮真正加载的完整技能快照，旧记录默认为空。
+    skill_resources: list[SkillResourceSnapshot] = Field(default_factory=list)  # 实际读取的资料快照，按首次读取顺序保存。
     skill_error: SkillFailure | None = None  # 加载失败时保存原因；没有选择或加载成功时为空。
     last_check: ContextCheck | None = None  # 最后一次检查；指令失败或尚未检查时为 None。
     serialization: Literal["json_utf8_v1"] = "json_utf8_v1"  # 明确计量版本，不等同 HTTP 封装或 token 数。
@@ -251,18 +282,15 @@ class MemoryPolicy(MemorySelection):
 class ModelSelection(DataModel):
     """固定的一组供应商与模型标识，用于主运行和独立角色。"""
 
-    provider: ModelProvider = "deepseek"  # 请求和密钥归属，默认 DeepSeek。
-    requested_model: str = Field(default_factory=lambda data: DEFAULT_MODELS.get(data["provider"], ""), min_length=1, max_length=200)  # 自定义默认模型由宿主目录解析。
-
-    @model_validator(mode="after")
-    def validate_model_name(self) -> "ModelSelection":
-        """核对当前模型标识并返回自身；拒绝空白及首尾空格。"""
-        if not self.requested_model or self.requested_model.strip() != self.requested_model:
-            raise ValueError("模型名不能为空白或带首尾空格")
-        return self
+    provider: ModelProvider  # 负责请求和密钥分区的已登记服务商。
+    requested_model: ModelId  # 该服务商登记的具体模型。
 
 # 每轮固定的模型、执行策略与已选择的服务商定义。
-class RunConfig(ModelSelection):
+class RunConfig(DataModel):
+    """宿主运行策略及模型目录。首次配置前允许模型为空，执行前必须完成选择。"""
+
+    provider: ModelProvider | None = None  # 无可用定义时为空，否则使用已选或首个启用服务商。
+    requested_model: ModelId | None = None  # 为空时使用所选服务商的默认模型。
     custom_providers: dict[ModelProvider, CustomProvider] = Field(default_factory=dict, max_length=16)  # 宿主可登记的端点，运行清单只保存本轮选择。
     mcp_tools: list[McpToolSelection] = Field(default_factory=list, max_length=16)  # 本轮明确选择的外部工具及定义指纹；空列表不连接服务。
     hooks: HookPolicy = Field(default_factory=HookPolicy)  # 宿主规则及扩展开销上限，页面不能覆盖。
@@ -281,6 +309,7 @@ class RunConfig(ModelSelection):
     )
     skill_roots: list[Path] = Field(default_factory=list, max_length=8)  # 宿主登记的技能集合目录，浏览器不能覆盖。
     skills: list[str] = Field(default_factory=list, max_length=8)  # 本轮按名称选择的技能，空列表表示不加载。
+    skill_auto: bool = False  # 交互式主运行是否允许模型按需启用登记技能。
     # 每个配置创建独立的限制对象，避免不同运行共享可变设置。
     limits: RunLimits = Field(default_factory=RunLimits)
     # 每次运行独立的指令加载与整体模型输入预算策略。
@@ -290,13 +319,13 @@ class RunConfig(ModelSelection):
     @model_validator(mode="before")
     @classmethod
     def resolve_custom_defaults(cls, values: object) -> object:
-        """对配置字典补充主模型和角色的自定义默认模型。非法字段继续由模型校验。"""
+        """按宿主目录补全主模型和角色默认值。目录为空时保留未配置状态。"""
         if not isinstance(values, dict) or not isinstance(providers := values.get("custom_providers"), dict):
             return values
 
         def resolve(selection: object) -> object:
             """在 selection 省略模型时返回补全的副本，保持调用者原字典。"""
-            if not isinstance(selection, dict) or "requested_model" in selection or not isinstance(provider := selection.get("provider"), str):
+            if not isinstance(selection, dict) or selection.get("requested_model") is not None or not isinstance(provider := selection.get("provider"), str):
                 return selection
             definition = providers.get(provider)
             if isinstance(definition, CustomProvider):
@@ -305,6 +334,12 @@ class RunConfig(ModelSelection):
                 return {**selection, "requested_model": definition["default_model"]}
             return selection
 
+        if values.get("provider") is None:
+            first = next((identifier for identifier, definition in providers.items()
+                          if (definition.enabled if isinstance(definition, CustomProvider)
+                              else isinstance(definition, dict) and definition.get("enabled", True) is True)), None)
+            if first is not None:
+                values = {**values, "provider": first}
         result = resolve(values)
         if isinstance(roles := values.get("role_models"), dict):
             return {**result, "role_models": {role: resolve(selection) for role, selection in roles.items()}}
@@ -313,12 +348,16 @@ class RunConfig(ModelSelection):
     @model_validator(mode="after")
     def validate_config(self) -> "RunConfig":
         """校验模型、窗口及工具/技能选择，返回自身；重复或非法选择抛 ValueError。"""
-        if not self.requested_model.strip() or not self.system_prompt.strip():
-            raise ValueError("模型名和系统提示词不能为空白")
-        if any(provider in DEFAULT_MODELS for provider in self.custom_providers):
-            raise ValueError("自定义服务商不能覆盖内置服务商")
-        if any(provider not in DEFAULT_MODELS and provider not in self.custom_providers for provider in self.selected_providers()):
-            raise ValueError("所选服务商尚未登记")
+        if not self.system_prompt.strip():
+            raise ValueError("系统提示词不能为空白")
+        if (self.provider is None) != (self.requested_model is None):
+            raise ValueError("请选择已登记的服务商和模型")
+        selections = [(self.provider, self.requested_model), *((item.provider, item.requested_model) for item in self.role_models.values())]
+        for provider, model in selections:
+            if provider is not None:
+                definition = self.custom_providers.get(provider)
+                if definition is None or model not in definition.model_ids:
+                    raise ValueError("所选服务商或模型尚未登记")
         window = self.context.model_context_tokens
         if window is not None and window <= self.limits.model_max_output_tokens + self.context.token_safety_margin:
             raise ValueError("模型窗口必须大于输出预留与安全余量之和")
@@ -337,7 +376,10 @@ class RunConfig(ModelSelection):
 
     def selected_providers(self) -> set[str]:
         """返回主模型与已选角色实际引用的服务商标识。"""
-        return {self.provider, *(item.provider for item in self.role_models.values())}
+        providers = {item.provider for item in self.role_models.values()}
+        if self.provider is not None:
+            providers.add(self.provider)
+        return providers
 
     def freeze_models(self) -> "RunConfig":
         """返回只保留当前选择的服务商快照，供运行清单和历史展示使用。"""
@@ -355,13 +397,13 @@ class RunConfig(ModelSelection):
     def api_key_env(self) -> str | None:
         """返回当前供应商的环境变量名。桌面自定义密钥与免密端点可以为空。"""
         definition = self.custom_providers.get(self.provider)
-        return definition.api_key_env if definition is not None else MODEL_KEY_ENVS[self.provider]
+        return definition.api_key_env if definition is not None else None
 
     @property
     def requires_model_key(self) -> bool:
         """判断当前请求是否需要提供供应商 Bearer 凭据。"""
         definition = self.custom_providers.get(self.provider)
-        return definition is None or definition.auth == "bearer"
+        return definition is not None and definition.auth == "bearer"
 
 
 # 宿主预先指定的验收程序及其工作目录、超时；描述入口，不负责执行验收。

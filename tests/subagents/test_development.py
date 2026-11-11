@@ -12,6 +12,7 @@ import pytest
 from agent_harness.providers.base import ToolCall
 from agent_harness.runtime.runner import REQUEST_CONTEXT
 from agent_harness.schemas import RunConfig, RunLimits
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.work.tasks import WorkStore
 from tests.subagents.test_parallel import response
@@ -110,11 +111,11 @@ async def approved_run(client, execution_mode: str = "local", wait: bool = True)
 
 def create_development_app(project_config, monkeypatch, model):
     """以测试project_config和离线model创建真实应用；禁用项目自动检查以单独测试人工集成复验。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-development')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-development')
     repository = project_config.projects[0].path
     (repository / 'ui.txt').write_text('父目录未跟踪前端\n', encoding='utf-8')
     project_config.projects[0].test_argv = []
-    config = RunConfig(tools=['read_file', 'search_files', 'write_file', 'edit_file', 'run_command'],
+    config = configured_run(tools=['read_file', 'search_files', 'write_file', 'edit_file', 'run_command'],
                        limits=RunLimits(max_model_turns=30, max_tool_calls=80, run_timeout_seconds=180))
     return create_app(project_config, config, project_config.project_dir / 'records', model_client=model)
 
@@ -153,7 +154,7 @@ def test_parallel_development_dirty_baseline_and_parent_integration(project_conf
                 preferences = PreferenceStore(project_config.project_dir / 'desktop')
                 preferences.update(downloads_directory=project_config.project_dir / 'downloads')
                 native = NativeDownload()
-                host = DesktopHost(preferences, native, 'offline-token', {'deepseek': 'offline-key'})
+                host = DesktopHost(preferences, native, 'offline-token')
                 host.manager = app.state.manager
                 detail = await client.get(f"/api/runs/{view['run_id']}/subagents/{record['run_id']}")
                 assert detail.status_code == 200, detail.text
@@ -400,9 +401,9 @@ def test_development_context_continuation_rejects_sibling_references(tmp_path):
     from agent_harness.storage.runs import RunStore
     root = tmp_path / 'runs'
     session, task_id = uuid4(), uuid4()
-    old_parent = RunManifest(run_id=session, task=TaskSpec(prompt='父任务', workspace=tmp_path), config=RunConfig())
+    old_parent = RunManifest(run_id=session, task=TaskSpec(prompt='父任务', workspace=tmp_path), config=configured_run())
     parent_store = RunStore.create(root, old_parent)
-    old_child = RunManifest(run_id=uuid4(), session_id=session, task=old_parent.task, config=RunConfig(), delegation=DelegationOrigin(parent_run_id=session, role='develop', task_id=task_id, write_scope=['.']))
+    old_child = RunManifest(run_id=uuid4(), session_id=session, task=old_parent.task, config=configured_run(), delegation=DelegationOrigin(parent_run_id=session, role='develop', task_id=task_id, write_scope=['.']))
     old_store = RunStore.create(parent_store.run_dir / 'subagents', old_child)
     reference = ContextArchive(old_store.run_dir, old_child).save('已捕获的原子任务输出')
     old_store.finalize(RunResult(run_id=old_child.run_id, execution_status='waiting_input'))
@@ -449,7 +450,7 @@ def test_active_development_blocks_parent_plan_switch(tmp_path, tool_name):
     from types import SimpleNamespace
     from agent_harness.tools.registry import ToolExecutor
 
-    executor = ToolExecutor(tmp_path, tmp_path / "runs", RunConfig())
+    executor = ToolExecutor(tmp_path, tmp_path / "runs", configured_run())
     executor.subagents = SimpleNamespace(active=True, readers_active=False)
     result = asyncio.run(executor.execute(tool_name, "{}"))
     assert result["error"]["code"] == "subagent_developers_active"

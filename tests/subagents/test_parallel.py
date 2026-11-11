@@ -8,6 +8,7 @@ from uuid import uuid4
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.runtime.runner import REQUEST_CONTEXT, run_task
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, TaskSpec
+from tests.helpers.models import configured_run
 from tests.subagents.test_subagents import report
 
 
@@ -62,7 +63,7 @@ class ParallelModel:
 def manifest(tmp_path: Path):
     """在tmp_path生成独立代码，返回限制12模型/20工具的父清单；不访问用户项目。"""
     (tmp_path / "api.py").write_text("value = 42", encoding="utf-8")
-    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="并行研究后交付", workspace=tmp_path), config=RunConfig(tools=["read_file", "write_file"], limits=RunLimits(max_model_turns=12, max_tool_calls=20)))
+    return RunManifest(run_id=uuid4(), task=TaskSpec(prompt="并行研究后交付", workspace=tmp_path), config=configured_run(tools=["read_file", "write_file"], limits=RunLimits(max_model_turns=12, max_tool_calls=20)))
 
 
 def test_two_children_really_overlap_and_account_once(tmp_path):
@@ -110,7 +111,7 @@ def test_cancel_one_via_http_keeps_sibling_and_history(tmp_path, monkeypatch):
         """启动真实队列并等两子进入门闩，通过接口取消一项后释放另一项，返回None。"""
         config = app_config(tmp_path, monkeypatch)
         model = ParallelModel(blocked=True)
-        app = create_app(config, RunConfig(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
+        app = create_app(config, configured_run(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
             accepted = await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "sample", "prompt": "并行检查"}})
             run_id = accepted.json()["run_id"]

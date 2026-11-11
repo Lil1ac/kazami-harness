@@ -8,7 +8,7 @@ from pydantic import Field, ValidationError, field_validator
 
 from agent_harness.config import ConfigurationError
 from agent_harness.schemas import DataModel, ModelSelection, RunConfig, RunLimits, ToolName
-from agent_harness.model_selection import CustomProvider, ModelProvider, ModelRole
+from agent_harness.model_selection import CustomProvider, ModelId, ModelProvider, ModelRole
 
 
 def resource_root() -> Path:
@@ -29,9 +29,11 @@ class DesktopBudget(DataModel):
     run_timeout_seconds: float = Field(gt=0, le=604800, allow_inf_nan=False)  # 总运行时间，单位秒。
 
 
-class DesktopRunSettings(ModelSelection):
+class DesktopRunSettings(DataModel):
     """跨启动沿用的公开设置，不包含凭据、系统提示词或执行命令。"""
 
+    provider: ModelProvider | None = None  # 空值让目录选择首个启用服务商。
+    requested_model: ModelId | None = None  # 空值使用选中服务商的默认模型。
     role_models: dict[ModelRole, ModelSelection] = Field(default_factory=dict)  # 独立角色模型，空映射为全部继承。
     tools: list[ToolName] = Field(min_length=1)  # 用户明确允许的基础工具集合。
     limits: DesktopBudget  # 与前端设置页一致的总体预算。

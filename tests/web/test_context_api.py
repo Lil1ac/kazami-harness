@@ -48,7 +48,7 @@ class RecordingModel:
 @pytest.fixture
 def context_web_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WebConfig:
     """在 tmp_path 创建普通工作区并配置离线凭据，返回不与其他测试共享记录的服务配置。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", SECRET)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     return WebConfig(

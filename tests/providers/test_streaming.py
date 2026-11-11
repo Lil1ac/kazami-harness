@@ -8,8 +8,8 @@ import httpx
 import pytest
 
 from agent_harness.providers.base import ModelDelta, ModelError
-from agent_harness.providers.deepseek import DeepSeekClient
-from agent_harness.schemas import RunConfig
+from agent_harness.providers.chat import ChatCompletionsClient
+from tests.helpers.models import configured_run
 
 
 def frame(delta: dict, finish: str | None = None, **metadata: object) -> bytes:
@@ -55,7 +55,7 @@ def test_first_text_is_observed_before_response_finishes() -> None:
             assert json.loads(request.content)["stream"] is True
             return httpx.Response(200, stream=PacketStream([frame({"content": "首字"}), frame({"content": "与结尾"}, "stop", usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}), b"data: [DONE]\n\n"], gate=gate))
 
-        async with DeepSeekClient("offline-key", RunConfig(), on_delta=observe, transport=httpx.MockTransport(handler)) as client:
+        async with ChatCompletionsClient("offline-key", configured_run(), on_delta=observe, transport=httpx.MockTransport(handler)) as client:
             result = await client.complete([{"role": "user", "content": "测试"}], [])
         assert result.message["content"] == "首字与结尾"
         assert "".join(item.text for item in deltas) == result.message["content"]
@@ -81,7 +81,7 @@ def test_fragmented_utf8_and_interleaved_tools_are_assembled() -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             """为请求提供打散到 UTF-8 字符内部的包，不访问网络。"""
             return httpx.Response(200, stream=PacketStream([body[index:index + 7] for index in range(0, len(body), 7)]))
-        async with DeepSeekClient("offline-key", RunConfig(), on_delta=deltas.append, transport=httpx.MockTransport(handler)) as client:
+        async with ChatCompletionsClient("offline-key", configured_run(), on_delta=deltas.append, transport=httpx.MockTransport(handler)) as client:
             return await client.complete([{"role": "user", "content": "测试"}], [])
 
     result = asyncio.run(operation())
@@ -101,7 +101,7 @@ def test_partial_stream_never_retries_or_returns_executable_tools(disconnect: bo
         def handler(request: httpx.Request) -> httpx.Response:
             """交付正文和未闭合工具参数，随后按当前用例结束或断开。"""
             return httpx.Response(200, stream=PacketStream([frame({"content": "已收到的前缀"}), frame({"tool_calls": [{"index": 0, "id": "a", "function": {"name": "write_file", "arguments": '{"path":'}}]})], disconnect=disconnect))
-        async with DeepSeekClient("offline-key", RunConfig(), on_attempt=attempts.append, on_delta=deltas.append, transport=httpx.MockTransport(handler)) as client:
+        async with ChatCompletionsClient("offline-key", configured_run(), on_attempt=attempts.append, on_delta=deltas.append, transport=httpx.MockTransport(handler)) as client:
             await client.complete([{"role": "user", "content": "测试"}], [])
 
     with pytest.raises(ModelError) as error:

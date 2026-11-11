@@ -12,7 +12,7 @@ import uvicorn
 
 from agent_harness.projects.models import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -83,12 +83,12 @@ def main() -> None:
     root = project / '.runtime' / 'project-browser'
     source = root / 'source'
     initialize_repository(source)
-    os.environ['DEEPSEEK_API_KEY'] = 'offline-project-browser-key'
+    os.environ['HARNESS_TEST_MODEL_KEY'] = 'offline-project-browser-key'
     config = WebConfig(
         project_dir=project, worktrees_root=root / 'worktrees', frontend_dist=project / 'frontend/dist',
         workspaces=[], projects=[ProjectPreset(id='browser-project', label='已有Python项目（离线联动验证）', path=source, test_argv=[sys.executable, '-m', 'pytest', '-q'], python_paths=['src', '.'])],
     )
-    app = create_app(config, RunConfig(requested_model='offline-project-browser', tools=['read_file', 'search_files', 'write_file', 'run_command']), root / 'runs', model_client=ProjectBrowserModel())
+    app = create_app(config, configured_run(requested_model='offline-project-browser', tools=['read_file', 'search_files', 'write_file', 'run_command']), root / 'runs', model_client=ProjectBrowserModel())
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', workers=1, timeout_graceful_shutdown=2)
 
 

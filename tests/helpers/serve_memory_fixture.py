@@ -5,7 +5,7 @@ from pathlib import Path
 
 import uvicorn
 
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from tests.web.test_memory_api import MemoryModel
@@ -25,7 +25,7 @@ def main() -> None:
         path.mkdir(exist_ok=True)
         workspaces.append(WebWorkspace(id=identifier, label=label, path=path))
     web = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=Path(__file__).resolve().parents[2] / "frontend/dist", workspaces=workspaces)
-    app = create_app(web, RunConfig(tools=["read_file", "write_file"]), root / "runs", model_client=MemoryModel())
+    app = create_app(web, configured_run(tools=["read_file", "write_file"]), root / "runs", model_client=MemoryModel())
 
     def key(config):
         """给离线 config 提供凭据占位，不读取或发送用户密钥，返回固定字符串。"""

@@ -10,11 +10,19 @@ import {
   RightOutlined,
   MenuOutlined,
   ThunderboltOutlined,
-  AppstoreOutlined,
+  BarsOutlined,
 } from '@ant-design/icons';
 import { ThemeToggle } from '../theme';
 import { Link, NavLink, useLocation, useMatch } from 'react-router';
-import { errorMessage, getConversation, getConversations, getOptions, getRun } from '../api';
+import {
+  errorMessage,
+  getConversation,
+  getConversations,
+  getJobs,
+  getOptions,
+  getRun,
+} from '../api';
+import { isPendingJob } from '../queue';
 import type { LocalProjectOption } from '../types';
 import { ConversationActions } from './ConversationActions';
 
@@ -158,10 +166,6 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
   return (
     <div className="workspace-nav-content">
       <nav className="workspace-nav-links" aria-label="主导航">
-        <NavLink to="/jobs" onClick={onNavigate}>
-          <AppstoreOutlined />
-          <span>后台工作</span>
-        </NavLink>
         <NavLink
           to="/runs?new=1"
           aria-label="新建对话"
@@ -218,7 +222,8 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
           <p className="sidebar-empty">读取项目…</p>
         )}
       </div>
-      <nav className="workspace-nav-links sidebar-settings" aria-label="设置">
+      <nav className="workspace-nav-links sidebar-settings" aria-label="运行与设置">
+        <QueueLink onNavigate={onNavigate} />
         <NavLink to="/automations" onClick={onNavigate}>
           <ThunderboltOutlined />
           <span>自动化</span>
@@ -230,6 +235,42 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
         </NavLink>
       </nav>
     </div>
+  );
+}
+
+/** 返回侧栏队列入口；onNavigate 在手机导航时关闭菜单，数量只统计尚需跟进的作业。 */
+function QueueLink({ onNavigate }: { onNavigate: () => void }) {
+  const queue = useQuery({
+    queryKey: ['jobs'],
+    queryFn: getJobs,
+    staleTime: 10000,
+    refetchInterval: 30000, // 工作事件触发及时刷新，低频轮询兜底断线。
+  });
+  const count =
+    queue.data?.items.filter(
+      /* 已完成、失败或取消的作业不占用侧栏计数。 */ (job) => isPendingJob(job.status),
+    ).length || 0;
+  const paused = queue.data?.paused;
+  return (
+    <NavLink
+      to="/jobs"
+      aria-label={'运行队列' + (paused ? '，已暂停' : '') + (count ? `，${count} 项未结束` : '')}
+      onClick={onNavigate}
+    >
+      <BarsOutlined />
+      <span>运行队列</span>
+      {(paused || count > 0) && (
+        <span
+          className="sidebar-queue-indicator"
+          data-paused={paused || undefined}
+          aria-hidden="true"
+        >
+          {paused ? '暂停' : ''}
+          {paused && count > 0 ? ' · ' : ''}
+          {count || ''}
+        </span>
+      )}
+    </NavLink>
   );
 }
 

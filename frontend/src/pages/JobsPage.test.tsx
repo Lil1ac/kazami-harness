@@ -1,9 +1,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getJobs, jobAction, resumeQueue, configureQueue } from '../api';
+import { getJob, getJobs, jobAction, resumeQueue, configureQueue } from '../api';
 import { makeJob } from '../test/fixtures';
 import { JobsPage } from './JobsPage';
 
@@ -19,14 +19,17 @@ vi.mock(
   }),
 );
 
-/** 挂载后台中心；返回真实 React 界面，不提供执行端点。 */
-function show() {
+/** 挂载 path 对应的队列或详情，默认打开队列；返回可查询的 React 界面。 */
+function show(path = '/jobs') {
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <MemoryRouter>
-        <JobsPage />
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/jobs/:jobId?" element={<JobsPage />} />
+          <Route path="/runs/:runId" element={<h1>会话详情</h1>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -149,16 +152,50 @@ it('同时展示独立运行、资源阻塞与启动恢复设置', async () => {
     ],
   });
   show();
-  expect(await screen.findByText('运行 2 / 2')).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '运行中' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '排队' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: /^运行中/ })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /^排队/ })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看占用工作' })).toHaveAttribute('href', '/jobs/first');
+  await user.click(screen.getByText('队列设置'));
+  expect(screen.getByText('运行 2 / 2')).toBeVisible();
   await user.click(screen.getByRole('switch', { name: '启动后继续未开始的队列' }));
   await waitFor(
     /* 切换只保存用户明确偏好，不恢复旧运行。 */ () =>
       expect(configureQueue).toHaveBeenCalledWith(true, expect.anything()),
   );
   expect(resumeQueue).not.toHaveBeenCalled();
+});
+
+/** 队列保留没有会话的失败记录，已有会话的结果由原深链接承接。 */
+it('启动失败留在折叠记录，已结束的会话退出队列列表', async () => {
+  const user = userEvent.setup();
+  const snapshot = await getJobs();
+  vi.mocked(getJobs).mockResolvedValue({
+    ...snapshot,
+    items: [
+      { ...makeJob(), id: 'failed', title: '初始化失败', status: 'failed', execution_status: null },
+      { ...makeJob(), id: 'completed', title: '已经完成的会话', status: 'completed' },
+    ],
+  });
+  show();
+  const history = await screen.findByText('启动前记录');
+  expect(history.closest('details')).not.toHaveAttribute('open');
+  await user.click(history);
+  expect(screen.getByText('初始化失败')).toBeVisible();
+  expect(screen.queryByText('已经完成的会话')).not.toBeInTheDocument();
+});
+
+/** 从自动化或会话打开同一作业，运行建立时跳转，排队时提供停止入口。 */
+it('作业深链接在运行建立后进入会话', async () => {
+  vi.mocked(getJob).mockResolvedValue({
+    ...makeJob(),
+    id: 'launched',
+    run_id: 'run-launched',
+    status: 'running',
+    execution_status: 'running',
+  });
+  show('/jobs/launched');
+  expect(await screen.findByRole('heading', { name: '会话详情' })).toBeInTheDocument();
+  expect(getJob).toHaveBeenCalledWith('launched');
 });
 
 it('停止一项等待清理时仍可停止另一项独立运行', async () => {

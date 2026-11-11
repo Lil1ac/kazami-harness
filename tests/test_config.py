@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from agent_harness.config import ConfigurationError, load_config, prepare_task
+from tests.helpers.models import MODEL_TEST_TOML
 
 
 def write_toml(path: Path, text: str) -> Path:
@@ -21,7 +22,8 @@ def test_config_merges_limits_without_mutating_overrides(tmp_path: Path) -> None
     config_path = write_toml(
         tmp_path / "config.toml",
         'requested_model = "configured-model"\ntools = ["read_file"]\n'
-        "[limits]\nmax_model_turns = 8\nmax_tool_calls = 12\n",
+        "[limits]\nmax_model_turns = 8\nmax_tool_calls = 12\n"
+        + MODEL_TEST_TOML.replace('default_model = "fixture-model"', 'default_model = "configured-model"\nmodels = ["cli-model"]'),
     )
     overrides = {"requested_model": "cli-model", "limits": {"max_tool_calls": 5}}
     config = load_config(config_path, overrides)
@@ -31,20 +33,22 @@ def test_config_merges_limits_without_mutating_overrides(tmp_path: Path) -> None
     assert config.limits.max_tool_calls == 5
     assert config.limits.command_timeout_seconds == 30.0
     assert overrides == {"requested_model": "cli-model", "limits": {"max_tool_calls": 5}}
-    assert load_config().limits.max_model_turns == 20
+    empty = load_config()
+    assert empty.limits.max_model_turns == 20 and empty.provider is None and empty.requested_model is None
 
 
 def test_config_does_not_read_environment_or_dotenv(tmp_path: Path, monkeypatch) -> None:
-    """验证加载配置不读取密钥值或 .env，仅保存固定环境变量名。"""
+    """验证加载配置只保存登记的环境变量名，不读取密钥值或 .env。"""
     secret = "credential-must-not-enter-config"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
-    write_toml(tmp_path / ".env", f"DEEPSEEK_API_KEY={secret}")
-    config = load_config()
-    assert config.api_key_env == "DEEPSEEK_API_KEY"
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", secret)
+    write_toml(tmp_path / ".env", f"HARNESS_TEST_MODEL_KEY={secret}")
+    profile = write_toml(tmp_path / "model.toml", MODEL_TEST_TOML)
+    config = load_config(profile)
+    assert config.api_key_env == "HARNESS_TEST_MODEL_KEY"
     assert secret not in config.model_dump_json()
-    monkeypatch.delenv("DEEPSEEK_API_KEY")
-    assert load_config() == config
+    monkeypatch.delenv("HARNESS_TEST_MODEL_KEY")
+    assert load_config(profile) == config
 
 
 @pytest.mark.parametrize(
@@ -98,7 +102,7 @@ def test_missing_config_file_and_invalid_override_type(tmp_path: Path) -> None:
 
 def test_prepare_task_resolves_workspace_without_api_key(tmp_path: Path, monkeypatch) -> None:
     """验证准备任务无需密钥，并将相对工作目录规范化为绝对路径。"""
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("HARNESS_TEST_MODEL_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "workspace").mkdir()
     task = prepare_task("处理数据", Path("workspace"))

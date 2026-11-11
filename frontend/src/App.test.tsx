@@ -6,12 +6,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { App } from './App';
 import { ConfigDraftProvider } from './config';
-import { options, makeRun } from './test/fixtures';
+import { options, makeJob, makeRun } from './test/fixtures';
 import {
   getOptions,
   getConversations,
   getConversation,
   getRun,
+  getJobs,
   createRun,
   createFollowup,
 } from './api';
@@ -24,6 +25,7 @@ vi.mock('./api', async (importOriginal) => ({
   getConversations: vi.fn(),
   getConversation: vi.fn(),
   getRun: vi.fn(),
+  getJobs: vi.fn(),
   createRun: vi.fn(),
   createFollowup: vi.fn(),
   getEvents: vi.fn(
@@ -146,6 +148,18 @@ beforeEach(
     sessionStorage.clear();
     localStorage.clear();
     vi.mocked(getOptions).mockResolvedValue({ ...options, recent_projects: [alpha, beta] });
+    vi.mocked(getJobs).mockResolvedValue({
+      items: [],
+      paused: false,
+      scheduler: {
+        active_jobs: [],
+        max_concurrent_runs: 2,
+        resume_on_start: false,
+        paused: false,
+        model_limit: 2,
+        process_limit: 4,
+      },
+    });
     vi.mocked(getConversations).mockImplementation(
       /* 后端已完成聚合和项目分页，前端按真实契约读取。 */ async (filters) => ({
         items:
@@ -172,6 +186,27 @@ beforeEach(
     vi.mocked(createRun).mockRejectedValue(new Error('离线保留草稿'));
   },
 );
+
+/** 验证队列归入次级导航，且暂停和未结束数量来自宿主快照。 */
+it('运行队列在侧栏底部，只统计未结束作业', async () => {
+  const user = userEvent.setup();
+  const idle = await getJobs();
+  vi.mocked(getJobs).mockResolvedValue({
+    ...idle,
+    paused: true,
+    items: [
+      { ...makeJob(), id: 'queued', status: 'queued', execution_status: null },
+      { ...makeJob(), id: 'review', status: 'needs_review' },
+      { ...makeJob(), id: 'finished', status: 'completed' },
+    ],
+  });
+  show('/runs?view=history');
+  const primary = screen.getByRole('navigation', { name: '主导航' });
+  const secondary = screen.getByRole('navigation', { name: '运行与设置' });
+  expect(within(primary).queryByRole('link', { name: /运行队列/ })).not.toBeInTheDocument();
+  await user.click(await within(secondary).findByRole('link', { name: '运行队列，已暂停，2 项未结束' }));
+  expect(await screen.findByRole('heading', { name: '运行队列' })).toBeInTheDocument();
+});
 
 it('项目列表只有一个三轮入口，进入聊天后可以从全部会话重新进入并保留草稿', async () => {
   const user = userEvent.setup();

@@ -36,8 +36,8 @@ export const config: RunConfig = {
   memory: { use: true, capture: true, max_input_bytes: 16384, max_entries: 6 }, // 与宿主默认一致。
   planning_policy: 'auto', // 默认由Agent判断；强制规划由宿主TOML配置。
   auto_repair: false, // 默认只检查一次，公开项目测试需明确开启修复。
-  provider: 'deepseek',
-  requested_model: 'deepseek-flash',
+  provider: 'custom-fixture',
+  requested_model: 'fixture-model',
   role_models: {},
   tools: ['read_file', 'search_files', 'write_file', 'run_command'],
   system_prompt: '如实执行任务。',
@@ -73,8 +73,8 @@ export const config: RunConfig = {
 export const options: OptionsResponse = {
   config,
   model_providers: {
-    deepseek: { name: 'DeepSeek', default_model: 'deepseek-flash', api_key_env: 'DEEPSEEK_API_KEY', auth: 'bearer', enabled: true, key_configured: true },
-    qwen: { name: 'Qwen', default_model: 'qwen-plus', api_key_env: 'DASHSCOPE_API_KEY', auth: 'bearer', enabled: true, key_configured: false },
+    'custom-fixture': { name: '测试网关', default_model: 'fixture-model', models: ['offline-custom'], base_url: 'https://fixture.example.test/v1', version: 'a'.repeat(64), api_key_env: 'HARNESS_TEST_MODEL_KEY', auth: 'bearer', enabled: true, key_configured: true },
+    'custom-secondary': { name: '审阅网关', default_model: 'fixture-review', models: [], base_url: 'https://secondary.example.test/v1', version: 'b'.repeat(64), api_key_env: 'HARNESS_TEST_REVIEW_KEY', auth: 'bearer', enabled: true, key_configured: false },
   },
   recent_projects: [], // 首次启动等待用户打开真实目录。
   verifiers: [], // 无宿主登记时不提供独立验收选择。

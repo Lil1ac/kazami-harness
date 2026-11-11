@@ -7,6 +7,7 @@ from uuid import uuid4
 import httpx
 
 from agent_harness.schemas import RunConfig, RunManifest, SubagentRecord, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
@@ -17,7 +18,7 @@ from tests.web.job_helpers import submit_followup
 
 def app_config(tmp_path: Path, monkeypatch) -> WebConfig:
     """创建tmp_path内独立项目和离线凭据；返回配置，不读取真实密钥或项目。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-subagents")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-subagents")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "api.py").write_text("value = 42\n", encoding="utf-8")
@@ -44,7 +45,7 @@ def test_http_queue_delegation_result_pagination_and_restart_do_not_reexecute(tm
         model = ScriptModel([reply(call("delegate_readonly", title="检查接口", objective="读取api.py。", role="review")),
                              reply(reading), reply(text=report("api.py定义value=42。", ids=[reading.call_id])),
                              reply(call("write_file", path="result.txt", content="42")), reply(text="已使用报告。")])
-        app = create_app(config, RunConfig(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
+        app = create_app(config, configured_run(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
         payload = {"request_id": str(uuid4()), "create": {"workspace_id": "sample", "prompt": "检查接口后生成结果。"}}
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
             accepted = await client.post("/api/jobs", json=payload)
@@ -71,7 +72,7 @@ def test_http_queue_delegation_result_pagination_and_restart_do_not_reexecute(tm
             assert (await client.get(f"/api/runs/{run_id}/subagents/{child_id}?offset=99999")).status_code == 422
             assert (config.workspaces[0].path / "result.txt").read_text() == "42"
         dormant_model = ScriptModel([])
-        restarted = create_app(config, RunConfig(), tmp_path / "records", model_client=dormant_model)
+        restarted = create_app(config, configured_run(), tmp_path / "records", model_client=dormant_model)
         async with restarted.router.lifespan_context(restarted), httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted), base_url="http://127.0.0.1") as client:
             assert (await client.get(f"/api/runs/{run_id}/subagents/{child_id}")).json()["report_page"] == detail["report_page"]
             assert not dormant_model.requests
@@ -86,15 +87,15 @@ def test_interrupted_parent_reconstructs_subagent_counts_without_replay(tmp_path
         """构造已提交中断前缀后启动只读服务；返回None，不创建任何新的模型请求。"""
         config = app_config(tmp_path, monkeypatch)
         root = tmp_path / "records"
-        manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="中断样例", workspace=config.workspaces[0].path), config=RunConfig())
+        manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt="中断样例", workspace=config.workspaces[0].path), config=configured_run())
         store = RunStore.create(root, manifest)
         store.append("run_started", {"messages": [], "tools": []})
         store.append("model_request_started", {"model_turn": 1})
-        record = SubagentRecord(run_id=uuid4(), title="未结束研究", objective="检查调用方", role="explore", model={"provider": "deepseek", "requested_model": "deepseek-flash"}, max_model_turns=4, max_tool_calls=8, timeout_seconds=60.0, model_turns=2, tool_calls=1, usage={"total_tokens": 20})
+        record = SubagentRecord(run_id=uuid4(), title="未结束研究", objective="检查调用方", role="explore", model={"provider": "custom-fixture", "requested_model": "fixture-model"}, max_model_turns=4, max_tool_calls=8, timeout_seconds=60.0, model_turns=2, tool_calls=1, usage={"total_tokens": 20})
         store.append("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
         store.append("subagent_snapshot", {"subagent": record.model_dump(mode="json")})
         model = ScriptModel([])
-        app = create_app(config, RunConfig(), root, model_client=model)
+        app = create_app(config, configured_run(), root, model_client=model)
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
             view = (await client.get(f"/api/runs/{manifest.run_id}")).json()
             assert view["interrupted"] is True
@@ -115,7 +116,7 @@ def test_partial_report_is_visible_and_historical_followup_keeps_original(tmp_pa
         model = ScriptModel([reply(call("delegate_readonly", title="初步研究", objective="读取接口", max_model_turns=2)),
                              reply(reading), reply(text=report("仅完成初步读取。", ids=[reading.call_id], complete=False)),
                              reply(text="研究未完成，暂不修改。"), reply(text="这是新轮答复。")])
-        app = create_app(config, RunConfig(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
+        app = create_app(config, configured_run(tools=["read_file", "write_file"]), tmp_path / "records", model_client=model)
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
             accepted = await client.post("/api/jobs", json={"request_id": str(uuid4()), "create": {"workspace_id": "sample", "prompt": "先研究，不修改。"}})
             first = await wait_finished(client, accepted.json()["run_id"])

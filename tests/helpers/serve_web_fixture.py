@@ -9,7 +9,7 @@ from pathlib import Path
 import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebVerifier, WebWorkspace
 
@@ -84,14 +84,14 @@ def main() -> None:
     logs = workspace / 'logs'
     logs.mkdir(exist_ok=True)
     (logs / 'app.log').write_bytes((project / 'examples/logs/app.log').read_bytes())
-    os.environ['DEEPSEEK_API_KEY'] = 'offline-browser-key'
+    os.environ['HARNESS_TEST_MODEL_KEY'] = 'offline-browser-key'
     config = WebConfig(
         project_dir=project, worktrees_root=project / '.runtime' / 'browser-copies',
         frontend_dist=project / 'frontend' / 'dist',
         workspaces=[WebWorkspace(id='workspace', label='普通任务（离线浏览器验证）', path=workspace), WebWorkspace(id='logs', label='日志测试目录', path=workspace / 'logs')],
         verifiers=[WebVerifier(id='logs', label='固定日志样例验收', description='仅用于仓库固定日志样例。', path=project / 'examples' / 'verifiers' / 'logs.toml')],
     )
-    app = create_app(config, RunConfig(requested_model='offline-browser-fixture', tools=['read_file', 'search_files', 'write_file', 'run_command']), project / '.runtime' / 'browser-runs', model_client=BrowserFixtureModel())
+    app = create_app(config, configured_run(requested_model='offline-browser-fixture', tools=['read_file', 'search_files', 'write_file', 'run_command']), project / '.runtime' / 'browser-runs', model_client=BrowserFixtureModel())
     uvicorn.run(app, host='127.0.0.1', port=args.port, loop='asyncio', workers=1, timeout_graceful_shutdown=2)
 
 

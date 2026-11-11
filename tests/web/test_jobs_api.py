@@ -59,7 +59,7 @@ def test_queue_cancel_dedupe_and_restart(tmp_path: Path):
                 await app.state.manager.shutdown()
         restarted, _ = application(tmp_path, ScriptModel([reply()]))
         # 重启后宿主默认和角色同时变化，已入队作业仍沿用接纳时的快照。
-        restarted.state.manager.run_config = trusted_config(provider="qwen", role_models={"review": {"provider": "qwen"}})
+        restarted.state.manager.run_config = trusted_config(provider="custom-secondary", role_models={"review": {"provider": "custom-secondary"}})
         assert restarted.state.manager.jobs.paused
         assert restarted.state.manager.jobs.get(third["id"])["status"] == "queued"
         async with restarted.router.lifespan_context(restarted):
@@ -67,7 +67,7 @@ def test_queue_cancel_dedupe_and_restart(tmp_path: Path):
                 assert (await client.post("/api/queue/resume")).status_code == 200
                 assert (await wait_job(client, third["id"]))["status"] == "completed"
                 run = (await client.get("/api/runs/" + third["run_id"])).json()
-                assert run["config"]["provider"] == "deepseek" and run["config"]["role_models"] == {}
+                assert run["config"]["provider"] == "custom-fixture" and run["config"]["role_models"] == {}
         assert workspace.is_dir()
     asyncio.run(scenario())
 

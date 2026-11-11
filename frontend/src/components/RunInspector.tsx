@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLayoutEffect, useRef } from 'react';
-import { Alert, Skeleton, Tabs } from 'antd';
+import { Alert, Button, Segmented, Skeleton, Tabs } from 'antd';
 import { getRun, errorMessage } from '../api';
 import { duration, phaseLabel } from '../format';
 import { modelLabel } from '../modelSelection';
@@ -22,6 +22,7 @@ import { PermissionPanel } from './PermissionPanel';
 import { RunHooks } from './HooksPanel';
 import { McpEvidence } from './McpEvidence';
 import { LifecycleDiagnostics } from './LifecycleDiagnostics';
+import { RuntimePanel } from './RuntimePanel';
 import type { RunView } from '../types';
 
 /** 复用唯一最新轮订阅返回的事件视图，检查器不再为其额外创建SSE。 */
@@ -31,8 +32,10 @@ export type RunEventView = ReturnType<typeof useRunEvents>;
 interface InspectorPanelsProps {
   run: RunView; // 所选轮次的服务端快照。
   events: RunEventView; // 对应该轮次的事件，不重复订阅最新轮。
-  tab: string; // result/files/diagnostics 三种查看分类。
+  tab: string; // 当前查看分类；任务、计划与 Agent 归在工作组。
   onTab: (value: string) => void; // 只更新查看位置，不改变执行目标。
+  commandCallId?: string; // 输出深链接定位到当前轮的工具调用。
+  onShowDecision?: () => void; // 把阅读焦点交回对话内待审批或待回答区。
   historical?: boolean; // true 表示历史只读，即使缓存仍保留过去的最新轮状态。
   readOnly?: boolean; // 归档会话可查看所有内容，不提供任务修改操作。
 }
@@ -43,61 +46,61 @@ function InspectorPanels({
   events,
   tab,
   onTab,
+  commandCallId,
+  onShowDecision,
   historical = false,
   readOnly = false,
 }: InspectorPanelsProps) {
   const { planning } = useRunPlanning(run, historical);
   const elapsed = events.events.at(-1)?.elapsed_ms ?? 0;
+  const workSection = ['tasks', 'plan', 'agents'].includes(tab) ? tab : null; // URL 保持细分入口，顶部只显示一个工作标签。
+  const pendingPlan = !historical && planning?.pending; // 历史等待状态属于旧快照，不能跳到当前审批。
+  const pendingAction = !historical && run.result.permissions.pending;
+  const showVerification = Boolean(
+    run.result.verification ||
+    run.result.verification_attempts.length ||
+    run.result.repair_attempts ||
+    run.phase === 'verification',
+  );
   const container = useRef<HTMLDivElement>(null); // 仅定位详情滚动区，不触碰会话消息与草稿。
   useLayoutEffect(
     /* 切换分类或轮次时从顶部阅读；事件刷新保持位置，不把文件区的滚动带入诊断。 */ () => {
       const body = container.current?.querySelector('.ant-tabs-body-holder');
-      if (body) body.scrollTop = 0;
+      if (body && !(tab === 'output' && commandCallId)) body.scrollTop = 0;
     },
-    [run.run_id, tab],
+    [run.run_id, tab, commandCallId],
   );
   return (
     <div className="inspector-panels" ref={container}>
       <Tabs
-        activeKey={
-          ['tasks', 'plan', 'agents', 'result', 'files', 'diagnostics'].includes(tab)
-            ? tab
-            : 'result'
+        activeKey={workSection ? 'work' : tab}
+        onChange={
+          /* 工作组默认从任务列表开始，其余入口保持原分类。 */ (value) =>
+            onTab(value === 'work' ? 'tasks' : value)
         }
-        onChange={onTab}
         destroyOnHidden
         items={[
-          {
-            key: 'tasks',
-            label: '任务',
-            children: (
-              <TasksPanel
-                runId={run.run_id}
-                active={run.active && !historical}
-                historical={historical}
-                readOnly={readOnly}
-              />
-            ),
-          },
-          {
-            key: 'plan',
-            label: '计划',
-            children: <PlanningPanel runId={run.run_id} state={planning!} />,
-          },
-          {
-            key: 'agents',
-            label: 'Agent',
-            children: <><TeamPanel run={run} historical={historical} readOnly={readOnly} />
-              {Boolean(run.result.subagents?.some(/* 普通一次性委派仍使用原视图。 */ (record) => !record.team_id)) && <SubagentsPanel parentId={run.run_id} records={(run.result.subagents || []).filter(/* 团队执行由上方按成员分组显示。 */ (record) => !record.team_id)} active={run.active && !historical} />}</>,
-          },
           {
             key: 'result',
             label: '结果',
             children: (
               <div className="inspector-overview">
                 <StateBreakdown run={run} />
-                <PermissionPanel run={run} historical={historical} />
-                <p className="muted">{run.interrupted ? '运行中断' : phaseLabel(run.phase)}</p>
+                {run.active && <p className="muted">{phaseLabel(run.phase)}</p>}
+                {(pendingPlan || pendingAction) && onShowDecision && (
+                  <div className="inspector-decision">
+                    <span>
+                      {pendingAction
+                        ? '等待动作审批'
+                        : pendingPlan && pendingPlan.kind === 'question'
+                          ? '等待回答'
+                          : '等待计划批准'}
+                    </span>
+                    <Button size="small" onClick={onShowDecision}>
+                      前往对话处理
+                    </Button>
+                  </div>
+                )}
                 {run.interrupted && (
                   <Alert type="warning" title="该运行缺少可信结束记录，请核对已有输出。" />
                 )}
@@ -106,24 +109,37 @@ function InspectorPanels({
                     <Alert key={index} type="warning" title={warning} />
                   ),
                 )}
-                <VerificationPanel
-                  detail={run.result.verification}
-                  attempts={run.result.verification_attempts}
-                  repairAttempts={run.result.repair_attempts}
-                  runId={run.run_id}
-                  active={run.active}
-                  project={
-                    run.verification_kind === 'project_tests' ||
-                    Boolean(run.project) ||
-                    run.source_kind === 'project'
-                  }
-                />
-                {Boolean(run.config.mcp_tools?.length) && <McpEvidence runId={run.run_id} active={run.active && !historical} />}
-                <div className="result-usage">
-                  <span>已知用量</span>
-                  <UsageDisplay run={run} />
-                </div>
+                {showVerification && (
+                  <VerificationPanel
+                    detail={run.result.verification}
+                    attempts={run.result.verification_attempts}
+                    repairAttempts={run.result.repair_attempts}
+                    runId={run.run_id}
+                    active={run.active}
+                    project={
+                      run.verification_kind === 'project_tests' ||
+                      Boolean(run.project) ||
+                      run.source_kind === 'project'
+                    }
+                  />
+                )}
+                {Boolean(run.config.mcp_tools?.length) && (
+                  <McpEvidence runId={run.run_id} active={run.active && !historical} />
+                )}
               </div>
+            ),
+          },
+          {
+            key: 'output',
+            label: '输出',
+            children: (
+              <RuntimePanel
+                runId={run.run_id}
+                active={run.active && !historical}
+                readOnly={readOnly || historical}
+                display="output"
+                commandCallId={commandCallId}
+              />
             ),
           },
           {
@@ -141,7 +157,11 @@ function InspectorPanels({
                 ) : run.project ? (
                   <ProjectReviewPanel
                     project={run.project}
-                    canManage={!historical && run.project_workspace?.latest_run_id === run.run_id}
+                    canManage={
+                      !historical &&
+                      !readOnly &&
+                      run.project_workspace?.latest_run_id === run.run_id
+                    }
                     active={run.active}
                     parentRunId={run.parent_run_id}
                   />
@@ -156,10 +176,70 @@ function InspectorPanels({
             ),
           },
           {
+            key: 'work',
+            label: '工作',
+            children: (
+              <div className="inspector-work">
+                <Segmented
+                  aria-label="工作详情分类"
+                  options={[
+                    { label: '任务', value: 'tasks' },
+                    { label: '计划', value: 'plan' },
+                    { label: 'Agent', value: 'agents' },
+                  ]}
+                  value={workSection || 'tasks'}
+                  onChange={onTab}
+                />
+                {workSection === 'tasks' && (
+                  <TasksPanel
+                    runId={run.run_id}
+                    active={run.active && !historical}
+                    historical={historical}
+                    readOnly={readOnly}
+                  />
+                )}
+                {workSection === 'plan' &&
+                  (pendingPlan && onShowDecision ? (
+                    <div className="inspector-decision">
+                      <span>{pendingPlan.kind === 'question' ? '等待回答' : '等待计划批准'}</span>
+                      <Button size="small" onClick={onShowDecision}>
+                        前往对话处理
+                      </Button>
+                    </div>
+                  ) : (
+                    <PlanningPanel runId={run.run_id} state={planning!} />
+                  ))}
+                {workSection === 'agents' && (
+                  <>
+                    <TeamPanel run={run} historical={historical} readOnly={readOnly} />
+                    {Boolean(
+                      run.result.subagents?.some(
+                        /* 团队成员按独立记录展示。 */ (record) => !record.team_id,
+                      ),
+                    ) && (
+                      <SubagentsPanel
+                        parentId={run.run_id}
+                        records={(run.result.subagents || []).filter(
+                          /* 排除已在团队中展示的成员。 */ (record) => !record.team_id,
+                        )}
+                        active={run.active && !historical}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            ),
+          },
+          {
             key: 'diagnostics',
             label: '诊断',
             children: (
               <div className="inspector-diagnostics">
+                <PermissionPanel
+                  run={run}
+                  historical={historical}
+                  hidePending={Boolean(pendingAction && onShowDecision)}
+                />
                 <RunHooks snapshot={run.result.hooks} events={events.events} />
                 <LifecycleDiagnostics snapshot={run.lifecycle} live={events.lifecycle} />
                 <details className="diagnostic-section" open>
@@ -172,6 +252,10 @@ function InspectorPanels({
                 </details>
                 <details className="diagnostic-section">
                   <summary>运行配置与记录</summary>
+                  <div className="result-usage">
+                    <span>已知用量</span>
+                    <UsageDisplay run={run} />
+                  </div>
                   {run.interrupted && (
                     <p className="muted">运行已中断；调用次数仅代表已保存记录。</p>
                   )}
@@ -236,7 +320,15 @@ function InspectorPanels({
                     </div>
                     <div>
                       <dt>模型</dt>
-                      <dd title={'请求模型：' + run.config.requested_model}>{modelLabel(run.config, run.result.response_model, run.config.custom_providers?.[run.config.provider]?.name)}</dd>
+                      <dd title={run.config.requested_model ?? undefined}>
+                        {modelLabel(
+                          run.config,
+                          run.result.response_model,
+                          run.config.provider
+                            ? run.config.custom_providers?.[run.config.provider]?.name
+                            : undefined,
+                        )}
+                      </dd>
                     </div>
                     <div>
                       <dt>总时限</dt>
@@ -271,10 +363,12 @@ function HistoricalInspector({
   runId,
   tab,
   onTab,
+  commandCallId,
 }: {
-  runId: string;
-  tab: string;
-  onTab: (value: string) => void;
+  runId: string; // 已接纳的历史运行编号。
+  tab: string; // 历史检查器的当前分类。
+  onTab: (value: string) => void; // 切换分类，不改变继续发送目标。
+  commandCallId?: string; // 查看历史日志时按真实调用编号定位。
 }) {
   const query = useQuery({
     queryKey: ['run', runId],
@@ -285,7 +379,16 @@ function HistoricalInspector({
   if (query.isPending) return <Skeleton active paragraph={{ rows: 8 }} />;
   if (!query.data)
     return <Alert type="error" title="无法读取本轮记录" description={errorMessage(query.error)} />;
-  return <InspectorPanels run={query.data} events={events} tab={tab} onTab={onTab} historical />;
+  return (
+    <InspectorPanels
+      run={query.data}
+      events={events}
+      tab={tab}
+      onTab={onTab}
+      commandCallId={commandCallId}
+      historical
+    />
+  );
 }
 
 /** 按选择轮次展示详情；最新轮共享实时事件，历史轮使用独立只读窗口。 */
@@ -296,17 +399,36 @@ export function RunInspector({
   tab,
   onTab,
   readOnly = false,
+  commandCallId,
+  onShowDecision,
 }: {
-  selectedId: string;
-  latest: RunView;
-  liveEvents: RunEventView;
-  tab: string;
-  onTab: (value: string) => void;
+  selectedId: string; // 所选运行；与最新轮不同时只读固定快照。
+  latest: RunView; // 最新轮快照，保留运行控制的归属。
+  liveEvents: RunEventView; // 对话已建立的唯一实时事件视图。
+  tab: string; // 当前分类。
+  onTab: (value: string) => void; // 更新详情分类，不执行任务。
   readOnly?: boolean; // 归档会话仅提供查看，不允许任务修改。
+  commandCallId?: string; // 指向当前轮某个命令工具调用。
+  onShowDecision?: () => void; // 当前审批或问题跳回对话中的处理区。
 }) {
   return selectedId === latest.run_id ? (
-    <InspectorPanels run={latest} events={liveEvents} tab={tab} onTab={onTab} readOnly={readOnly} />
+    <InspectorPanels
+      key={latest.run_id}
+      run={latest}
+      events={liveEvents}
+      tab={tab}
+      onTab={onTab}
+      readOnly={readOnly}
+      commandCallId={commandCallId}
+      onShowDecision={onShowDecision}
+    />
   ) : (
-    <HistoricalInspector key={selectedId} runId={selectedId} tab={tab} onTab={onTab} />
+    <HistoricalInspector
+      key={selectedId}
+      runId={selectedId}
+      tab={tab}
+      onTab={onTab}
+      commandCallId={commandCallId}
+    />
   );
 }

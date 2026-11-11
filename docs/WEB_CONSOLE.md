@@ -40,7 +40,7 @@
 uv --cache-dir .uv-cache run harness serve --config harness.example.toml
 ```
 
-打开 [本地任务工作台](http://127.0.0.1:8765/runs)。启动终端需已有 DEEPSEEK_API_KEY，页面只报告是否配置，不接收、保存或回显密钥。没有密钥仍可查看历史，提交时会提前拒绝。
+打开 [本地任务工作台](http://127.0.0.1:8765/runs)。在宿主 TOML 登记服务地址和模型 ID，使用 API Key 时在启动终端设置相应环境变量。独立网页只报告凭据状态。首次配置前可以浏览历史，提交任务需要选择已登记的模型。见 [模型服务](MODELS.md)。
 
 前端依赖由 package-lock.json 锁定，后端依赖由 uv.lock 锁定。前端构建后由 Python 服务统一提供，不需要常驻第二个 Node 服务；修改前端源文件后重新 build 并刷新。--port 支持 1 至 65535，默认 8765，固定绑定 127.0.0.1，单 worker 运行。
 开发时分别启动Python服务与：

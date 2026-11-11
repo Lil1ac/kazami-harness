@@ -12,7 +12,7 @@ from starlette.requests import Request
 
 from agent_harness.config import ConfigurationError
 from agent_harness.schemas import RunConfig
-from agent_harness.model_selection import CustomProvider, CustomProviderSettings, DEFAULT_MODELS, ModelProvider
+from agent_harness.model_selection import CustomProvider, CustomProviderSettings, ModelProvider, valid_model_key
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.service import WebServiceError
 from agent_harness.desktop.bridge import NativeClient
@@ -25,14 +25,14 @@ if TYPE_CHECKING:
 class DesktopHost:
     """保存会话和任务凭据内存副本，原生操作全部交给 Electron 父进程。"""
 
-    def __init__(self, store: PreferenceStore, native: NativeClient, token: str, model_keys: dict[ModelProvider, str]) -> None:
-        """绑定公开 store、原生 native、会话 token 和分区 model_keys；不回显或落盘凭据。"""
+    def __init__(self, store: PreferenceStore, native: NativeClient, token: str) -> None:
+        """绑定公开 store、原生 native 和会话 token；凭据在原生桥接就绪后加载。"""
         self.store = store  # 公开设置的稳定存储。
         self.native = native  # 当前 Electron 父进程提供的受控能力。
         self.token = token  # 父进程生成并通过标准输入传入的会话随机值。
         self.cookie_name = "harness_desktop"  # Electron 为当前隔离会话设置的 HttpOnly Cookie。
         self.manager: WebRunManager | None = None  # create_app 绑定统一任务调度器。
-        self._model_keys = dict(model_keys)  # 各供应商独立驻留内存，未配置的键可省略。
+        self._model_keys: dict[str, str] = {}  # 按端点绑定分区的内存凭据，未配置的键省略。
         self._settings_write = asyncio.Lock()  # 序列化公开配置和密钥变更，防止凭据绑定到过期定义。
         self._picker_active = False  # 同时只允许一个原生选择请求。
 
@@ -44,10 +44,9 @@ class DesktopHost:
     def api_key(self, config: RunConfig) -> str:
         """返回 config 对应任务的内存凭据；只传 Runner，不写入环境或配置。"""
         definition = config.custom_providers.get(config.provider)
-        slot = definition.credential_slot(config.provider) if definition is not None else config.provider
-        return self._model_keys.get(slot, "")
+        return self._model_keys.get(definition.credential_slot(config.provider), "") if definition is not None else ""
 
-    async def load_custom_keys(self, config: RunConfig) -> None:
+    async def load_model_keys(self, config: RunConfig) -> None:
         """为已登记的 config 读取当前凭据分区。加密库不可用时允许启动供用户修复。"""
         async def load(slot: str) -> None:
             """加载 slot 的密文对应值到内存。读取失败时保留未配置状态。"""
@@ -90,8 +89,9 @@ class DesktopHost:
             raise WebServiceError(409, "model_provider_changed", "服务商连接已变更，请刷新后重试。")
         return definition
 
-    async def configure_provider(self, provider: ModelProvider | None, version: str | None, settings: CustomProviderSettings) -> ModelProvider:
-        """新增或按 version 修改自定义 settings，返回稳定标识。连接变化会切换凭据分区。"""
+    async def configure_provider(self, provider: ModelProvider | None, version: str | None,
+                                 settings: CustomProviderSettings, secret: str | None) -> ModelProvider:
+        """保存连接和可选 secret，返回稳定标识。空字符串明确清除，None 保留当前分区。"""
         async with self._settings_write:
             previous = self._custom_definition(provider, version) if provider is not None else None
             provider = provider or f"custom-{uuid4().hex}"
@@ -101,30 +101,50 @@ class DesktopHost:
             catalog = {**current.custom_providers, provider: definition}
             if len(catalog) > 16:
                 raise WebServiceError(400, "model_provider_limit", "最多登记 16 个自定义服务商。")
-            config = current.model_copy(update={"custom_providers": catalog})
-            await asyncio.to_thread(self.store.update, custom_providers={**self.store.value.custom_providers, provider: definition})
+            if secret and (settings.auth != "bearer" or not valid_model_key(secret)):
+                raise WebServiceError(422, "model_credentials_invalid", "请检查认证方式和 API Key 格式。")
+            main = catalog.get(current.provider)
+            keep_provider = main is not None and main.enabled
+            roles = {role: selection for role, selection in current.role_models.items()
+                     if catalog[selection.provider].enabled and selection.requested_model in catalog[selection.provider].model_ids}
+            selection = {"provider": current.provider if keep_provider else None,
+                         "requested_model": current.requested_model if keep_provider and current.requested_model in main.model_ids else None,
+                         "role_models": roles}
+            config = RunConfig.model_validate({**current.model_dump(), **selection, "custom_providers": catalog})
+            stored = self.store.value.config
+            if stored is not None:
+                stored = stored.model_copy(update=selection)
+            slot = definition.credential_slot(provider)
+            old_secret = self._model_keys.get(slot, "")
+            change_secret = secret is not None and settings.auth == "bearer"
+            if change_secret:
+                await self._write_model_key(slot, secret)
+            try:
+                await asyncio.to_thread(self.store.update, config=stored,
+                                        custom_providers={**self.store.value.custom_providers, provider: definition})
+            except ConfigurationError:
+                # 公开设置写入失败时，撤回该请求已写入的凭据。
+                if change_secret:
+                    await self._write_model_key(slot, old_secret)
+                raise
+            if change_secret:
+                self._model_keys[slot] = secret
             self.manager.run_config = config
             if previous and previous.connection_digest != definition.connection_digest:
                 old_slot = previous.credential_slot(provider)
                 self._model_keys.pop(old_slot, None)
                 try:
-                    await asyncio.wait_for(self.native.request("credential.write", {"provider": old_slot, "secret": ""}), 5)
-                except (TimeoutError, ConfigurationError):
+                    await self._write_model_key(old_slot, "")
+                except ConfigurationError:
                     pass  # 旧分区已失效。清理失败不会将它绑定到新端点。
             return provider
 
-    async def save_key(self, provider: ModelProvider, secret: str, version: str | None = None) -> None:
-        """加密保存 provider 的 secret 再更新内存；空字符串清除该分区，返回 None。"""
-        async with self._settings_write:
-            if provider in DEFAULT_MODELS:
-                slot = provider
-            else:
-                definition = self._custom_definition(provider, version)
-                if definition.auth != "bearer":
-                    raise WebServiceError(400, "model_key_not_required", "当前服务商使用本机免密连接。")
-                slot = definition.credential_slot(provider)
-            await self.native.request("credential.write", {"provider": slot, "secret": secret})
-            self._model_keys[slot] = secret
+    async def _write_model_key(self, slot: str, secret: str) -> None:
+        """在五秒内加密写入 slot。secret 为空删除密文，失败抛固定配置错误。"""
+        try:
+            await asyncio.wait_for(self.native.request("credential.write", {"provider": slot, "secret": secret}), 5)
+        except TimeoutError:
+            raise ConfigurationError("本机密钥存储响应超时。") from None
 
     async def mcp_credential(self, identifier: str) -> str:
         """读取 identifier 分区的系统加密凭据；返回内存明文，未配置为空，不回传页面。"""

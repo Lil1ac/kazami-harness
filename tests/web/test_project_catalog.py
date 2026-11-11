@@ -134,7 +134,7 @@ def test_named_binding_confirmation_deduplication_and_expiry(tmp_path: Path, mon
 
 def test_project_api_binding_rename_run_and_restart(tmp_path: Path, monkeypatch):
     """普通项目创建、改名、原地执行和重启查询贯通；路径不能由页面伪造，历史归属稳定。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-project-binding")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-project-binding")
     selected = tmp_path / "source"
     selected.mkdir()
     (selected / "app.py").write_text("value = 1\n", encoding="utf-8")
@@ -217,7 +217,7 @@ def test_picker_cancel_and_cross_origin_do_not_register(tmp_path: Path):
 
 def test_open_git_without_tests_then_configure_and_continue_after_restart(tmp_path: Path, monkeypatch):
     """从选目录开始完整跑改码：无测试明确未验收，重启后保存测试并继续，真实测试通过。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-open-project")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-open-project")
     selected = repository(tmp_path / "个人项目")
     async def scenario():
         """核对目录选择、受限ID提交、旧记录不改、重启继承与测试设置，返回None。"""
@@ -369,7 +369,7 @@ def test_options_remains_consistent_during_project_registration(tmp_path: Path, 
 
 def test_plain_project_evidence_excludes_other_run_records(tmp_path: Path, monkeypatch):
     """在指定目录直接修改代码，逐轮证据排除记录树，不复制或改写其他会话。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-open-project")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-open-project")
     selected = tmp_path / "source"
     selected.mkdir()
     (selected / "app.py").write_text("value = 1\n", encoding="utf-8")

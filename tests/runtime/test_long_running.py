@@ -42,7 +42,7 @@ class GatedModel(ScriptModel):
 
 def web_setup(tmp_path, monkeypatch, model):
     """为 tmp_path 创建独立可信本机应用；monkeypatch 只设置离线密钥，返回应用及工作目录。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-long-running")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-long-running")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "source.txt").write_text("源内容", encoding="utf-8")

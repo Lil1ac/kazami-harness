@@ -11,7 +11,7 @@ import httpx
 
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from test_project_catalog import EditingModel, finish
 
 
@@ -43,7 +43,7 @@ def config_for(root: Path) -> WebConfig:
 @asynccontextmanager
 async def service(config: WebConfig, model: NavigationModel):
     """产出真实HTTP客户端及管理器；退出时清理任务，既有记录留给重启验证。"""
-    app=create_app(config,RunConfig(tools=['write_file']),config.project_dir/'runs',model_client=model)
+    app=create_app(config,configured_run(tools=['write_file']),config.project_dir/'runs',model_client=model)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost',trust_env=False) as client:
             yield client,app.state.manager
@@ -65,7 +65,7 @@ async def follow(client: httpx.AsyncClient, parent: dict, prompt: str) -> dict:
 
 def test_three_turns_form_one_entry_before_filter_and_pagination(tmp_path: Path, monkeypatch):
     """三轮只有一项，首条要求做标题；项目筛选和分页基于聚合结果，重启与读取均不执行。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY','offline-navigation')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY','offline-navigation')
     config=config_for(tmp_path)
 
     async def scenario():
@@ -109,7 +109,7 @@ def test_three_turns_form_one_entry_before_filter_and_pagination(tmp_path: Path,
 
 def test_latest_cancelled_turn_controls_status_filter(tmp_path: Path, monkeypatch):
     """旧轮completed不让最新cancelled会话进入完成筛选，运行时导航使用真实活动状态。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY','offline-navigation')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY','offline-navigation')
     async def scenario():
         """先完成首轮，再真实阻塞并取消后续轮，核对最新轮状态及只有一个入口。"""
         model=NavigationModel()
@@ -129,7 +129,7 @@ def test_latest_cancelled_turn_controls_status_filter(tmp_path: Path, monkeypatc
 
 def test_missing_latest_and_damaged_metadata_never_show_old_success(tmp_path: Path, monkeypatch):
     """缺失最新轮或坏会话表时保留历史入口和受控提示，不退回旧轮伪装成功或修写记录。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY','offline-navigation')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY','offline-navigation')
     async def scenario():
         """真实创建两轮，然后隔离最新目录和损坏元数据，只读列表仍能明确表达异常。"""
         async with service(config_for(tmp_path),NavigationModel()) as (client,manager):
@@ -150,7 +150,7 @@ def test_missing_latest_and_damaged_metadata_never_show_old_success(tmp_path: Pa
 
 def test_reassigned_project_id_does_not_import_old_directory_conversations(tmp_path: Path, monkeypatch):
     """宿主将同编号指向另一路径后，旧会话仅保留在全局历史，不混入新项目。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY','offline-navigation')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY','offline-navigation')
     config=config_for(tmp_path)
     async def scenario():
         """先记录旧来源，再以重分配后的配置重启，验证路径身份参与项目筛选。"""

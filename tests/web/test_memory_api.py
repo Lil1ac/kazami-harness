@@ -10,6 +10,7 @@ from uuid import uuid4
 import httpx
 
 from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace
 from tests.web.test_planning_api import call, reply, ScriptModel
@@ -44,7 +45,7 @@ def application(tmp_path: Path, model, config: RunConfig | None = None, *, max_c
     for name in ("one", "two"):
         (tmp_path / name).mkdir(exist_ok=True)
     web = WebConfig(max_concurrent_runs=max_concurrent_runs, project_dir=tmp_path, worktrees_root=tmp_path / "trees", frontend_dist=tmp_path / "dist", workspaces=[WebWorkspace(id=name, label=name, path=tmp_path / name) for name in ("one", "two")])
-    app = create_app(web, config or RunConfig(tools=["read_file", "write_file"]), tmp_path / "runs", model_client=model)
+    app = create_app(web, config or configured_run(tools=["read_file", "write_file"]), tmp_path / "runs", model_client=model)
 
     def key(config):
         """仅为离线启动提供固定 config 凭据占位，不读用户密钥。"""

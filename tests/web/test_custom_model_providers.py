@@ -86,17 +86,28 @@ def test_desktop_register_probe_run_role_and_history(tmp_path, monkeypatch):
     async def scenario():
         """通过受认证桌面 HTTP 完成登记、探测、审批接续及历史核对。"""
         store = PreferenceStore(tmp_path / "desktop")
-        host = DesktopHost(store, NativeKeys(), "a" * 64, {})
+        host = DesktopHost(store, NativeKeys(), "a" * 64)
         app = create_app(web, RunConfig(tools=["read_file", "write_file"]), tmp_path / "records", desktop=host, transport=httpx.MockTransport(send))
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             client.cookies.set(host.cookie_name, host.token)
-            created = await client.post("/api/desktop/model-providers", json={
-                "name": "本机网关", "base_url": "http://localhost:11434/v1/", "default_model": "sample", "auth": "none",
-            })
+            empty = (await client.get("/api/options")).json()
+            assert empty["model_providers"] == {} and empty["config"]["provider"] is None
+            blocked = await submit_run(client, json={"workspace_id": "sample", "prompt": "首次打开"})
+            assert blocked.status_code == 400 and not requests
+            created = await client.post("/api/desktop/model-providers", json={"definition": {
+                "name": "本机网关", "base_url": "http://localhost:11434/v1/", "default_model": "sample",
+                "models": ["review-model"], "auth": "none",
+            }})
             assert created.status_code == 201, created.text
             provider = created.json()["provider"]
-            version = (await client.get("/api/options")).json()["model_providers"][provider]["version"]
+            assert created.json()["options"]["config"]["provider"] == provider
+            version = created.json()["options"]["model_providers"][provider]["version"]
             assert PreferenceStore(store.directory).value.custom_providers[provider].version == version
+            unregistered = await submit_run(client, json={
+                "workspace_id": "sample", "prompt": "模型尚未登记",
+                "config": {"provider": provider, "requested_model": "unregistered"},
+            })
+            assert unregistered.status_code == 400 and not requests
             response = await client.post(f"/api/model-providers/{provider}/probe", json={"version": version})
             assert response.json() == {"connection": "passed", "authentication": "not_required", "stream": "passed", "tools": "passed", "error_code": None}
             assert all(len(request["messages"]) == 1 for request in requests)
@@ -137,19 +148,20 @@ def test_changed_address_rejects_queued_approval_and_old_credentials(tmp_path, m
         """在桌面认证范围内变更连接并处理旧任务，校验没有请求或项目写入。"""
         native = NativeKeys()
         store = PreferenceStore(tmp_path / "desktop")
-        host = DesktopHost(store, native, "b" * 64, {})
+        host = DesktopHost(store, native, "b" * 64)
         app = create_app(web, RunConfig(tools=["write_file"]), tmp_path / "records", desktop=host, transport=httpx.MockTransport(send))
         async with app.router.lifespan_context(app), httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
             client.cookies.set(host.cookie_name, host.token)
             definition = {"name": "自建网关", "base_url": "https://old.example.test/v1", "default_model": "agent"}
-            provider = (await client.post("/api/desktop/model-providers", json=definition)).json()["provider"]
+            saved = await client.post("/api/desktop/model-providers", json={"definition": definition, "secret": "offline-old-key"})
+            assert saved.status_code == 201, saved.text
+            provider = saved.json()["provider"]
+            assert saved.json()["options"]["model_providers"][provider]["key_configured"]
             old = store.value.custom_providers[provider]
-            credential = f"/api/desktop/credentials/{provider}"
-            saved = await client.put(credential, json={"version": old.version, "secret": "offline-old-key"})
-            assert saved.json() == {"key_configured": True}
+            address = f"/api/desktop/model-providers/{provider}"
             # 同一连接在重启时只从当前的分区取回密钥。
-            restored = DesktopHost(PreferenceStore(store.directory), native, "b" * 64, {})
-            await restored.load_custom_keys(app.state.manager.run_config)
+            restored = DesktopHost(PreferenceStore(store.directory), native, "b" * 64)
+            await restored.load_model_keys(app.state.manager.run_config)
             assert restored.api_key(RunConfig(provider=provider, custom_providers={provider: old})) == "offline-old-key"
             request = {"workspace_id": "sample", "prompt": "写入", "model_versions": {provider: old.version},
                        "config": {"provider": provider, "requested_model": "agent", "permission_mode": "strict"}}
@@ -164,7 +176,7 @@ def test_changed_address_rejects_queued_approval_and_old_credentials(tmp_path, m
             assert edited.status_code == 200, edited.text
             current = (await client.get("/api/options")).json()["model_providers"][provider]
             assert current["version"] != old.version and not current["key_configured"] and not native.slots
-            assert (await client.put(credential, json={"version": old.version, "secret": "offline-stale"})).status_code == 409
+            assert (await client.put(address, json={"definition": definition, "version": old.version, "secret": "offline-stale"})).status_code == 409
             rejected = await submit_followup(client, f"/api/runs/{first['run_id']}/followups", json=decide(first))
             assert rejected.status_code == 409 and rejected.json()["error"]["code"] == "model_provider_changed"
             assert (await submit_run(client, json=request)).status_code == 409

@@ -13,7 +13,7 @@ import uvicorn
 
 from agent_harness.projects import ProjectPreset
 from agent_harness.providers.base import ModelResponse, ToolCall
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
 
@@ -95,10 +95,10 @@ def main() -> None:
     evidence=args.root.resolve()/"evidence"
     evidence.mkdir(parents=True,exist_ok=True)
     (evidence/"fixture.json").write_text(json.dumps({"source":str(source),"python":str(executable),"port":args.port},ensure_ascii=False,indent=2),encoding="utf-8")
-    os.environ["DEEPSEEK_API_KEY"]="offline-execution-browser"
+    os.environ["HARNESS_TEST_MODEL_KEY"]="offline-execution-browser"
     config=WebConfig(project_dir=project,worktrees_root=evidence/"worktrees",frontend_dist=project/"frontend/dist",
                      projects=[ProjectPreset(id="execution-project",label="执行配置验收项目",path=source)],workspaces=[])
-    run_config=RunConfig(requested_model="offline-execution-browser",tools=["read_file","search_files","write_file","run_command"])
+    run_config=configured_run(requested_model="offline-execution-browser",tools=["read_file","search_files","write_file","run_command"])
     app=create_app(config,run_config,evidence/"runs",model_client=ExecutionBrowserModel(evidence/"requests.jsonl"))
     uvicorn.run(app,host="127.0.0.1",port=args.port,loop="asyncio",workers=1,timeout_graceful_shutdown=2)
 

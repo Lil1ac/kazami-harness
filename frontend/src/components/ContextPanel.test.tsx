@@ -151,11 +151,11 @@ it('技能加载失败展示原因，空列表与旧记录缺省分别说明', (
   );
   expect(screen.getByText('技能加载失败：missing-skill')).toBeInTheDocument();
   expect(screen.getByText('skill_not_found')).toBeInTheDocument();
-  expect(screen.queryByText('本轮未选择技能。')).not.toBeInTheDocument();
+  expect(screen.queryByText('本轮未加载技能。')).not.toBeInTheDocument();
   rerender(
     <ContextPanel context={makeContext({ skills: [], skill_error: null })} stopReason={null} />,
   );
-  expect(screen.getByText('本轮未选择技能。')).toBeInTheDocument();
+  expect(screen.getByText('本轮未加载技能。')).toBeInTheDocument();
   rerender(<ContextPanel context={makeContext()} stopReason={null} />);
   expect(screen.getByText('此记录未保存技能快照，无法推断当时的加载情况。')).toBeInTheDocument();
 });

@@ -1,6 +1,6 @@
 import { Select } from 'antd';
 import { memo } from 'react';
-import { DownOutlined, ThunderboltOutlined, AuditOutlined } from '@ant-design/icons';
+import { CheckOutlined, DownOutlined, ThunderboltOutlined, AuditOutlined } from '@ant-design/icons';
 import './ComposerSelect.css';
 
 /** 模式选择输入；切换只设置下一次提交，不改变正在执行的权限。 */
@@ -10,7 +10,7 @@ interface ModeSelectProps {
   label?: string; // 区分新建与下一轮的无障碍名称，默认工作模式。
 }
 
-/** 返回新建与续聊共用的紧凑模式入口；菜单展示行为说明，关闭后只保留当前模式。 */
+/** 返回新建与续聊共用的两项菜单；value 标记当前模式，onChange 只更新下一次提交。 */
 export const ModeSelect = memo(function ModeSelect({
   value,
   onChange,
@@ -25,20 +25,20 @@ export const ModeSelect = memo(function ModeSelect({
       virtual={false}
       variant="borderless"
       size="small"
-      popupMatchSelectWidth={248}
-      classNames={{ popup: { root: 'composer-select-menu' } }}
+      popupMatchSelectWidth={136}
+      classNames={{ popup: { root: 'composer-mode-menu' } }}
       suffixIcon={<DownOutlined />}
       options={[
         {
           value: 'auto',
           label: '自动',
-          description: '根据要求执行，必要时先规划',
+          title: '根据要求执行，必要时先规划',
           icon: <ThunderboltOutlined />,
         },
         {
           value: 'plan',
           label: '先规划',
-          description: '先研究并提交计划，批准后再执行',
+          title: '先提交计划，批准后执行',
           icon: <AuditOutlined />,
         },
       ]}
@@ -51,14 +51,12 @@ export const ModeSelect = memo(function ModeSelect({
         )
       }
       optionRender={
-        /* 说明跟随固定模式数据，键盘选项仍由 Select 管理。 */ (option) => (
-          <div className="mode-option">
+        /* 每个选项一行；详细语义保留在提示中，键盘操作由 Select 管理。 */ (option) => (
+          <span className="composer-mode-option">
             {option.data.icon}
-            <div>
-              <strong>{option.data.label}</strong>
-              <small>{option.data.description}</small>
-            </div>
-          </div>
+            <span>{option.data.label}</span>
+            {option.value === value && <CheckOutlined aria-hidden="true" />}
+          </span>
         )
       }
     />

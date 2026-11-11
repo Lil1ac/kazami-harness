@@ -1,5 +1,7 @@
 """真实HTTP、队列和文件证据验证会话管理，原项目文件不因整理或删除被改写。"""
 
+from tests.helpers.models import configured_run
+
 import asyncio
 import json
 from pathlib import Path
@@ -26,7 +28,7 @@ async def change(client, identifier: str, action: str, **fields):
 
 def test_rename_pin_versions_and_idempotent_receipts(tmp_path: Path, monkeypatch):
     """标题及置顶跨入口统一，整理不修改消息/活动时间；过期和重复请求均有明确语义。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """生成两个真实会话后检查管理事务及不可变事件，返回None。"""
@@ -62,7 +64,7 @@ def test_rename_pin_versions_and_idempotent_receipts(tmp_path: Path, monkeypatch
 
 def test_input_origin_and_corrupt_metadata_are_controlled(tmp_path: Path, monkeypatch):
     """非法输入及跨源拒绝；元数据损坏时返回受控错误并保留原记录，不重建默认值。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """经真实HTTP校验输入，再注入数据库字段损坏，确认不会覆盖原文件。"""
@@ -122,8 +124,8 @@ def test_desktop_deleted_artifact_never_reaches_native_bridge(tmp_path: Path):
     from agent_harness.web.api import create_app
     from tests.desktop.test_plan_export_integration import NativeDownload
     native = NativeDownload()
-    host = DesktopHost(PreferenceStore(tmp_path / 'desktop'), native, 'management-token', {'deepseek': 'offline-management'})
-    app = create_app(config_for(tmp_path), RunConfig(tools=['write_file']), tmp_path / 'runs', model_client=NavigationModel(), desktop=host)
+    host = DesktopHost(PreferenceStore(tmp_path / 'desktop'), native, 'management-token')
+    app = create_app(config_for(tmp_path), configured_run(local=True, tools=['write_file']), tmp_path / 'runs', model_client=NavigationModel(), desktop=host)
 
     async def scenario():
         """带真实桌面认证创建任务并删除，验证URL校验前置于所有原生文件操作。"""
@@ -141,7 +143,7 @@ def test_desktop_deleted_artifact_never_reaches_native_bridge(tmp_path: Path):
 
 def test_move_changes_group_but_continuation_keeps_source(tmp_path: Path, monkeypatch):
     """移动与未分组改变导航，续轮仍在原目录写文件，重启后管理身份保持。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
     config = config_for(tmp_path)
 
     async def scenario():
@@ -174,7 +176,7 @@ def test_move_changes_group_but_continuation_keeps_source(tmp_path: Path, monkey
 
 def test_archive_trash_restore_and_access_guards(tmp_path: Path, monkeypatch):
     """归档和回收站冻结写入；所有旧运行内容入口遵守访问状态，恢复不自动执行。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """验证分类查询、旧链接、计划接续和任务写入口，恢复保留原归档状态。"""
@@ -208,7 +210,7 @@ def test_archive_trash_restore_and_access_guards(tmp_path: Path, monkeypatch):
 
 def test_busy_and_queued_jobs_block_organization(tmp_path: Path, monkeypatch):
     """活动及排队续轮禁止移动归档删除，但允许标题更新，取消后才恢复整理。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """用真实阻塞模型和队列创建竞态边界，不用固定睡眠判断执行状态。"""
@@ -233,7 +235,7 @@ def test_busy_and_queued_jobs_block_organization(tmp_path: Path, monkeypatch):
 
 def test_purge_cleans_owned_records_keeps_project_and_memory(tmp_path: Path, monkeypatch):
     """彻底清理移除证据与任务正文，源码和另存记忆保留，幂等旧作业不能重新执行。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """真实运行后保存记忆、移入回收站并清理，检查文件、来源投影和队列重试。"""
@@ -272,7 +274,7 @@ def test_purge_cleans_owned_records_keeps_project_and_memory(tmp_path: Path, mon
 
 def test_batch_partial_conflict_and_retryable_purge(tmp_path: Path, monkeypatch):
     """批量逐项回执保留冲突；文件清理失败保留清单，回收站仍可见且重试不扩大范围。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """模拟一次文件系统失败，真实事务和其余文件清理保持生产实现。"""
@@ -305,7 +307,7 @@ def test_batch_partial_conflict_and_retryable_purge(tmp_path: Path, monkeypatch)
 
 def test_isolated_worktree_requires_explicit_discard_before_purge(tmp_path: Path, monkeypatch):
     """保留的独立工作树阻止彻底删除；恢复并明确丢弃后才能清理，来源仓库保持。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """通过真实Git、审阅接口和清理路径验证工作树与会话记录的不同生命周期。"""
@@ -339,7 +341,7 @@ def test_isolated_worktree_requires_explicit_discard_before_purge(tmp_path: Path
 
 def test_foreign_run_refuses_record_cleanup(tmp_path: Path, monkeypatch):
     """篡改轮次归属不能清理其他会话；验证清单失败时不删除任何原始记录。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
 
     async def scenario():
         """构造跨会话错误关联并确认所有源文件及另一个会话保持原样，返回None。"""
@@ -361,7 +363,7 @@ def test_foreign_run_refuses_record_cleanup(tmp_path: Path, monkeypatch):
 
 def test_partial_purge_survives_restart_and_keeps_tombstone(tmp_path: Path, monkeypatch):
     """部分文件已清理后重启仍显示重试入口，最终墓碑阻止旧链接复活或暴露正文。"""
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-management')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-management')
     config = config_for(tmp_path)
 
     async def scenario():

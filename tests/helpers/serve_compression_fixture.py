@@ -8,6 +8,7 @@ import sys
 import uvicorn
 
 from agent_harness.schemas import ContextPolicy, RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebVerifier, WebWorkspace
 
@@ -52,13 +53,13 @@ def main() -> None:
     toml = root / "verify.toml"
     if not toml.exists():
         toml.write_text('argv = ["python", "verify.py"]\ncwd = "."\ntimeout_seconds = 10.0\n', encoding="utf-8")
-    os.environ["DEEPSEEK_API_KEY"] = "offline-compression-browser-key"
+    os.environ["HARNESS_TEST_MODEL_KEY"] = "offline-compression-browser-key"
     config = WebConfig(
         project_dir=project, worktrees_root=root / "copies", frontend_dist=project / "frontend/dist",
         workspaces=[WebWorkspace(id="compression", label="上下文压缩联动（离线）", path=workspace)],
         verifiers=[WebVerifier(id="compression", label="代码加法与规则验收", description="仅检查本服务的app.py。", path=toml)],
     )
-    host = RunConfig(
+    host = configured_run(
         requested_model="offline-compression", tools=["read_file", "write_file"],
         context=ContextPolicy(compression="hybrid", max_input_bytes=15000, inline_tool_bytes=1024, keep_recent_groups=1, max_summary_calls=4),
     )

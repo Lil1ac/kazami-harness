@@ -1,52 +1,185 @@
+/* 自动化采用任务列表与检查器布局，复用全站语义色，避免影响会话页面。 */
 .automations-page {
-  max-width: 1040px;
+  max-width: 1120px;
   margin: 0 auto;
+  padding-top: 32px;
 }
-.automation-heading,
-.automation-rule-title {
+.automation-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  margin-bottom: 28px;
 }
-.automation-heading h1,
-.automation-rule-title h2 {
+.automation-heading h1 {
   margin: 0;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
 }
-.automation-heading {
-  margin-bottom: 24px;
+.automations-page > .ant-alert {
+  margin-bottom: 16px;
 }
-.automation-rules {
-  margin-top: 20px;
+.automation-list-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px 100px;
+  padding: 10px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
 }
 .automation-rule {
-  padding: 24px 0;
-  border-bottom: 1px solid var(--border-color, #d8dce2);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 92px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  transition: background 0.16s ease;
 }
-.automation-rule h2,
-.automation-inbox h2 {
-  font-size: 18px;
+.automation-rule:hover,
+.automation-rule:focus-within {
+  background: var(--raised);
+}
+.automation-rule-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 218px 16px;
+  gap: 14px;
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  padding: 22px 0;
+  cursor: pointer;
+}
+.automation-rule-icon {
+  color: var(--muted);
+  font-size: 20px;
+}
+.automation-rule-name,
+.automation-rule-schedule {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.automation-rule-name strong {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.automation-rule-name small,
+.automation-rule-schedule small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.automation-rule-schedule {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.automation-rule-chevron {
+  color: var(--subtle);
+  font-size: 10px;
+}
+.automation-rule-state {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100px;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.automation-state-enabled {
+  color: var(--success);
+}
+.automation-state-warning {
+  color: var(--warning);
+}
+.automation-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+}
+.automation-rules > .ant-empty,
+.automation-inbox > .ant-empty {
+  padding: 64px 16px;
+}
+.automation-rules > .ant-empty p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.automation-detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.automation-detail-actions .ant-btn:last-child {
+  margin-left: auto;
+}
+.automation-detail .ant-alert {
+  margin-bottom: 16px;
+}
+.automation-overview {
+  display: grid;
+  gap: 24px;
+}
+.automation-detail-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.automation-overview dl {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 18px 16px;
+  margin: 0;
+  line-height: 1.7;
+}
+.automation-overview dt {
+  color: var(--muted);
+}
+.automation-overview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.automation-overview h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 12px;
 }
 .automation-task {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  margin-bottom: 10px;
-}
-.automation-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 16px;
+  line-height: 1.85;
+  margin: 0;
 }
 .automation-form {
   display: grid;
-  gap: 16px;
+  gap: 20px;
   padding-top: 12px;
 }
 .automation-form label:not(.ant-checkbox-wrapper) {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  font-size: 13px;
 }
 .automation-form .automation-inline {
   flex-direction: row !important;
@@ -55,7 +188,7 @@
 }
 .automation-form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
 }
 .automation-form pre {
@@ -63,44 +196,155 @@
   overflow: auto;
 }
 .automation-form small {
-  color: var(--text-secondary, #68707d);
-  line-height: 1.6;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.automation-form .ant-select {
+  width: 100%;
+}
+.automation-form > .ant-btn {
+  justify-self: start;
+}
+.automation-advanced {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.automation-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.automation-editor .ant-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 24px;
 }
 .automation-times {
   margin: 0;
   padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.8;
 }
-.automation-history {
-  margin-top: 20px;
-  border-top: 1px solid var(--border-color, #d8dce2);
-}
-.automation-history article,
-.automation-inbox article {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border-color, #d8dce2);
+.automation-history article {
+  position: relative;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
 }
-.automation-history article > div,
-.automation-inbox article > div {
+.automation-history article > div {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+.automation-history article > div > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.automation-history article strong {
+  font-size: 13px;
+}
+.automation-history article p {
+  color: var(--muted);
 }
 .automation-history a + a {
   margin-left: 16px;
 }
-.automation-inbox {
-  margin-top: 36px;
+.automation-history + .ant-btn {
+  margin-top: 20px;
 }
-.automation-inbox .is-read {
-  opacity: 0.65;
+.automation-inbox article {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 22px 16px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.automation-inbox article > div {
+  display: grid;
+  gap: 8px;
+}
+.automation-inbox article > div > span {
+  color: var(--muted);
+  line-height: 1.7;
+}
+.automation-inbox article > a {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.automation-inbox .is-read strong {
+  color: var(--muted);
+  font-weight: 500;
+}
+.automation-unread-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+@media (max-width: 760px) {
+  .automation-list-heading {
+    display: none;
+  }
+  .automation-rule {
+    padding: 0 8px;
+    gap: 8px;
+  }
+  .automation-rule-open {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 8px 10px;
+  }
+  .automation-rule-icon {
+    grid-row: span 2;
+  }
+  .automation-rule-schedule {
+    grid-column: 2;
+    font-size: 12px;
+  }
+  .automation-rule-schedule small,
+  .automation-rule-chevron {
+    display: none;
+  }
+  .automation-rule-state {
+    width: 84px;
+    gap: 8px;
+  }
 }
 @media (max-width: 560px) {
-  .automation-form-row {
-    grid-template-columns: 1fr;
+  .automations-page {
+    padding-top: 12px;
   }
   .automation-heading {
+    margin-bottom: 20px;
+  }
+  .automation-heading h1 {
+    font-size: 22px;
+  }
+  .automation-form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .automation-detail .ant-drawer-body,
+  .automation-editor .ant-drawer-body {
+    padding: 20px 16px;
+  }
+  .automation-overview dl {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 16px 12px;
+  }
+  .automation-inbox article {
+    padding: 18px 0;
+    gap: 12px;
     align-items: flex-start;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .automation-rule {
+    transition: none;
   }
 }

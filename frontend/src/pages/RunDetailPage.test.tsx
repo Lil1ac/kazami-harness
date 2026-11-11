@@ -1,6 +1,6 @@
 import { makeConversationManagement } from '../test/fixtures';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -152,7 +152,7 @@ beforeEach(
 
 it('连续发送三轮保持同一输入节点与消息区域，各轮追加到最新父轮', async () => {
   // 路由更新不重建会话DOM，旧消息和用户阅读区域持续保留。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   show();
   const input = await screen.findByLabelText('输入消息');
   const log = screen.getByRole('log', { name: '会话消息' });
@@ -175,17 +175,19 @@ it('连续发送三轮保持同一输入节点与消息区域，各轮追加到�
 
 it('普通入口默认收起详情，展开和关闭检查器保留同一输入节点与草稿', async () => {
   // 布局折叠不能重建消息或清空正在编写的后续要求，打开详情也不能发送任务。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   show();
   const input = await screen.findByLabelText('输入消息');
   const log = screen.getByRole('log', { name: '会话消息' });
   expect(screen.queryByRole('complementary', { name: '运行详情' })).not.toBeInTheDocument();
   await user.type(input, '保留这条要求');
-  await user.click(screen.getByRole('button', { name: '查看详情' }));
+  const trigger = screen.getByRole('button', { name: '查看详情' });
+  await user.click(trigger);
   expect(screen.getByRole('complementary', { name: '运行详情' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '收起详情' })).toHaveAttribute('aria-expanded', 'true');
   await user.click(screen.getByRole('button', { name: '关闭详情' }));
   expect(screen.queryByRole('complementary', { name: '运行详情' })).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
   expect(screen.getByLabelText('输入消息')).toBe(input);
   expect(screen.getByRole('log', { name: '会话消息' })).toBe(log);
   expect(input).toHaveValue('保留这条要求');
@@ -194,7 +196,7 @@ it('普通入口默认收起详情，展开和关闭检查器保留同一输入�
 
 it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', async () => {
   // 检查旧测试与继续最新代码可以同时进行，界面不会把旧轮变成新分支。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const first = runs.get('run-a')!;
   first.python_execution = {
     workspace: first.workspace,
@@ -233,7 +235,7 @@ it('从旧轮深链接回看记录时，发送仍追加到会话最新轮', asyn
 
 it('后台刷新失败时保留会话、输入和上次快照', async () => {
   // 网络短暂故障不能销毁已读消息与编辑中的内容。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const client = show();
   const input = await screen.findByLabelText('输入消息');
   await user.type(input, '尚未发送');
@@ -275,7 +277,7 @@ it('旧上下文深链接在检查器显示完整运行快照，消息仍可阅�
 
 it('查看旧轮时停止按钮仍明确取消最新活动运行', async () => {
   // 取消目标与检查器选择分离，不能取消一个已结束的旧轮。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const second = sessionRun('run-b', 2, '继续执行');
   second.active = true;
   second.phase = 'tool';
@@ -304,7 +306,7 @@ it('查看旧轮时停止按钮仍明确取消最新活动运行', async () => {
 
 it('GET发现已接纳新轮但快照尚未返回时保留输入节点和草稿', async () => {
   // 覆盖POST响应丢失后的会话补读；核对最新快照前禁止新提交，但不卸载对话。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const client = show();
   const input = await screen.findByLabelText('输入消息');
   await user.type(input, '正在编辑的下一条');
@@ -356,7 +358,7 @@ it('手机直接打开诊断链接时自动显示对应详情抽屉', async () =
 });
 
 it('回收站旧轮链接恢复后清除410并重新读取，保持原轮次且不自动执行', async () => {
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const older = sessionRun('run-b', 2, '原第二轮');
   runs.set('run-b', older);
   record = { ...record, latest_run_id: 'run-b', turns: [...record.turns, turn(older)] };
@@ -393,7 +395,7 @@ it('回收站旧轮链接恢复后清除410并重新读取，保持原轮次且�
 
 it('中断后直接发送继续，沿用输入节点并保留旧记录，不出现独立恢复入口', async () => {
   // 用原发送链路覆盖此前草稿、路由与历史回看要求，只有被接纳的新消息增加一轮。
-  const user = userEvent.setup();
+  const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.EachTarget });
   const root = runs.get('run-a')!;
   root.interrupted = true;
   root.result = {

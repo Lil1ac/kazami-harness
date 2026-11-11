@@ -100,7 +100,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path("D:/Codex/Temp/harness-newline-edit-browser-20261028"))
     args = parser.parse_args()
     project = Path(__file__).resolve().parents[2]
-    os.environ["DEEPSEEK_API_KEY"] = "offline-editing-fixture"
+    os.environ["HARNESS_TEST_MODEL_KEY"] = "offline-editing-fixture"
     app = fixture_app(args.root.resolve(), project / "frontend/dist")
     uvicorn.run(app, host="127.0.0.1", port=args.port, loop="asyncio", timeout_graceful_shutdown=2)
 

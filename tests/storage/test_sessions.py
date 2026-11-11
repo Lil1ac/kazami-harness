@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from agent_harness.schemas import RunConfig, RunManifest, RunResult, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.sessions import SessionError, SessionStore, history_messages, payload_digest
 from agent_harness.storage.snapshots import FileSnapshotStore, SnapshotError
 from agent_harness.storage.runs import RunStore
@@ -16,7 +17,7 @@ def complete_history(tmp_path: Path):
     """写入一次含真实工具证据的完整历史，返回读取结果；不调用外部模型或工具。"""
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
-    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt='first', workspace=workspace), config=RunConfig())
+    manifest = RunManifest(run_id=uuid4(), task=TaskSpec(prompt='first', workspace=workspace), config=configured_run())
     store = RunStore.create(tmp_path / 'records', manifest)
     store.append('run_started', {'messages':[{'role':'system','content':'old workspace'}, {'role':'user','content':'first'}], 'tools':[], 'conversation_start':1})
     message = {'role':'assistant','content':None,'reasoning_content':'原始推理字段','tool_calls':[{'id':'call-1','type':'function','function':{'name':'read_file','arguments':'{}'}}]}

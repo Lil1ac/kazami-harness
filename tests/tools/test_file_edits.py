@@ -10,6 +10,7 @@ import stat
 import pytest
 
 from agent_harness.schemas import RunConfig, RunLimits
+from tests.helpers.models import configured_run
 from agent_harness.tools import ToolExecutor
 from agent_harness.tools import files
 
@@ -18,7 +19,7 @@ def executor(tmp_path: Path, max_bytes: int = 1024 * 1024) -> ToolExecutor:
     """创建启用读/编辑的独立执行器；max_bytes 同时限制原文件和编辑结果，单位为字节。"""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    return ToolExecutor(workspace, workspace / ".runs", RunConfig(tools=["read_file", "edit_file"], limits=RunLimits(max_file_write_bytes=max_bytes)))
+    return ToolExecutor(workspace, workspace / ".runs", configured_run(tools=["read_file", "edit_file"], limits=RunLimits(max_file_write_bytes=max_bytes)))
 
 
 def call(tool: ToolExecutor, name: str, **arguments) -> dict:

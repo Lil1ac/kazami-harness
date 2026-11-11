@@ -6,12 +6,16 @@ export function SkillSelector({
   options,
   selected,
   onChange,
+  automatic = false,
+  onAutomaticChange,
   label = '任务技能',
   disabled = false,
 }: {
   options: SkillOption[]; // 宿主当前目录；不包含正文，也不能由浏览器改写来源。
   selected: string[]; // 当前明确选择；包含失效名称时仍允许取消。
   onChange: (names: string[]) => void; // 用户更改后返回新名称列表，[] 表示清空。
+  automatic?: boolean; // 当前草稿是否允许模型按需启用技能。
+  onAutomaticChange?: (enabled: boolean) => void; // 未提供时只展示手选入口。
   label?: string; // 区分首次任务与续轮控件的可访问名称。
   disabled?: boolean; // 只在无法确认当前运行等情形禁用；活动运行可预先编辑。
 }) {
@@ -25,9 +29,13 @@ export function SkillSelector({
         {label}
         <span className="muted"> · {selected.length}/8</span>
       </legend>
-      <p className="muted">手动加载流程指导；工具、预算和验收由宿主配置控制。</p>
+      {onAutomaticChange && (
+        <Checkbox checked={automatic} onChange={/* 仅改下一轮选择。 */ (event) => onAutomaticChange(event.target.checked)}>
+          自动使用技能
+        </Checkbox>
+      )}
       {!options.length && !missing.length && (
-        <p className="muted">暂无可用技能，宿主可登记技能目录。</p>
+        <p className="muted">暂无可用技能，可在运行配置中导入。</p>
       )}
       {[
         ...options,

@@ -1,0 +1,147 @@
+/* 队列只占一列，信息与动作按行对齐，窄屏可自然换行。 */
+.queue-page {
+  max-width: 780px;
+  margin-inline: auto;
+  display: grid;
+  gap: 16px;
+}
+
+.queue-heading,
+.queue-settings,
+.queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.queue-heading h1 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 650;
+}
+
+.queue-heading .ant-select {
+  min-width: 140px;
+  max-width: 100%;
+}
+
+.queue-back {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.queue-group h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.queue-group h2 span,
+.queue-disclosure summary span {
+  margin-inline-start: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.queue-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.queue-row {
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+}
+
+.queue-row + .queue-row {
+  border-top: 1px solid var(--line);
+}
+
+.queue-row-main {
+  flex: 1 1 250px;
+  min-width: 0;
+}
+
+.queue-row-heading,
+.queue-row-meta,
+.queue-row-actions,
+.queue-settings label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.queue-row-heading strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.queue-state,
+.queue-row-meta,
+.queue-row-note,
+.queue-row-actions,
+.queue-settings {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.queue-row-meta {
+  margin-top: 4px;
+}
+
+.queue-row-note {
+  margin: 5px 0 0;
+}
+
+.queue-row a {
+  color: var(--accent);
+}
+
+.queue-state[data-status='waiting_input'],
+.queue-state[data-status='needs_review'] {
+  color: var(--warning);
+}
+
+.queue-state[data-status='running'] {
+  color: var(--accent);
+}
+
+.queue-state[data-status='failed'] {
+  color: var(--danger);
+}
+
+.queue-empty {
+  margin: 0;
+  padding: 28px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.queue-disclosure {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.queue-disclosure summary {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.queue-disclosure[open] > :not(summary) {
+  margin-top: 10px;
+}

@@ -13,6 +13,7 @@ from agent_harness.config import ConfigurationError
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.runtime.runner import run_task
 from tests.helpers.permissions import trusted_config
+from tests.helpers.models import MODEL_TEST_TOML
 from agent_harness.schemas import RunConfig, RunLimits, RunManifest, TaskSpec, VerifierSpec
 from agent_harness.storage.sessions import history_messages
 from agent_harness.storage.runs import RunStore, StorageError
@@ -216,10 +217,10 @@ def test_cli_enables_public_test_repair_and_shows_each_check(tmp_path: Path, mon
     workspace = tmp_path / 'work'
     workspace.mkdir()
     profile = tmp_path / 'harness.toml'
-    profile.write_text('tools=["run_command"]\n[permission_policy]\ncommand="allow"\nverification="allow"\n', encoding='utf-8')
+    profile.write_text('tools=["run_command"]\n[permission_policy]\ncommand="allow"\nverification="allow"\n' + MODEL_TEST_TOML, encoding='utf-8')
     verifier = tmp_path / 'checks.toml'
     verifier.write_text('kind="project_tests"\nargv='+json.dumps([sys.executable,'-c',CHECK_CODE])+'\n', encoding='utf-8')
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-cli-repair')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-cli-repair')
 
     async def offline_run(manifest, runs_root, api_key, **kwargs):
         """保留CLI的实际配置和信号上下文，仅注入会修复真实文件的离线模型，返回Runner结果。"""

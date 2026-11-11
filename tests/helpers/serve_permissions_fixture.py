@@ -11,7 +11,7 @@ import uvicorn
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.runtime.runner import REQUEST_CONTEXT
-from agent_harness.schemas import RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig, WebWorkspace, WebVerifier
 from agent_harness.web.jobs import JobRequest
@@ -49,7 +49,7 @@ def application(root: Path):
     profile.write_text("argv=" + json.dumps([sys.executable, "-c", "print('独立检查通过')"]) + "\n", encoding="utf-8")
     web = WebConfig(project_dir=root, worktrees_root=root / "trees", frontend_dist=Path(__file__).resolve().parents[2] / "frontend/dist",
         workspaces=[WebWorkspace(id="permissions", label="权限验收项目", path=workspace)], verifiers=[WebVerifier(id="checks", label="独立检查", path=profile)])
-    app = create_app(web, RunConfig(tools=["read_file", "write_file", "edit_file", "search_files", "run_command"]), root / "runs", model_client=PermissionFixtureModel())
+    app = create_app(web, configured_run(tools=["read_file", "write_file", "edit_file", "search_files", "run_command"]), root / "runs", model_client=PermissionFixtureModel())
 
     def key(config) -> str:
         """为离线 config 返回固定占位密钥，不读取、打印或发送真实凭据。"""

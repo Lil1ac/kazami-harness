@@ -37,14 +37,14 @@
 | C07 | Subagents：子 Agent 委派 | 只读及隔离开发已实现 | 双槽异步、单项取消、工作区快照、动作审批接续和成果集成 | 任意子上下文续接仍待建设；持久成员协作见 C08 |
 | C08 | Agent Teams：多 Agent 协作 | 单机会话内首版已实现 | 稳定成员、原任务认领、持久消息、依赖成果、双槽执行、整体采纳及停止核对 | 分布式、多供应商与无人值守可靠性仍待建设；详见 [团队协议](TEAMS.md) |
 | C09 | Memory：跨会话长期记忆 | 项目级首版已实现 | 项目隔离、候选确认、检索、来源修订、纠错及固定运行快照 | 用户全局记忆、后台整合及向量检索 |
-| C10 | Skills、MCP 与工具扩展 | 部分实现 | 手动技能、Hooks、受控 MCP 连接/工具发现/审批、凭据及来源历史 | 按需技能资源、OAuth、MCP资源/提示模板、扩展来源和版本管理 |
-| C11 | 模型接入与按角色配置 | 已实现当前范围 | 内置和自定义 Chat Completions 端点、流式工具、凭据分区、会话选择及探索/审阅覆盖 | 其他协议、命名预设与自动路由按需扩展 |
+| C10 | Skills、MCP 与工具扩展 | 部分实现 | 技能导入管理、手选与自动启用、文本资料，Hooks 与受控 MCP | OAuth、MCP 资源和提示模板、扩展分发 |
+| C11 | 模型接入与按角色配置 | 已实现当前范围 | 用户登记 Chat Completions 端点及多个模型、流式工具、凭据分区、会话选择及探索/审阅覆盖 | 其他协议、命名预设与自动路由按需扩展 |
 | C12 | 执行环境与权限控制 | 部分实现 | 本机执行、文件边界、权限与动作审批、预算与清理、可选 Git 工作树 | 操作系统命令沙箱、隔离环境 |
 | C13 | 成果审阅与采纳交付 | 部分实现 | 固定成果、独立合并、冲突处理、确认写回、复验、增量、恢复及受保护撤销 | 经授权的提交/PR交付、更多版本控制形态与多Agent集成策略 |
 | C14 | 验证、评测与持续改进 | 部分实现 | 项目测试、独立检查、有限自动修复、真实任务记录 | 可复查的基线比较、回归任务集、候选采用/拒绝与回退闭环 |
 | C15 | 运行观察与资源管理 | 部分实现 | 事件、阶段、耗时、已知 token、父子共享预算、团队、命令及跨 Run 容量/阻塞总览 | 费用估算和进一步故障定位 |
 | C16 | 定时与事件驱动自动化 | 本机首版已接入 | 时间及普通运行事件触发、精确授权、去重/重叠/漏跑、启停、历史及通知 | 外部Webhook/仓库事件、云端托管及关机执行，见[自动化协议](AUTOMATIONS.md) |
-| C17 | 联网研究与多模态工作 | 部分实现 | 受控 MCP 官方文档检索/读取、来源及历史；本地文本与产物 | 通用联网搜索、图像输入、附件解析与浏览器操作 |
+| C17 | 联网研究与多模态工作 | 部分实现 | 受控 MCP 官方文档和公开网页搜索、原文读取、来源及历史；本地文本与产物 | 图像输入、附件解析与浏览器操作 |
 | C18 | 工作台接入与多人部署 | 部分实现 | Windows Electron 桌面主入口、本机浏览器控制台和 CLI，可信单用户 | 远程身份认证、用户/项目隔离、团队权限；IDE 接入按需选择 |
 
 “未实现”指本产品没有对应协议、生命周期和交互。模型偶尔通过 `run_command` 启动外部脚本，或在回答中列出任务，不计作产品已经交付后台系统、MCP、浏览器工具或 Agent Tasks。
@@ -185,9 +185,9 @@
 ### C10 Skills、MCP 与工具扩展
 
 - **具体场景：** 为审阅任务选择专用流程，按需读取技能模板；连接一个代码托管或知识库服务，用统一工具完成查询或操作。
-- **当前状态：部分实现。** 已有宿主登记技能目录、手动选择 SKILL.md 正文、逐轮快照和预算计入；受控 MCP 首版接入 stdio/Streamable HTTP、连接审核、动态工具发现与逐轮选择、固定参数审批、桌面分区凭据、版本撤销、故障处理和来源历史，见 [MCP 协议](MCP.md)。技能附属资源尚无自动加载闭环。
+- **部分实现。** 页面可管理导入副本及宿主登记技能，支持手选和按需自动启用，受控读取文本资料并保存实际用过的版本。MCP 支持 stdio 和 Streamable HTTP、连接审核、工具发现、逐轮选择、参数审批与历史。 [任务技能](SKILLS.md) · [MCP 协议](MCP.md)
 - **Hooks 已接入：** 宿主/项目统一规则、定义与入口脚本审核、串行生命周期处理、具体命令审批、阶段检查点、后台命令真实结束、父子与压缩事件、有限 Stop 续跑，以及桌面/Web 设置和历史记录；边界与验收见 [Hooks 协议](HOOKS.md)。核心权限、预算、记忆规则及独立验收继续由宿主强制执行。
-- **应补齐：** 技能按需发现与激活、附属资源/脚本的受控使用；MCP OAuth 登录、资源与提示模板浏览、更完整的扩展来源及版本管理。HTTP/MCP/模型判定型 Hook 与插件市场另行规划。
+- **待扩展范围**包括技能脚本的专用执行入口、扩展分发、MCP OAuth 登录及资源和提示模板浏览。HTTP、MCP 和模型判定型 Hook 按需规划。
 - **前端闭环：** 管理可用技能与外部连接，区分断连/未授权/可用；运行中展示实际调用的外部工具及结果来源；授权只赋予明确范围。
 - **完成标准：** 从页面连接并调用一个真实或可控 MCP 服务，重连、撤权、超时行为一致；技能资源按选择加载并留下快照；外部工具不会绕过 C12 权限，密钥不进入日志；刷新历史仍能说明当时的扩展版本和使用结果。
 - **依据：** [技能实现](../src/agent_harness/context/skills.py)、[技能选择器](../frontend/src/components/SkillSelector.tsx)、[技能 API 测试](../tests/web/test_skills_api.py)、[技能说明](SKILLS.md)。参考 [MCP 架构](https://modelcontextprotocol.io/docs/learn/architecture) 和 [Hooks 生命周期](https://code.claude.com/docs/en/hooks)。
@@ -195,9 +195,9 @@
 ### C11 模型接入与按角色配置
 
 - **具体场景：** 用户选择不同供应商；简单探索和复杂实现使用适合的模型；模型生成过程中能逐步阅读回答。
-- **当前状态：已实现内置与自定义端点。** Chat Completions 连接共用工具、错误、用量与流式契约。Web 和 CLI 从宿主配置读取自定义地址与环境变量，桌面按端点版本加密保存。新会话显式选择模型，探索和审阅可覆盖。已接纳运行、审批接续与自动化按冻结端点校验执行。
+- **当前状态：已实现用户登记端点及多模型。** Chat Completions 连接共用工具、错误、用量与流式契约。Web 和 CLI 从宿主配置读取自定义地址与环境变量，桌面按端点版本加密保存。新会话显式选择模型，探索和审阅可覆盖。已接纳运行、审批接续与自动化按冻结端点校验执行。
 - **前端闭环：** 设置页管理供应商和角色，新会话选择模型，运行诊断和委派详情展示实际供应商、模型、用量和错误。
-- **验收范围：** 两家适配器通过相同离线工具、跨供应商委派与审批接续验证。缺密钥、限流、断流和历史均通过离线验证。
+- **验收范围：** 两个独立登记的连接通过跨服务委派与审批接续验证。缺密钥、限流、断流和历史均通过离线验证。
 - **后续：** 更多供应商、能力目录、命名预设、路由或故障切换按使用需求另行规划。
 - **依据：** [模型供应商与角色配置](MODELS.md)、[模型协议](../src/agent_harness/providers/base.py)、[联动测试](../tests/web/test_model_providers.py)。
 
@@ -249,8 +249,8 @@
 ### C17 联网研究与多模态工作
 
 - **具体场景：** 为依赖升级查官方文档；读取设计截图；分析 PDF/表格；启动页面并检查真实界面。
-- **当前状态：部分实现。** 受控 MCP 首版已支持官方文档搜索/读取、实际来源链接和逐轮历史证据，见 [MCP 协议](MCP.md)。通用搜索、网页浏览器、附件解析、图像输入及专用文档工具尚未提供；能生成或收集二进制文件不代表模型能理解该内容。
-- **应补齐：** 按真实工作流选择联网搜索/读取和来源引用、附件输入与解析、图像等模型能力、浏览器会话和页面证据。可通过 C10 接入成熟工具，不要求全部自研；外部页面与文档内容属于待分析数据，不能变成权限指令。
+- **部分实现。** 受控 MCP 已支持官方文档和公开网页搜索、正文读取、来源链接和逐轮历史证据。 [通用网页搜索与原文读取](MCP.md#通用网页搜索与原文读取)
+- **待补能力**包括附件输入与解析、图像等模型能力、浏览器会话和页面证据。可通过 C10 接入成熟工具。外部页面与文档内容始终作为待分析数据处理。
 - **前端闭环：** 添加附件或 URL，展示加载/解析状态、引用来源与截图或产物预览；失败时说明哪些内容未读到。
 - **完成标准：** 完成一个实际工作流，例如查官方文档→修改代码→浏览器验证→交付截图和差异；文件大小、解析失败、页面访问和模型能力不匹配均有明确结果。
 - **依据与优先级：** [当前工具注册](../src/agent_harness/tools/registry.py)、[模型协议](../src/agent_harness/providers/base.py)、[消息输入](../frontend/src/components/ConversationPanel.tsx)、[产物面板](../frontend/src/components/ArtifactPanel.tsx)。联网研究较贴近代码任务；复杂多模态按需求选择，不自动作为核心版本门槛。
@@ -344,7 +344,7 @@ V0.2 的既定首版验收已经完成，仍允许人工接续。这个事实与
 | 上下文、技能、记忆边界 | [context/builder.py](../src/agent_harness/context/builder.py)、[context/compression.py](../src/agent_harness/context/compression.py)、[context/skills.py](../src/agent_harness/context/skills.py)、[上下文面板](../frontend/src/components/ContextPanel.tsx) | [压缩 API](../tests/web/test_compression_api.py)、[技能 API](../tests/web/test_skills_api.py) |
 | 代码工作区与成果 | [execution/local.py](../src/agent_harness/execution/local.py)、[projects/manager.py](../src/agent_harness/projects/manager.py)、[文件差异面板](../frontend/src/components/FileChangesPanel.tsx) | [项目测试](../tests/web/test_projects.py)、[产物采集 API](../tests/web/test_artifact_collection_api.py) |
 | 检查与修复 | [runtime/runner.py](../src/agent_harness/runtime/runner.py)、[runtime/verifier.py](../src/agent_harness/runtime/verifier.py)、[验收面板](../frontend/src/components/VerificationPanel.tsx) | [自动修复](../tests/runtime/test_auto_repair.py)、[修复 API](../tests/web/test_auto_repair_api.py) |
-| 模型、输入与设置 | [providers](../src/agent_harness/providers/deepseek.py)、[Web schemas](../src/agent_harness/web/schemas.py)、[前端类型](../frontend/src/types.ts)、[设置页](../frontend/src/pages/SettingsPage.tsx) | [供应商测试](../tests/providers/test_provider.py)、[配置测试](../tests/test_config.py) |
+| 模型、输入与设置 | [providers](../src/agent_harness/providers/chat.py)、[Web schemas](../src/agent_harness/web/schemas.py)、[前端类型](../frontend/src/types.ts)、[设置页](../frontend/src/pages/SettingsPage.tsx) | [供应商测试](../tests/providers/test_provider.py)、[配置测试](../tests/test_config.py) |
 
 “未实现”的判断来自上述入口相互核对：数据模型没有相应实体/状态，工具与 API 没有相应操作，前端没有对应使用闭环。没有仅凭一次关键词搜索就将某能力判成缺失。测试文件的存在是已有行为约束的证据，不代表本次重新执行并通过。
 

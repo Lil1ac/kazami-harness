@@ -1,0 +1,132 @@
+/* 设置的编辑、连接管理与桌面配置分开阅读，表单仍由同一宿主保存。 */
+.settings-workspace {
+  max-width: 900px;
+  margin-inline: auto;
+}
+
+.settings-workspace .settings-heading {
+  margin-bottom: 12px;
+}
+
+.settings-tabs > .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.settings-tabs .ant-tabs-tab {
+  min-height: 44px;
+}
+
+.settings-tab-body {
+  padding-top: 24px;
+}
+
+.settings-primary {
+  display: grid;
+  grid-template-columns: minmax(95px, 150px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 0 0 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-primary > h2 {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.settings-primary .ant-form-item,
+.settings-advanced .ant-form-item {
+  margin-bottom: 0;
+}
+
+/* 行左侧标题承担可见标签，保留原表单标签供读屏和校验定位。 */
+.settings-inline-field .ant-form-item-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.settings-primary .tools-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 10px 16px;
+}
+
+.settings-inline-notice,
+.settings-data code {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.settings-advanced .ant-collapse-item {
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-advanced .ant-collapse-header {
+  padding-inline: 0 !important;
+}
+
+.settings-advanced .ant-collapse-body {
+  padding: 0 0 18px !important;
+}
+
+.settings-role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-advanced .ant-input-number {
+  width: 100%;
+}
+
+.settings-save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 22px;
+  padding-block: 12px;
+  background: var(--canvas);
+}
+
+.settings-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.settings-save-row .settings-actions {
+  margin: 0 0 0 auto;
+}
+
+.settings-save-scope {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-save-bar > .ant-alert {
+  margin-bottom: 10px;
+}
+
+@media (max-width: 600px) {
+  .settings-primary,
+  .settings-role-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .settings-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab {
+    margin-inline-start: 14px;
+  }
+
+  .settings-save-row .settings-actions {
+    justify-content: flex-end;
+    width: 100%;
+  }
+}

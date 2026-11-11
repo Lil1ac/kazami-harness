@@ -9,6 +9,7 @@ import pytest
 from agent_harness.work.planning import (PlanningController, PlanningError, SubmitPlanArguments,
                                     continue_planning)
 from agent_harness.schemas import HumanDecision, PlanningState, RunConfig
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import StorageError
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.tools.listing import ListFilesArguments, list_files
@@ -50,7 +51,7 @@ def test_tools_cannot_forge_approval_or_run_commands_in_planning(tmp_path: Path)
     workspace.mkdir()
     runs = tmp_path / "records"
     runs.mkdir()
-    executor = ToolExecutor(workspace, runs, RunConfig(tools=["write_file", "run_command"]))
+    executor = ToolExecutor(workspace, runs, configured_run(tools=["write_file", "run_command"]))
 
     def emit(kind: str, payload: dict) -> None:
         """本场景不依赖事件内容；kind/payload不产生文件副作用，返回None。"""

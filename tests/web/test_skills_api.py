@@ -16,6 +16,7 @@ import pytest
 
 from agent_harness.providers.base import ModelResponse, ToolCall
 from agent_harness.schemas import ContextPolicy, RunConfig
+from tests.helpers.models import configured_run
 from tests.helpers.planning import include_planning_overhead
 from agent_harness.storage.runs import RunStore
 from agent_harness.web.api import create_app
@@ -57,7 +58,7 @@ class SkillWritingModel:
 @pytest.fixture
 def skill_environment(tmp_path: Path, monkeypatch) -> tuple[WebConfig, Path]:
     """在临时目录登记普通工作区与技能根，返回配置和根路径；凭据只用于离线预检。"""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-skills-api-key")
+    monkeypatch.setenv("HARNESS_TEST_MODEL_KEY", "offline-skills-api-key")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     roots = tmp_path / "skills"
@@ -139,7 +140,7 @@ def test_skill_options_and_selected_body_drive_real_tool_output(skill_environmen
         broken.mkdir()
         (broken / "SKILL.md").write_text("---\nname: broken\n---\n没有描述。", encoding="utf-8")
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             options_response = await client.get("/api/options")
             assert options_response.status_code == 200
             options = {item["name"]: item for item in options_response.json()["skills"]}
@@ -172,7 +173,7 @@ def test_followup_inherits_selection_reloads_body_and_can_clear_or_replace(skill
         _, first_body = write_skill(roots, "alpha", "STYLE_ALPHA_V1")
         _, beta_body = write_skill(roots, "beta", "STYLE_BETA")
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             first = await create_run(client, config={"skills": ["alpha"]})
             original_evidence = evidence(app.state.manager.runs_root, first["run_id"])
             _, second_body = write_skill(roots, "alpha", "STYLE_ALPHA_V2")
@@ -210,11 +211,11 @@ def test_followup_uses_current_host_roots_after_restart(skill_environment):
         new_roots = config.project_dir / "new-skills"
         new_roots.mkdir()
         _, replacement = write_skill(new_roots, "alpha", "STYLE_ALPHA_V2")
-        async with skill_client(config, RunConfig(skill_roots=[old_roots], tools=["write_file"]), SkillWritingModel()) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[old_roots], tools=["write_file"]), SkillWritingModel()) as (client, app):
             first = await create_run(client, config={"skills": ["alpha"]})
             before = evidence(app.state.manager.runs_root, first["run_id"])
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[new_roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[new_roots], tools=["write_file"]), model) as (client, app):
             second = await continue_run(client, first, "after-restart")
             assert second["config"]["skill_roots"] == [str(new_roots)]
             assert replacement in user_context(model.requests[0])
@@ -236,7 +237,7 @@ def test_skill_failure_is_persisted_before_any_model_or_tool(skill_environment, 
         elif failure == "oversized":
             write_skill(roots, "unusable", "超限正文" * 20000)
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             run = await create_run(client, config={"skills": ["unusable"]})
             result = run["result"]
             assert result["execution_status"] == "failed"
@@ -260,7 +261,7 @@ def test_unselected_skill_is_not_loaded_and_host_paths_cannot_be_overridden(skil
         config, roots = skill_environment
         write_skill(roots, "alpha", "STYLE_ALPHA_V1")
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             for patch in ({"skill_roots": [str(roots)]}, {"skills": ["alpha"], "skill_content": "任意正文"}):
                 response = await submit_run(client, json={"prompt": "first", "workspace_id": "files", "config": patch})
                 assert response.status_code == 422, response.text
@@ -280,7 +281,7 @@ def test_selected_skill_counts_towards_hard_input_budget(skill_environment):
         config, roots = skill_environment
         _, original = write_skill(roots, "alpha", "STYLE_ALPHA_V1" + "额外说明" * 2000)
         model = SkillWritingModel()
-        host = RunConfig(skill_roots=[roots], tools=["write_file"], context=ContextPolicy(max_input_bytes=8000))
+        host = configured_run(skill_roots=[roots], tools=["write_file"], context=ContextPolicy(max_input_bytes=8000))
         # 8KB 表示留给原文件工具场景的空间，固定规划协议开销按实际声明计入；技能超限断言不变。
         include_planning_overhead(host, config.workspaces[0].path, config.project_dir / "records")
         budget = host.context.max_input_bytes
@@ -346,7 +347,7 @@ def test_hybrid_preserves_current_skill_and_inherits_summaries_across_prefix_cha
         _, original = write_skill(roots, "alpha", "STYLE_ALPHA_V1")
         (config.workspaces[0].path / "small.txt").write_text("source evidence\n", encoding="utf-8")
         model = SkillCompressionModel()
-        host = RunConfig(
+        host = configured_run(
             skill_roots=[roots], tools=["read_file"],
             context=ContextPolicy(
                 compression="hybrid", max_input_bytes=15000, keep_recent_groups=1,
@@ -386,7 +387,7 @@ def test_missing_skill_followup_can_be_cleared_without_losing_conversation(skill
         config, roots = skill_environment
         source, _ = write_skill(roots, "alpha", "STYLE_ALPHA_V1")
         model = SkillWritingModel()
-        async with skill_client(config, RunConfig(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
+        async with skill_client(config, configured_run(skill_roots=[roots], tools=["write_file"]), model) as (client, app):
             first = await create_run(client, config={"skills": ["alpha"]})
             assert first["result"]["execution_status"] == "completed"
             first_evidence = evidence(app.state.manager.runs_root, first["run_id"])

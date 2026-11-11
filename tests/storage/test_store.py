@@ -8,6 +8,7 @@ import pytest
 
 from agent_harness.cli import main
 from agent_harness.schemas import RunConfig, RunManifest, RunResult, TaskSpec
+from tests.helpers.models import configured_run
 from agent_harness.storage.runs import RunStore, StorageError
 
 
@@ -16,7 +17,7 @@ def manifest(workspace: Path) -> RunManifest:
     return RunManifest(
         run_id=uuid4(),
         task=TaskSpec(prompt="分析中文日志并生成结果", workspace=workspace.resolve()),
-        config=RunConfig(),
+        config=configured_run(),
     )
 
 

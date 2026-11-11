@@ -11,6 +11,7 @@ import httpx
 import uvicorn
 from agent_harness.projects.models import ProjectPreset
 from agent_harness.schemas import RunConfig, RunLimits
+from tests.helpers.models import configured_run
 from agent_harness.permissions.models import PermissionPolicy
 from agent_harness.web.api import create_app
 from agent_harness.web.config import WebConfig
@@ -34,7 +35,7 @@ def application(root: Path):
         (project / 'src/app.py').write_text('def add(a, b):\n    return 999\n', encoding='utf-8')
     config = WebConfig(project_dir=root, worktrees_root=root / 'trees', frontend_dist=Path(__file__).resolve().parents[2] / 'frontend/dist',
         projects=[ProjectPreset(id='backend', label='团队协作验收', path=project, test_argv=[sys.executable, 'tests/check.py'], test_timeout_seconds=10)])
-    run_config = RunConfig(tools=['read_file', 'search_files', 'write_file', 'edit_file', 'run_command'],
+    run_config = configured_run(tools=['read_file', 'search_files', 'write_file', 'edit_file', 'run_command'],
         permission_policy=PermissionPolicy(verification='allow'), limits=RunLimits(max_model_turns=36, max_tool_calls=100, run_timeout_seconds=240))
     app = create_app(config, run_config, root / 'runs', model_client=TeamModel())
     def key_provider(config):

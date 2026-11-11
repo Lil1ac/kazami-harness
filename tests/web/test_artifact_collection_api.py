@@ -54,7 +54,7 @@ def test_generated_reports_survive_restart_and_only_current_turn_files_are_liste
     """mode覆盖所选目录和工作树；三轮仅登记本轮变化，复用结束快照，旧报告和记录保持，返回None。"""
     config = project_config
     config.projects[0].test_argv = []
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-artifacts')
+    monkeypatch.setenv('HARNESS_TEST_MODEL_KEY', 'offline-artifacts')
     captures = {}  # 每轮文件快照命名空间，核对没有重复结束复制。
     capture = FileSnapshotStore.capture
 

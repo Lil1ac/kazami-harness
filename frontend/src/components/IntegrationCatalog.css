@@ -1,0 +1,281 @@
+/* 分隔、状态与详情沿用工作台主题，同类条目在一张列表里浏览。 */
+.integration-tabs > .ant-tabs-nav {
+  margin-bottom: 24px;
+}
+
+.integration-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+  gap: 4px;
+  padding: 3px;
+  background: var(--hover);
+  border-radius: 8px;
+}
+
+.integration-tabs > .ant-tabs-nav .ant-tabs-tab {
+  min-height: 34px;
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+}
+
+.integration-tabs > .ant-tabs-nav .ant-tabs-tab-active {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.integration-tabs > .ant-tabs-nav::before,
+.integration-tabs > .ant-tabs-nav .ant-tabs-ink-bar {
+  display: none;
+}
+
+.integration-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+}
+
+.integration-toolbar h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.integration-project-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.integration-project-controls .ant-select {
+  width: min(220px, 65vw);
+}
+
+.integration-catalog > .ant-alert {
+  margin-bottom: 12px;
+}
+
+.integration-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.integration-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.integration-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  gap: 12px;
+  padding: 10px 14px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+}
+
+button.integration-row:hover {
+  background: var(--hover);
+}
+
+.integration-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.integration-row-icon {
+  display: grid;
+  flex: 0 0 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--muted);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.integration-row-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.integration-row-text strong,
+.integration-row-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-row-text strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.integration-row-text small,
+.integration-row-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.integration-status {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.integration-status::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.integration-status[data-tone='ready'] {
+  color: var(--success);
+}
+.integration-status[data-tone='attention'] {
+  color: var(--warning);
+}
+.integration-status[data-tone='error'] {
+  color: var(--danger);
+}
+
+.integration-empty {
+  margin: 0;
+  padding: 36px 16px;
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.integration-empty p {
+  margin: 0 0 8px;
+}
+
+.integration-drawer .ant-drawer-body,
+.integration-preview {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.integration-drawer .ant-drawer-body {
+  padding: 20px 24px;
+}
+
+.integration-drawer .ant-drawer-footer {
+  padding: 12px 24px;
+}
+
+.integration-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.integration-detail h3,
+.integration-detail p,
+.integration-detail dl {
+  margin: 0;
+}
+
+.integration-detail h3 {
+  font-size: 14px;
+}
+
+.integration-detail pre,
+.integration-preview pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.integration-fields {
+  display: grid;
+  grid-template-columns: minmax(75px, max-content) minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: baseline;
+}
+
+.integration-fields dt {
+  color: var(--muted);
+}
+.integration-fields dd {
+  margin: 0;
+}
+
+.integration-disclosure {
+  padding-block: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.integration-disclosure > summary {
+  color: var(--text);
+  cursor: pointer;
+}
+
+.integration-disclosure[open] > :not(summary) {
+  margin-top: 10px;
+}
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.integration-detail .integration-actions {
+  justify-content: flex-start;
+}
+
+.integration-resource-picker {
+  max-width: 100%;
+  width: 100%;
+}
+
+.project-settings-form + .integration-catalog {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 600px) {
+  .integration-tabs > .ant-tabs-nav {
+    margin-bottom: 18px;
+  }
+  .integration-row {
+    gap: 8px;
+    padding-inline: 10px;
+  }
+  .integration-drawer .ant-drawer-body,
+  .integration-drawer .ant-drawer-footer {
+    padding-inline: 16px;
+  }
+}

@@ -21,7 +21,11 @@ export function ProjectPage() {
   /** 显式打开项目记忆抽屉；open=false 只关闭，不保存或发起运行，返回 void。 */
   function showMemory(open: boolean): void {
     const next = new URLSearchParams(params);
-    if (open) next.set('memory', '1'); else next.delete('memory');
+    if (open) next.set('memory', '1');
+    else {
+      next.delete('memory');
+      next.delete('consolidation');
+    }
     setParams(next, { replace: true });
   }
   const options = useQuery({
@@ -89,7 +93,7 @@ export function ProjectPage() {
       )}
       <ConversationHistory key={projectId} projectId={projectId} />
       <Drawer title="项目记忆" open={params.get('memory') === '1'} onClose={/* 关闭不更改知识。 */ () => showMemory(false)} destroyOnHidden styles={{ wrapper: { width: 'min(100vw, 720px)' } }}>
-        {params.get('memory') === '1' && <MemoryPanel projectId={projectId} />}
+        {params.get('memory') === '1' && <MemoryPanel projectId={projectId} consolidationId={params.get('consolidation') || undefined} />}
       </Drawer>
       <Drawer
         title="项目设置"

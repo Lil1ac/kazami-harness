@@ -657,17 +657,17 @@ class SubagentController:
         except TaskError as error:
             result.execution_status, result.stop_reason = "failed", error.code
         except TimeoutError:
-            result.execution_status, result.stop_reason, result.usage_complete = "timed_out", "subagent_timeout", False
+            result.execution_status, result.stop_reason = "timed_out", "subagent_timeout"
         except asyncio.CancelledError:
             result.execution_status = "timed_out" if parent.timeout_scope is not None and parent.timeout_scope.expired() else "cancelled"
-            result.stop_reason, result.usage_complete = self.cancel_reasons.get(manifest.run_id, "parent_stopped"), False
+            result.stop_reason = self.cancel_reasons.get(manifest.run_id, "parent_stopped")
         except ModelError as error:
-            result.execution_status, result.stop_reason, result.usage_complete = "failed", error.code, False
+            result.execution_status, result.stop_reason = "failed", error.code
             child.emit("model_request_failed", {"code": error.code})
         except StorageError:
             raise
         except Exception:
-            result.execution_status, result.stop_reason, result.usage_complete = "failed", "subagent_internal_error", False
+            result.execution_status, result.stop_reason = "failed", "subagent_internal_error"
         finally:
             for field, value in child.reserved.items():
                 parent.reserved[field] -= value

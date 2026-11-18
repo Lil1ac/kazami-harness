@@ -1,0 +1,186 @@
+{
+  "source": "Pallets Click 8.5.0（本地安装包，BSD-3-Clause）",
+  "source_files": {
+    "__init__.py": "5abfc54d37d47cc788b7e7a05e9514787f8c5a0b7db429d0f24d748ac89964ca",
+    "_compat.py": "8db1da2965cf3e5dc66c6c53833cbc613ea1cd2440b9d0eb6aa8360eb46d4913",
+    "_termui_impl.py": "88b97d9b7a5b947b10a16d8ab269837bc84c7e55c28ba72ea5f2fb339112336a",
+    "_textwrap.py": "ed9d0ded59a7fbae933524d4c29e8e5c96dc5174666044fd87d736b9c0fca104",
+    "_utils.py": "782642b7026db180f941892435627c318ffc001223cbc31cce030cc95637dab4",
+    "_winconsole.py": "292c5f35b3256116ba18e26e08b82c8363dbddd56480934fa8b24f69ef8f6b5d",
+    "core.py": "4c65a613c1c407dce907a4e123b12cec5fe0f62088a8b9f86fabd4b60c4b6d78",
+    "decorators.py": "16069357615691fcdfc9c794bb515f6009eb35aad6f7a76c017bdce06dae8d55",
+    "exceptions.py": "1ef498df81b86ae8ff6d8451f3e4fc094f09c2aff5f8e72c454e1ecdfa337849",
+    "formatting.py": "f125b628692f8dfcfd43535b7a88cc1ee64137471f9d0243b389aa0cfea85e6b",
+    "globals.py": "80cf8d87a0383341c1fd2824685e4ce2770618c0c773f7e51d7bbdfe88781845",
+    "parser.py": "a09f9f53fde6bf1ba022e36d1da0804d9e7a9601261d18208c9892a84818ae30",
+    "shell_completion.py": "18522f75ddffe655e943978d1953255c447842867d3fd67fbdc1543d3df7da09",
+    "termui.py": "8ec8022b8e4528f873ec413194a5d1614e96da50b6c4a71f6260b326762a7e9c",
+    "testing.py": "76f4e649bc53000d667c8c0deff1591970fa034b0f085a207165839b2301019a",
+    "types.py": "1e988904a7a7f68abad630c7fb9c038a4345fa2e6701c976a6e51f10bdfb52dd",
+    "utils.py": "f43d5743dc07240e612feefa0a69d2b1697b6900149f8f809ffcd97ecb482dbf"
+  },
+  "python": "3.12.1",
+  "external_model_requests": 0,
+  "cases": [
+    {
+      "id": "cross-click-usage-prefix",
+      "evidence_file": "formatting.py",
+      "evidence_sha256": "f125b628692f8dfcfd43535b7a88cc1ee64137471f9d0243b389aa0cfea85e6b",
+      "unique_anchor": true,
+      "history_bytes": 431511,
+      "reference_files": {
+        "core.py": "f17da5cd0224bbd565adbccd25b86c794fcd6c4e8ab520cb5608e7ef688197b2",
+        "formatting.py": "71e42d6fe0c9a7dc21b917ead1cb5f9520bf323d6810139e9c4d91d84f8f6136"
+      },
+      "baseline": {
+        "regression": {
+          "_usage_default": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_usage_context": {
+            "passed": false,
+            "exception": "TypeError",
+            "message": "Context.__init__() got an unexpected keyword argument 'usage_prefix'"
+          },
+          "_usage_formatter": {
+            "passed": false,
+            "exception": "TypeError",
+            "message": "Context.__init__() got an unexpected keyword argument 'usage_prefix'"
+          }
+        }
+      },
+      "reference": {
+        "regression": {
+          "_usage_default": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_usage_context": {
+            "passed": true
+          },
+          "_usage_formatter": {
+            "passed": true
+          }
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "cross-click-choice-candidates",
+      "evidence_file": "types.py",
+      "evidence_sha256": "1e988904a7a7f68abad630c7fb9c038a4345fa2e6701c976a6e51f10bdfb52dd",
+      "unique_anchor": true,
+      "history_bytes": 395113,
+      "reference_files": {
+        "exceptions.py": "baea0540035a769634661c3f2142627d4e8d3b8cef2d52e99f2d12dec8517619",
+        "types.py": "507e12c8a6bad4a45202f3153902b57b0e1fc148335a2da4bf37409648b81553"
+      },
+      "baseline": {
+        "regression": {
+          "_choice_output": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_choice_candidates": {
+            "passed": false,
+            "exception": "AttributeError",
+            "message": "'BadParameter' object has no attribute 'choice_candidates'"
+          }
+        }
+      },
+      "reference": {
+        "regression": {
+          "_choice_output": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_choice_candidates": {
+            "passed": true
+          }
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "cross-click-exit-message",
+      "evidence_file": "exceptions.py",
+      "evidence_sha256": "1ef498df81b86ae8ff6d8451f3e4fc094f09c2aff5f8e72c454e1ecdfa337849",
+      "unique_anchor": true,
+      "history_bytes": 430093,
+      "reference_files": {
+        "core.py": "511426668c85d77617450e42ca4420a0c17c6608bed50b32361943775a747424",
+        "exceptions.py": "4a22fa447abbf4142358312f318f931896bc5bf9d35330507ba9df42319a66a0"
+      },
+      "baseline": {
+        "regression": {
+          "_plain_exit": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_exit_message": {
+            "passed": false,
+            "exception": "TypeError",
+            "message": "Context.exit() got an unexpected keyword argument 'message'"
+          }
+        }
+      },
+      "reference": {
+        "regression": {
+          "_plain_exit": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_exit_message": {
+            "passed": true
+          }
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "cross-click-command-suggestion-limit",
+      "evidence_file": "exceptions.py",
+      "evidence_sha256": "1ef498df81b86ae8ff6d8451f3e4fc094f09c2aff5f8e72c454e1ecdfa337849",
+      "unique_anchor": true,
+      "history_bytes": 430093,
+      "reference_files": {
+        "core.py": "566525c063debd86ce54fb8948703c2619c9c695505ed7fecf6e2a6c285edf35",
+        "exceptions.py": "11ee751f10b774ceadf52e31a315f140e61750b8162920ba45afc655092a4908"
+      },
+      "baseline": {
+        "regression": {
+          "_suggest_default": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_suggest_limits": {
+            "passed": false,
+            "exception": "AssertionError",
+            "message": "Context.__init__() got an unexpected keyword argument 'command_suggestion_limit'"
+          }
+        }
+      },
+      "reference": {
+        "regression": {
+          "_suggest_default": {
+            "passed": true
+          }
+        },
+        "feature": {
+          "_suggest_limits": {
+            "passed": true
+          }
+        }
+      },
+      "passed": true
+    }
+  ]
+}

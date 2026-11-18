@@ -454,14 +454,16 @@ export function ConversationPanel({
           {conversation.turns.map(
             /* 每条用户消息与本轮执行一一对应，稳定保留历史阅读位置。 */ (turn) => (
               <article key={turn.run_id} className="chat-turn" data-run-id={turn.run_id}>
-                <div className="user-message" aria-label="你的消息">
+                {turn.recovery_source_id ? (
+                  <div className="composer-notice">已接续中断的运行</div>
+                ) : <div className="user-message" aria-label="你的消息">
                   <div className="user-message-body" data-find-part="prompt">
                     {turn.prompt}
                   </div>
                   {Boolean(turn.file_references?.length) && (
                     <HistoricalFileReferences runId={turn.run_id} items={turn.file_references!} />
                   )}
-                </div>
+                </div>}
                 <TurnMessage
                   turn={turn}
                   run={run}

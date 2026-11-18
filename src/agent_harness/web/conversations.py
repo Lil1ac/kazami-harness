@@ -124,6 +124,7 @@ class ConversationService:
                     created_at=view.created_at, interrupted=view.interrupted,
                     delivery=_delivery(view),
                     file_references=[item.reference() for item in manifest.task.file_references],
+                    recovery_source_id=manifest.crash_resume.source_run_id if manifest.crash_resume else None,
                 )
                 if identifier == record.run_ids[-1]:
                     latest_history = history
@@ -144,17 +145,21 @@ class ConversationService:
         elif any(item.state == 'preparing' for item in record.requests.values()):
             blocked = SessionError('request_uncertain', '上次追加准备尚未确认，请核对本地状态；不会自动重新执行。')
         elif blocked is None and latest_history is not None:
-            try:
-                self._ready(latest_history)
-            except (SessionError, SnapshotError, ProjectError) as error:
-                blocked = SessionError(error.code, error.message)
+            job = self.manager.jobs.interrupted_job(str(latest_history.manifest.run_id)) if latest_history.interrupted else None
+            if job is not None:
+                blocked = SessionError("interrupted_job_pending", "请先在运行队列继续或核对中断作业。")
+            else:
+                try:
+                    self._ready(latest_history)
+                except (SessionError, SnapshotError, ProjectError) as error:
+                    blocked = SessionError(error.code, error.message)
         management = self.manager.management.view(str(session_id))
         if management.state != "active":
             blocked = SessionError("conversation_inactive", "请先恢复会话，再继续发送或处理计划。")
         return ConversationView(title=management.title, management=management, source=source, session_id=session_id, latest_run_id=record.run_ids[-1], turns=turns, can_continue=blocked is None and latest_history is not None, blocked_code=blocked.code if blocked else None, blocked_reason=blocked.message if blocked else None, active_run_ids=[busy] if busy is not None else [], continuation_notice='前轮中断。可直接发送“继续”，继承已保存记录和当前代码；结果不明的工具需要先核对，本轮重新测试。' if blocked is None and latest_history is not None and latest_history.interrupted else None)
 
-    async def submit(self, parent_id: UUID, request: FollowupRequest, *, run_id: UUID, job_id: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]):
-        """准备已接纳 request；parent_id 为最新轮，run_id/job_id 固定归属，策略及引用由接纳时固定，返回运行视图。"""
+    async def submit(self, parent_id: UUID, request: FollowupRequest, *, run_id: UUID, job_id: str, memory_policy: dict, file_references: list[ProjectFileSnapshot], crash_source: dict | None = None):
+        """准备已接纳的续轮并返回运行视图。crash_source 仅由已接管资源的队列提供。"""
         parent = self.manager._read_history(parent_id)
         session_id = parent.manifest.session_id or parent_id
         self.manager.management.require_active(str(session_id))
@@ -181,7 +186,7 @@ class ConversationService:
             raise SessionError('service_closing', '本地服务正在关闭。')
         if self.manager.active_for_session(str(session_id)) is not None or any(item[0] == session_id for item in self.manager._submissions):
             raise SessionError('run_busy', '当前会话正在准备或运行，请等待完成或取消。')
-        task = asyncio.create_task(self._start(parent_id, session_id, request, digest, run_id, job_id, memory_policy, file_references), name='harness-followup-prepare')
+        task = asyncio.create_task(self._start(parent_id, session_id, request, digest, run_id, job_id, memory_policy, file_references, crash_source), name='harness-followup-prepare')
         self.manager._submissions[key] = task
         self.submission_digests[key] = digest
 
@@ -194,8 +199,8 @@ class ConversationService:
         task.add_done_callback(observe)
         return await asyncio.shield(task)
 
-    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str, identifier: UUID, owner: str, memory_policy: dict, file_references: list[ProjectFileSnapshot]):
-        """核验请求及父轮归属，用冻结的记忆策略和文件引用准备新段；返回运行视图，失败保留父轮证据。"""
+    async def _start(self, parent_id: UUID, session_id: UUID, request: FollowupRequest, digest: str, identifier: UUID, owner: str, memory_policy: dict, file_references: list[ProjectFileSnapshot], crash_source: dict | None = None):
+        """核验父轮归属并准备新段。crash_source 非空时重核已接管的工作树及原预算。"""
         async with self.manager._lock:
             if self.manager._closing:
                 raise SessionError('service_closing', '本地服务正在关闭。')
@@ -205,6 +210,11 @@ class ConversationService:
             if self.store.read(session_id).run_ids[-1] != parent_id:
                 raise SessionError('session_stale_parent', '只能从会话最新一轮继续，请先打开最新运行。')
             origin = self._ready(parent)
+            crash_resume = None
+            if crash_source is not None:
+                crash_resume, revision = self.manager.jobs.recovery.checkpoint(crash_source)
+                if revision != self.manager.jobs.get(owner)["recovery_revision"]:
+                    raise SessionError("recovery_stale", "恢复证据已变化，未开始接续。")
             resume = None
             execution_resume = None
             if request.resume or (parent.result is not None and parent.result.stop_reason == "user_paused"):
@@ -243,7 +253,8 @@ class ConversationService:
             except PlanningError as error:
                 raise SessionError(error.code, error.message) from None
             interrupted = parent.result is None and parent.interrupted
-            inherited = history_messages(parent, allow_interrupted=interrupted)
+            inherited = history_messages(parent, allow_interrupted=interrupted,
+                                         recovered=crash_resume.tool_results if crash_resume else None)
             merged = parent.manifest.config.model_dump(mode='python')
             # 宿主系统规则重新生成；网页可编辑部分默认沿用前轮，覆盖仍严格校验。
             merged['system_prompt'] = self.manager.run_config.system_prompt
@@ -261,7 +272,7 @@ class ConversationService:
             if memory_policy is not None:
                 merged["memory"] = memory_policy
             try:
-                config = load_config(overrides=merged)
+                config = parent.manifest.config if crash_resume is not None else load_config(overrides=merged)
                 self.manager.check_model_versions(config.model_versions())
                 if (resume is not None or execution_resume is not None) and config.limits != parent.manifest.config.limits:
                     raise SessionError("permission_stale", "动作审批接续不能修改原预算，请先处理等待再提交新要求。")
@@ -273,7 +284,7 @@ class ConversationService:
                 # 历史输入随既有消息继承，当前轮展示与提交只携带本次显式选择的引用。
                 task = parent.manifest.task.model_copy(update={'prompt': prompt, 'file_references': file_references})
                 check_reference_budget(task, config.context.max_input_bytes)
-                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, automation=parent.manifest.automation, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
+                manifest = RunManifest(run_id=identifier, session_id=session_id, parent_run_id=parent_id, turn_index=parent.manifest.turn_index + 1, task=task, config=config, origin=origin, automation=parent.manifest.automation, planning=planning, human_decision=request.decision, permission_resume=resume, execution_resume=execution_resume, crash_resume=crash_resume, history_source=HistorySource(last_seq=parent.events[-1].seq, messages_sha256=payload_digest(inherited), interrupted=interrupted))
                 api_key = self.manager.api_key(config)
                 validate_execution(manifest, api_key)
             except (ConfigurationError, ValidationError) as error:
@@ -300,6 +311,10 @@ class ConversationService:
                     preset = next(item for item in self.manager.catalog.project_presets() if item.id == origin.preset_id)
                     def prepare_project():
                         """复用会话工作树；中断源仅在明确提交时固定证据，不重放旧补丁。"""
+                        if crash_source is not None:
+                            checkpoint, current_revision = self.manager.jobs.recovery.checkpoint(crash_source, clean=True)
+                            if checkpoint != crash_resume or current_revision != revision:
+                                raise SessionError("recovery_stale", "保存工作树前恢复证据已变化。")
                         if interrupted:
                             self.manager.projects.capture(parent_id)
                         return self.manager.projects.prepare_turn(preset, parent_id, identifier)
@@ -322,9 +337,9 @@ class ConversationService:
                     raise SessionError(error.code, error.message) from None
                 self.store.commit(session_id, request.request_id)
                 return await self.manager._launch(manifest, api_key, owner)
-            except (SessionError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:
-                code = error.code if isinstance(error, (SessionError, SnapshotError, ProjectError)) else 'followup_prepare_failed'
-                message = error.message if isinstance(error, (SessionError, SnapshotError, ProjectError)) else str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else '后续运行准备失败，已有父结果保持不变。'
+            except (SessionError, TaskError, SnapshotError, ProjectError, ConfigurationError, StorageError, ValidationError, PythonExecutionError, OSError) as error:
+                code = error.code if isinstance(error, (SessionError, TaskError, SnapshotError, ProjectError)) else 'followup_prepare_failed'
+                message = error.message if isinstance(error, (SessionError, TaskError, SnapshotError, ProjectError)) else str(error) if isinstance(error, (ConfigurationError, PythonExecutionError)) else '后续运行准备失败，已有父结果保持不变。'
                 self.store.fail(session_id, request.request_id, code, message, rollback_unstarted=True)
                 if not (self.manager.runs_root / str(identifier) / 'run.json').exists() and self.manager.projects.get(identifier) is not None:
                     try:

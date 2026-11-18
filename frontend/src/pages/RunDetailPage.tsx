@@ -454,6 +454,10 @@ function SessionWorkspace({
       {conversation.management.state === 'archived' && (
         <Alert type="info" title="对话已归档；取消归档后可继续发送或处理计划。" />
       )}
+      {latest?.interrupted && latest.recovery_job_id && (
+        <Alert type="warning" title="运行已中断"
+          action={<Link to={'/jobs/' + latest.recovery_job_id}>查看接续状态</Link>} />
+      )}
       {(refreshError || query.error || cancellation.error) && (
         <Alert
           className="session-refresh-warning"

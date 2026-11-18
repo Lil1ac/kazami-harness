@@ -13,6 +13,8 @@ dist/
 .mypy_cache/
 .coverage
 htmlcov/
+.DS_Store
+Thumbs.db
 
 # 本地配置和运行输出
 .env
@@ -20,8 +22,43 @@ htmlcov/
 !.env.example
 .runtime/
 .runs/
+/output/
+/.tmp/
+/.workbuddy/
+/.codex/
+/.idea/
+/.vscode/*
+!/.vscode/settings.json
+/harness.toml
+/web.toml
+/*.local.toml
+/credentials.json
+/settings.json
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.pem
+*.key
+*.p12
+*.pfx
+*.enc
+model-credentials/
+mcp-credentials/
+
+# 专项评测的本机凭据启动器及第三方源码下载目录
+/evals/*/launch.cjs
+/evals/context-checkpoint-20261117/launch_continuations.cjs
+/evals/specialty-expanded-20261117/start.cjs
+/evals/memory-repository-20261117/sources/
+
+# 上游原始 issue / 补丁可包含公开讨论者的联系信息，按冻结版本在本地物化
+/evals/swe-three-arm/records/
+/evals/swe-three-arm/formal.json
+# 未入选六题试点的本地候选
+/evals/swe-pilot/psf__requests-*.json
+/evals/swe-pilot/django__django-16429.json
 
 # 前端依赖与浏览器验证输出
 node_modules/
-output/playwright/
 .playwright-cli/

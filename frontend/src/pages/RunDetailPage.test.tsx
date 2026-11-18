@@ -1,9 +1,9 @@
 import { makeConversationManagement } from '../test/fixtures';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, configure, getConfig, render, screen, waitFor } from '@testing-library/react';
 import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import {
   cancelRun,
   createFollowup,
@@ -55,6 +55,14 @@ vi.mock(
 let record: ConversationView; // 模拟服务端当前完整会话，POST确认后才推进最新轮。
 let readsFail = false; // 短暂服务错误不会清空此前读取的快照。
 const runs = new Map<string, RunView>(); // 各轮快照独立保存，回看旧轮仍读原结果。
+// 本文件挂载完整路由和 Ant Design 页面。保留真实事件，按元素出现及请求完成等待各次重绘。
+const previousWait = getConfig().asyncUtilTimeout; // 毫秒，文件结束时恢复测试库原设置。
+vi.setConfig({ testTimeout: 15_000 });
+configure({ asyncUtilTimeout: 4_000 });
+afterAll(/* 回收此组完整页面测试的等待设置。 */ () => {
+  configure({ asyncUtilTimeout: previousWait });
+  vi.resetConfig();
+});
 
 /** 将已接纳运行投影到会话响应；不伪造未确认的用户轮次。 */
 function turn(run: RunView): ConversationTurn {

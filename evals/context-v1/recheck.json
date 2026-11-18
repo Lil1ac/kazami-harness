@@ -1,0 +1,17 @@
+{
+  "name": "返回契约修正复验",
+  "version": "2",
+  "provenance": "仅复验ledger-balance的明确返回契约，1题2策略；不用于发布总体提升。",
+  "cases": [
+    {
+      "id": "ledger-balance",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。汇总每个账户整数金额；每条为account与amount字段，结果保留零余额账户。 返回结构必须为字典：账户名为键、汇总整数金额为值。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-balance/source",
+      "reference": "cases/ledger-balance/reference",
+      "grader": "cases/ledger-balance/grader.py"
+    }
+  ]
+}

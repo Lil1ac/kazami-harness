@@ -2,6 +2,7 @@
 
 import json
 
+from agent_harness.runtime.handoff import root_handoff_facts, start_verified_root_handoff
 from agent_harness.runtime.pipeline import Proceed, Replan, Wait
 from agent_harness.runtime.session import Session
 from agent_harness.subagents.reports import ReportDraft, collect_evidence, finalize_report
@@ -34,6 +35,18 @@ async def collect_for_handoff(session: Session) -> Proceed:
     turn.delegated = context.manifest.delegation is not None or context.delegation_used
     turn.handoff = turn.delegated and (getattr(executor, "report_only", False) or context.available("model_turns") == 1
                                       or context.available("tool_calls") <= 0)
+    if (not turn.delegated and context.manifest.config.context.root_handoff
+            and context.available("model_turns") <= 2 and context.result.permissions.pending is None):
+        turn.root_handoff_facts = root_handoff_facts(session)
+        if turn.root_handoff_facts is not None and context.available("model_turns") == 1:
+            if getattr(executor, "public_self_test_available", False):
+                from agent_harness.runtime.runner import AgentStopped
+
+                if not await start_verified_root_handoff(session, "last_model_turn", "max_model_turns"):
+                    raise AgentStopped("limit_exceeded", "max_model_turns")
+            else:
+                turn.handoff = True
+                turn.root_handoff_trigger = "last_model_turn"
     if isinstance(executor, ToolExecutor):
         executor.handoff = turn.handoff
     return Proceed()

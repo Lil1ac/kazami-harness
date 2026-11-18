@@ -1,0 +1,188 @@
+{
+  "mode": "no_model",
+  "model_requests": 0,
+  "python": "3.11.5",
+  "passed": true,
+  "cases": [
+    {
+      "id": "multiturn-textwrap-indent",
+      "source": "CPython 3.11.5 标准库（本机 Anaconda 发行版）",
+      "evidence_file": "textwrap.py",
+      "source_sha256": "62867e40cdea6669b361f72af4d7daf0359f207c92cbeddfc7c7506397c1f31c",
+      "reference_normalized_utf8_sha256": "688959d5be43776b03525d2d78d138319336f9e38d5565412b0ce4730fb41205",
+      "anchor_locations": {
+        "textwrap.py": 1
+      },
+      "history_bytes": 394635,
+      "history_files": 8,
+      "baseline": [
+        {
+          "probe": "_indent_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_indent_first",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "indent() got an unexpected keyword argument 'first_prefix'"
+        },
+        {
+          "probe": "_indent_restart",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "indent() got an unexpected keyword argument 'restart_on_blank'"
+        }
+      ],
+      "reference": [
+        {
+          "probe": "_indent_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_indent_first",
+          "passed": true
+        },
+        {
+          "probe": "_indent_restart",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "multiturn-fnmatch-filter",
+      "source": "CPython 3.11.5 标准库（本机 Anaconda 发行版）",
+      "evidence_file": "fnmatch.py",
+      "source_sha256": "6683da36e47af523f3f41e18ad244d837783e19e98911cc0b7415dea81494ebc",
+      "reference_normalized_utf8_sha256": "4475a4c67fdbba9a6e939f3e40f37b641a17ef8a25a3e36a6b6a4b717bf2f2aa",
+      "anchor_locations": {
+        "fnmatch.py": 1
+      },
+      "history_bytes": 415271,
+      "history_files": 12,
+      "baseline": [
+        {
+          "probe": "_filter_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_filter_exclude",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "filter() got an unexpected keyword argument 'exclude'"
+        },
+        {
+          "probe": "_filter_keep",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "filter() got an unexpected keyword argument 'keep'"
+        }
+      ],
+      "reference": [
+        {
+          "probe": "_filter_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_filter_exclude",
+          "passed": true
+        },
+        {
+          "probe": "_filter_keep",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "multiturn-heapq-merge",
+      "source": "CPython 3.11.5 标准库（本机 Anaconda 发行版）",
+      "evidence_file": "heapq.py",
+      "source_sha256": "6d43277e5c76fc0f073cd388fcff852d14d068f6bb6d4886c340f8b75a1229a9",
+      "reference_normalized_utf8_sha256": "31cbf268623aeee40e5e3031ba52bc6f39252a25be2d90f79c0a620915cc2ec3",
+      "anchor_locations": {
+        "heapq.py": 1
+      },
+      "history_bytes": 414816,
+      "history_files": 11,
+      "baseline": [
+        {
+          "probe": "_merge_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_merge_first",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "merge() got an unexpected keyword argument 'unique'"
+        },
+        {
+          "probe": "_merge_last",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "merge() got an unexpected keyword argument 'keep_last'"
+        }
+      ],
+      "reference": [
+        {
+          "probe": "_merge_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_merge_first",
+          "passed": true
+        },
+        {
+          "probe": "_merge_last",
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "multiturn-configparser-items",
+      "source": "CPython 3.11.5 标准库（本机 Anaconda 发行版）",
+      "evidence_file": "configparser.py",
+      "source_sha256": "4a70cecccb55031a413b79e6ced2e63ca031f770cd25a4882980ecdeab67f6ff",
+      "reference_normalized_utf8_sha256": "3a19c4d433420d6476ebec0ff89e83def76cb306e7fac05cb125d33216665892",
+      "anchor_locations": {
+        "configparser.py": 1
+      },
+      "history_bytes": 381714,
+      "history_files": 10,
+      "baseline": [
+        {
+          "probe": "_items_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_items_direct",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "RawConfigParser.items() got an unexpected keyword argument 'include_defaults'"
+        },
+        {
+          "probe": "_items_with_vars",
+          "passed": false,
+          "error_type": "TypeError",
+          "error": "RawConfigParser.items() got an unexpected keyword argument 'include_vars'"
+        }
+      ],
+      "reference": [
+        {
+          "probe": "_items_legacy",
+          "passed": true
+        },
+        {
+          "probe": "_items_direct",
+          "passed": true
+        },
+        {
+          "probe": "_items_with_vars",
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ]
+}

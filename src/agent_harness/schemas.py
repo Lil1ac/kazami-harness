@@ -43,6 +43,8 @@ class RunLimits(DataModel):
     # 单轮超时包含该轮重试与退避；总运行超时同时约束所有轮次和工具阶段。
     model_turn_timeout_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     command_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+    # 单次搜索从申请槽位开始的墙钟秒数，也受 Run 剩余时间约束。
+    search_timeout_seconds: float = Field(default=15.0, gt=0, allow_inf_nan=False)
     verifier_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
     run_timeout_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
     cleanup_grace_seconds: float = Field(default=5.0, gt=0, allow_inf_nan=False)
@@ -62,7 +64,15 @@ class ContextPolicy(DataModel):
     # 指令原始文件的字节上限；超过时拒绝加载，不截取部分项目约定。
     max_project_instruction_bytes: int = Field(default=32 * 1024, gt=0)
     # 旧记录默认关闭；masking 只做规则处理，hybrid 额外允许摘要。
-    compression: Literal["off", "masking", "hybrid"] = "off"
+    compression: Literal["off", "window", "masking", "hybrid"] = "off"
+    # 普通根 Run 的末轮收尾试点。False 时按常规执行，子任务沿用其交接协议。
+    root_handoff: bool = False
+    # 宿主已安排独立验收的单文件维护任务可登记题面目标，用于最后三轮提示。None 关闭，不授予写权限。
+    closeout_advice_target: str | None = Field(default=None, min_length=1, max_length=1024)
+    # 根 Run 收尾试验候选，仅在受控公开自测可用时允许普通输入被拒后收尾。
+    root_handoff_after_input_rejection: bool = False
+    # hybrid 中按实际请求预算投影工具正文；评测控制组显式关闭。
+    budget_projection: bool = True
     # 达到触发比例后处理到目标比例，目标小于触发，减少频繁改写缓存前缀。
     trigger_ratio: float = Field(default=0.8, gt=0, lt=1, allow_inf_nan=False)
     target_ratio: float = Field(default=0.6, gt=0, lt=1, allow_inf_nan=False)
@@ -81,7 +91,11 @@ class ContextPolicy(DataModel):
 
     @model_validator(mode="after")
     def validate_compression(self) -> "ContextPolicy":
-        """检查目标比例小于触发比例；返回自身，矛盾时抛 ValueError，不访问文件。"""
+        """检查压缩比例和根收尾开关的依赖；返回自身，矛盾时抛 ValueError，不访问文件。"""
+        if self.root_handoff_after_input_rejection and not self.root_handoff:
+            raise ValueError("输入被拒后收尾需要启用根运行收尾")
+        if self.closeout_advice_target is not None and self.root_handoff:
+            raise ValueError("可编辑收尾提醒与只读根交接不能同时启用")
         if self.target_ratio >= self.trigger_ratio:
             raise ValueError("压缩目标比例必须小于触发比例")
         return self
@@ -132,6 +146,8 @@ class ContextCheck(DataModel):
     estimated_input_tokens: int | None = Field(default=None, ge=0)  # 本地估算，不冒充精确 tokenizer。
     max_input_tokens: int | None = Field(default=None, gt=0)  # 窗口减输出和安全余量后的上限。
     purpose: Literal["execution", "summary"] = "execution"  # 正常执行或额外摘要请求。
+    # 普通工具轮与紧凑收尾可能检查同一个拟发送轮号；历史记录和摘要阶段无此值。
+    phase: Literal["execution", "handoff"] | None = None
 
 
     @model_validator(mode="after")
@@ -277,6 +293,8 @@ class MemorySelection(DataModel):
 class MemoryPolicy(MemorySelection):
     max_input_bytes: int = Field(default=16384, ge=512, le=65536)  # 自动注入的总字节上限。
     max_entries: int = Field(default=6, ge=0, le=20)  # 自动正文条数，0 表示只提供搜索入口。
+    history: bool = True  # 宿主是否开放项目历史检索；use=False 时无效。
+    topics: bool = True  # 宿主是否开放主题索引；use=False 时无效。
 
 
 # 可序列化的运行设置：模型、工具、系统提示词和限制；不保存凭据值。
@@ -287,11 +305,27 @@ class ModelSelection(DataModel):
     requested_model: ModelId  # 该服务商登记的具体模型。
 
 # 每轮固定的模型、执行策略与已选择的服务商定义。
+class GenerationOptions(DataModel):
+    """显式模型采样参数；None 表示不向兼容端点发送该字段。"""
+
+    thinking: Literal["enabled", "disabled"] | None = Field(default=None, description="是否启用供应商思考模式；None使用服务端默认。")
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(default=None, description="思考强度，None不覆盖供应商默认。")
+    top_p: float | None = Field(default=None, gt=0, le=1, description="核采样概率阈值，None不显式发送。")
+
+    def request_fields(self) -> dict:
+        """返回可直接加入请求的非空参数；无参数，不包含模型名称或凭据。"""
+        fields = self.model_dump(exclude_none=True)
+        if self.thinking is not None:
+            fields["thinking"] = {"type": self.thinking}
+        return fields
+
+
 class RunConfig(DataModel):
     """宿主运行策略及模型目录。首次配置前允许模型为空，执行前必须完成选择。"""
 
     provider: ModelProvider | None = None  # 无可用定义时为空，否则使用已选或首个启用服务商。
     requested_model: ModelId | None = None  # 为空时使用所选服务商的默认模型。
+    generation: GenerationOptions = Field(default_factory=GenerationOptions)  # 运行时冻结的思考与采样参数。
     custom_providers: dict[ModelProvider, CustomProvider] = Field(default_factory=dict, max_length=16)  # 宿主可登记的端点，运行清单只保存本轮选择。
     mcp_tools: list[McpToolSelection] = Field(default_factory=list, max_length=16)  # 本轮明确选择的外部工具及定义指纹；空列表不连接服务。
     hooks: HookPolicy = Field(default_factory=HookPolicy)  # 宿主规则及扩展开销上限，页面不能覆盖。
@@ -736,6 +770,12 @@ class ExecutionResume(RunBudget):
     workspace_identity: list[int]  # 安全停止时的设备与目录标识，替换目录后禁止恢复。
 
 
+class CrashResume(ExecutionResume):
+    """宿主从中断证据生成的接续输入，继承原预算并为尾部未配对的工具补充核对结果。"""
+
+    tool_results: dict[str, dict]  # 仅包含直接父段最后一批缺回执的调用，按原工具编号索引。
+
+
 class AutomationOrigin(DataModel):
     """宿主写入的自动化来源；HTTP运行请求不能构造，用于追踪及逐动作撤销核验。"""
 
@@ -759,12 +799,22 @@ class RunManifest(DataModel):
     turn_index: int = Field(default=1, ge=1)  # 用户请求轮次，从1开始，不等于模型轮次。
     origin: RunOrigin | None = None  # 新网页运行的宿主来源；旧记录可能未记录。
     history_source: HistorySource | None = None  # 首轮为空，追加轮固定父消息来源。
+    memory_scope_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")  # 宿主固定目录身份；无身份的记录不作为跨会话证据。
     planning: PlanningState = Field(default_factory=PlanningState)  # 宿主固定的模式、计划和用户决定；网页不能直接传入该状态。
     human_decision: HumanDecision | None = None  # 仅本轮明确处理的决定；历史拒绝不阻止后续重新规划。
     delegation: DelegationOrigin | None = None  # 非空表示父运行内的委派子执行，不是会话续轮。
     permission_resume: PermissionResume | None = None  # 宿主绑定的原动作与累计预算；页面不得直接构造。
     execution_resume: ExecutionResume | None = None  # 仅安全暂停恢复时由宿主固定，不能与动作批准混用。
+    crash_recovery: bool = False  # Web 宿主认领的手动隔离运行使用崩溃恢复记录。
+    crash_resume: CrashResume | None = None  # 用户明确接续后由宿主核对并固定，不能由普通续轮提交。
     automation: AutomationOrigin | None = None  # 自动化首轮和人工接续保留同一来源，普通运行为空。
+
+    @property
+    def resumed_budget(self) -> RunBudget | None:
+        """返回需要继承的原段预算，普通续轮或拒绝原动作时返回 None。"""
+        return self.crash_resume or self.execution_resume or (
+            self.permission_resume if self.permission_resume and self.permission_resume.decision == "approve" else None
+        )
 
 
 # 累计已知的输入、输出和总 token 数；数据是否完整由 RunResult 单独标记。

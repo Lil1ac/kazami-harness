@@ -30,11 +30,20 @@ class ModelResponse:
 class ModelError(Exception):
     """只传递稳定错误码与受控说明，避免凭据或服务端正文进入运行记录。"""
 
-    def __init__(self, code: str, message: str) -> None:
-        """保存稳定错误码和可展示说明，供 Runner 记录失败原因。"""
+    def __init__(self, code: str, message: str, *, usage: dict | None = None, response_model: str | None = None,
+                 transport_diagnostic: dict | None = None) -> None:
+        """保存受控code/message与已校验usage；None表示用量未知，response_model为可选实际模型名。
+
+        不保存响应正文；usage仅用于计量，不使被拒绝的内容或工具调用获得执行资格。
+        transport_diagnostic 仅为宿主生成的阶段、异常类名及内容接收标记，None 表示非传输错误。
+        """
         super().__init__(message)
         self.code = code
         self.message = message
+        self.usage = usage  # 供应商已返回且通过协议校验的计数；缺失为None。
+        self.response_model = response_model  # 有效响应的实际模型名，传输失败时为None。
+        self.usage_accounted = False  # 仅统一网关计入账本后置True，防止Runner覆盖已有完整性。
+        self.transport_diagnostic = transport_diagnostic  # 不存异常正文、URL、请求头或凭据，不改变未知计量结论。
 
 
 class ModelClient(Protocol):

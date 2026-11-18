@@ -1,0 +1,7 @@
+{
+  "url": "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified/resolve/c104f840cc67f8b6eec6f759ebc8b2693d585d4a/data/test-00000-of-00001.parquet",
+  "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "dataset_sha256": "a45b1fe4e2f0c8390b2b2938ac83e92ed5979000856808f3679c07812e9e6dcd",
+  "records": 104,
+  "selection_sha256": "5e3db7c13627f513ed1a855ed72cb6b64a35c33ac8ad6251c84dcef56ff602cb"
+}

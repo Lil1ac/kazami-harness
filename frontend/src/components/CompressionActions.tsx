@@ -44,7 +44,7 @@ export function CompressionActions({ context }: { context: ContextView }) {
           >
             <summary>
               <Tag color={action.kind === 'summary_failed' ? 'warning' : undefined}>
-                {actionLabels[action.kind] ?? action.kind}
+                {action.reason === 'input_budget' ? '按输入预算缩减' : actionLabels[action.kind] ?? action.kind}
               </Tag>
               {formatContextBytes(action.before_bytes)} → {formatContextBytes(action.after_bytes)}
             </summary>
@@ -55,7 +55,7 @@ export function CompressionActions({ context }: { context: ContextView }) {
             <p className="muted">
               证据引用：<code>{action.reference}</code>
             </p>
-            {action.reason && (
+            {action.reason && action.reason !== 'input_budget' && (
               <p className="stop-reason">
                 {action.reason === 'inherited'
                   ? '来源已核验，复用前轮摘要，未额外调用模型。'

@@ -100,10 +100,12 @@ class FileSnapshotStore:
                         opened = os.fstat(source.fileno())
                         if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns):
                             raise SnapshotError('workspace_snapshot_changed', '快照读取期间文件发生变化。')
-                        raw = source.read(self.MAX_BYTES - total + 1)
+                        # 每次只按已核对的文件大小分配，额外一字节检测增长。
+                        # 按整个剩余配额读取时，Windows 会为小文件也反复申请接近16MiB的缓冲区。
+                        raw = source.read(opened.st_size + 1)
                         after = os.fstat(source.fileno())
                     final = checked.stat()
-                    if path.is_symlink() or path.is_junction() or workspace.resolve(name, must_exist=True) != checked or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns):
+                    if len(raw) != opened.st_size or path.is_symlink() or path.is_junction() or workspace.resolve(name, must_exist=True) != checked or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns):
                         raise SnapshotError('workspace_snapshot_changed', '快照读取期间文件发生变化。')
                     total += len(raw)
                     if total > self.MAX_BYTES:

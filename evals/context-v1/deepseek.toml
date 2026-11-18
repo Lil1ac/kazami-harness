@@ -1,0 +1,35 @@
+# 只发送自建任务夹具；密钥来自宿主环境，不写入清单或报告。
+provider = "custom-deepseek" # 只使用下方登记的官方服务。
+requested_model = "deepseek-flash" # 两组固定相同模型；实际响应另存Run。
+tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"] # 完成文件任务的固定工具集。
+system_prompt = "你是代码任务助手。按明确需求修改工作区，合理测试并如实交付。小任务直接实现；不扩大范围。" # 两组共享系统指令。
+skill_auto = false # 禁止自动启用技能形成组间差异。
+auto_repair = false # 不向Agent反馈外部评分后重试。
+
+[custom_providers.custom-deepseek]
+name = "DeepSeek评测" # 控制台展示名。
+base_url = "https://api.deepseek.com/v1" # 官方兼容接口；不使用中转站。
+default_model = "deepseek-flash" # 显式请求省略时的模型，此清单已指定请求模型。
+api_key_env = "DEEPSEEK_API_KEY" # 仅引用环境变量名，不存凭据正文。
+
+[memory]
+use = false # 不读取其他试次产生的记忆。
+capture = false # 不创建记忆候选。
+
+[permission_policy]
+command = "allow" # 可信自建任务允许本机命令；不代表OS沙箱。
+verification = "allow" # 宿主独立评分无需逐次人工救援。
+
+[limits]
+max_model_turns = 8 # 每试次逻辑请求上限，含摘要。
+max_tool_calls = 20 # 每试次工具调用上限。
+run_timeout_seconds = 180.0 # 单试次执行最长秒数；评分另有超时。
+model_turn_timeout_seconds = 45.0 # 单模型轮次等待秒数。
+max_http_attempts_per_turn = 1 # 不自动重试，避免不明消费。
+model_max_output_tokens = 4096 # 单次模型输出token上限。
+
+[context]
+compression = "off" # 每试次由实验策略唯一覆盖此字段。
+max_input_bytes = 65536 # 请求消息与工具整体UTF-8字节上限，两组相同。
+inline_tool_bytes = 8192 # 启用压缩时的大工具结果内联阈值，单位字节。
+max_summary_calls = 2 # 单试次摘要次数上限，包含在8次总模型预算内。

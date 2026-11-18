@@ -63,6 +63,8 @@ it('从输入区进入项目设置再返回，保留任务草稿且不创建任�
   const user = setup(projectOption, '/runs');
   await user.click(await screen.findByLabelText('任务描述'));
   await user.paste('保留这条任务草稿');
+  // 项目设置在执行位置的折叠详情中，使用与用户一致的展开路径。
+  await user.click(screen.getByRole('button', { name: projectOption.label }));
   await user.click(screen.getByRole('link', { name: '项目设置' }));
   expect(await screen.findByLabelText('Python 解释器')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Close' }));

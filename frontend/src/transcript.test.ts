@@ -71,6 +71,26 @@ it('参数生成与真实工具执行分开，开始事件到达后替换占位�
   expect(items[0].payload).not.toHaveProperty('result');
 });
 
+it('未启动的工具已有跳过回执时，补读增量也不恢复参数占位', () => {
+  const preparing: RunEvent = {
+    ...makeEvent(1),
+    type: 'model_delta',
+    payload: {
+      model_turn: 1, channel: 'tool_arguments', tool_index: 1,
+      call_id: 'search', name: 'search_files', delta: '{"query":"keyword"}',
+    },
+  };
+  const skipped: RunEvent = {
+    ...makeEvent(2),
+    type: 'tool_result',
+    payload: { call_id: 'search', name: 'search_files', result: { ok: false, error: { code: 'skipped_timeout' } } },
+  };
+  const live = projectTranscript([], [preparing], preparing.run_id);
+  const handled = projectTranscript(live, [skipped], preparing.run_id);
+  expect(handled).toEqual([skipped]);
+  expect(projectTranscript(handled, [preparing, skipped], preparing.run_id)).toEqual([skipped]);
+});
+
 it('其他运行增量不污染本轮文字，缺少完整结束时保留未完成标记', () => {
   const first = delta(1, '部分输出');
   const other = { ...delta(2, '另一轮'), run_id: 'other' };

@@ -1,0 +1,4 @@
+# 评测协议、夹具与 HTTP 录制按原始字节核对 SHA-256，检出时保留原换行。
+evals/** -text
+src/agent_harness/evaluation/http_replay_adapter.py text eol=lf
+src/agent_harness/evaluation/grading_http.py text eol=lf

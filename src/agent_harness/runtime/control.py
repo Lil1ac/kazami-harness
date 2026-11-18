@@ -58,9 +58,14 @@ class ControlStore:
             if self.get(state["run_id"], db) is not None:
                 raise TaskError("runtime_already_bound", "该运行的控制状态已存在，不能重新启动。")
             resume = context.manifest.execution_resume
+            crash = context.manifest.crash_resume
             source = self.get(str(context.manifest.parent_run_id), db) if context.manifest.parent_run_id else None
             if resume is not None and (source is None or source["status"] != "paused"):
                 raise TaskError("execution_not_paused", "暂停来源无法核对，不能恢复。")
+            if crash is not None and (source is None or source["status"] != "running"
+                    or crash.workspace_identity != state["workspace_identity"]
+                    or source["workspace_identity"] != state["workspace_identity"]):
+                raise TaskError("recovery_control_unverified", "中断来源的工作区或控制状态发生变化。")
             if source is not None:
                 for item in source["messages"]:
                     carry = item["delivery"] == "next" and item["status"] == "received" and item["job_id"] is None
@@ -70,6 +75,8 @@ class ControlStore:
                         value.update(status="received", consumers={})
                         state["messages"].append(value)
                         item.update(status="forwarded", forwarded_run_id=state["run_id"])
+                if crash is not None:
+                    source["status"] = "finished"  # 冻结旧收件箱，原运行日志仍显示中断。
                 self.save(source, db)  # 待执行下一轮随会话接续展示，用户仍可在最新段撤回。
             self.save(state, db)
         return state

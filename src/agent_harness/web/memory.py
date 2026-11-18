@@ -7,6 +7,8 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 
 from agent_harness.memory.service import MemoryChange, MemoryError, MemorySave, MemoryService, MemoryStore, digest, encode
+from agent_harness.memory.topics import project_topics
+from agent_harness.web.memory_jobs import ConsolidationRequest, ConsolidationReview, ConsolidationSettings
 from agent_harness.work.exports import materialize_text_export
 from agent_harness.storage.runs import StorageError
 
@@ -25,6 +27,8 @@ def export_project_memory(manager, identifier: str) -> Path:
     service = project_memory_service(manager, identifier)
     items = service.list(status="active")["items"]
     paragraphs = ["# 项目记忆", "此文件为阅读快照，编辑文件不会改变宿主记忆。"]
+    for topic in project_topics(items):
+        paragraphs.extend(["## 主题： " + topic["title"], "\n".join(f"- {item['title']} · {item['id']} · v{item['revision']}" for item in topic["items"])])
     for item in items:
         paragraphs.extend(["## " + item["title"].replace("\n", " "), f"编号：{item['id']} · 版本：{item['revision']} · 类型：{item['type']}", encode(item["details"]), item["content"], "适用范围：" + encode(item["applies_to"]), "证据：" + encode(item["evidence_refs"]), "来源：" + encode(item["source"])])
     service.store.root.mkdir(parents=True, exist_ok=True)
@@ -37,6 +41,36 @@ def export_project_memory(manager, identifier: str) -> Path:
 def install_memory_routes(app: FastAPI, manager) -> None:
     """把记忆路由安装到 app；manager 提供宿主项目归属和历史 Run，返回 None。"""
     store = MemoryStore(manager.runs_root)  # 仅宿主访问的记忆库，页面不传磁盘路径。
+
+    @app.get("/api/projects/{project_id}/memory-library")
+    async def memory_library(project_id: str) -> dict:
+        """返回 project_id 的主题、历史来源、整理列表和空闲设置。"""
+        return manager.memory_jobs.library(project_id)
+
+    @app.get("/api/projects/{project_id}/memory-evidence/{reference}")
+    async def memory_evidence(project_id: str, reference: str) -> dict:
+        """回读 project_id 的证据 reference；不可见或其他项目返回受控错误。"""
+        return manager.memory_jobs.evidence(project_id, reference)
+
+    @app.post("/api/projects/{project_id}/memory-consolidations", status_code=202)
+    async def start_consolidation(project_id: str, body: ConsolidationRequest) -> dict:
+        """按 body 持久接纳 project_id 的整理作业；返回队列编号和初始状态。"""
+        return await manager.memory_jobs.enqueue(project_id, body)
+
+    @app.get("/api/projects/{project_id}/memory-consolidations/{identifier}")
+    async def get_consolidation(project_id: str, identifier: UUID) -> dict:
+        """读取 project_id 的 identifier 草案和用量；无写入或模型调用。"""
+        return manager.memory_jobs.detail(project_id, str(identifier))
+
+    @app.post("/api/projects/{project_id}/memory-consolidations/{identifier}/review")
+    async def review_consolidation(project_id: str, identifier: UUID, body: ConsolidationReview) -> dict:
+        """按 body 明确选择发布 project_id 的草案项，返回新状态或版本冲突。"""
+        return await manager.memory_jobs.review(project_id, str(identifier), body)
+
+    @app.put("/api/projects/{project_id}/memory-consolidation-settings")
+    async def configure_consolidation(project_id: str, body: ConsolidationSettings) -> dict:
+        """保存 project_id 的空闲整理偏好，返回已保存的开关值。"""
+        return manager.memory_jobs.configure(project_id, body.idle_enabled)
 
     def project_service(identifier: str) -> MemoryService:
         """从宿主目录登记解析 identifier；未知项目拒绝，返回绑定来源的领域服务。"""

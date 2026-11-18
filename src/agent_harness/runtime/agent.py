@@ -8,6 +8,7 @@ from agent_harness.providers.base import ModelClient
 from agent_harness.runtime.assembly import assemble
 from agent_harness.runtime.completion import finish_candidate
 from agent_harness.runtime.environment import execution_environment
+from agent_harness.runtime.handoff import finish_root_handoff
 from agent_harness.runtime.model_gateway import commit_response, execute_model
 from agent_harness.runtime.pipeline import Finish, Pipeline, Stage, apply_decision
 from agent_harness.runtime.runner import AgentStopped
@@ -30,6 +31,7 @@ async def _run_agent(session: Session, pipeline: Pipeline) -> None:
     else:
         apply_decision(session, startup)
 
+    previous_delivery_feedback = None  # 同一次未解决的入口问题只主动退回一次，避免循环催促。
     while context.available("model_turns") > 0:
         await asyncio.sleep(0)  # 本地组件可能立即返回，模型请求前仍要响应取消。
         session.turn = Turn()
@@ -42,11 +44,26 @@ async def _run_agent(session: Session, pipeline: Pipeline) -> None:
         if response.tool_calls:
             apply_decision(session, await execute_batch(session, pipeline, response.tool_calls))
             apply_decision(session, await pipeline.run(Stage.BATCH_END, session))
+            check_progress = getattr(session.executor, "progress_feedback", None)
+            if check_progress and context.available("model_turns") > 0:
+                feedback = await check_progress(context.available("model_turns"))
+                if feedback:
+                    session.append({"role": "user", "content": feedback}, "pipeline_feedback")
             continue
 
         if apply_decision(session, await pipeline.run(Stage.CANDIDATE, session)):
             continue
-        context.result.final_answer = response.message["content"]
+        answer = response.message["content"]
+        check_delivery = getattr(session.executor, "delivery_feedback", None)
+        if check_delivery and not session.turn.handoff and context.available("model_turns") > 0:
+            feedback = await check_delivery()
+            if feedback and feedback != previous_delivery_feedback:
+                previous_delivery_feedback = feedback
+                session.append({"role": "user", "content": feedback}, "pipeline_feedback")
+                continue
+        if session.turn.handoff and session.turn.root_handoff_facts is not None:
+            answer = finish_root_handoff(session, answer)
+        context.result.final_answer = answer
         if not apply_decision(session, await finish_candidate(session, pipeline)):
             return
     raise AgentStopped("limit_exceeded", "max_model_turns")

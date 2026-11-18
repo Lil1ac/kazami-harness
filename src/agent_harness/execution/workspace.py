@@ -30,6 +30,34 @@ class Workspace:
         """判断路径是否落入记录目录的词法位置或其解析后的真实位置。"""
         return path.is_relative_to(self._runs_lexical) or path.is_relative_to(self.runs_root)
 
+    def check_scanned_path(self, path: Path, *, directory: bool = False, resolve: bool = True) -> None:
+        """核验受控目录枚举产生的绝对 path，变化或越权时抛 WorkspaceError，成功返回 None。
+
+        directory=True 允许访问授权目录的祖先以继续枚举。resolve=False 仅核对词法
+        路径与授权，供文件打开前使用；读句柄前必须再解析并核对同一文件身份。搜索起点
+        仍使用完整 resolve，搜索逐层跳过枚举到的符号链接及目录联接。
+        """
+        if not path.is_absolute() or not path.is_relative_to(self.workspace) or ".." in path.parts:
+            raise WorkspaceError("path_outside_workspace", "只能访问当前工作区内的路径。")
+        if self._is_record_path(path):
+            raise WorkspaceError("run_records_forbidden", "工具不能访问运行记录目录。")
+        if os.name == "nt" and (":" in path.name or path.name.endswith((".", " ")) or Path(path.name).is_reserved()):
+            raise WorkspaceError("invalid_path", "文件路径无法解析，请检查路径格式。")
+        from agent_harness.permissions.policy import FILE_SCOPE, path_allowed
+        scope = FILE_SCOPE.get()
+        if scope is not None and scope[0] == self.workspace and not path_allowed(path, scope[1], directory=directory):
+            raise WorkspaceError("permission_path_denied", "路径不属于当前授权目录范围。")
+        if not resolve:
+            return
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            raise WorkspaceError("path_changed", "搜索期间文件路径发生变化。") from None
+        if self._is_record_path(resolved):
+            raise WorkspaceError("run_records_forbidden", "工具不能访问运行记录目录。")
+        if resolved != path:
+            raise WorkspaceError("path_changed", "搜索期间文件路径发生变化。")
+
     def resolve(self, requested: str, *, must_exist: bool = False) -> Path:
         """解析绝对或相对路径，拒绝越界和经过记录目录后再转出的路径。
 

@@ -237,7 +237,8 @@ class ConversationManager:
             ids = {str(item) for item in self.manager.conversations.store.read(UUID(session_id)).run_ids}
             with store.transaction() as db:
                 rows = db.execute("SELECT body FROM revisions WHERE seq IN (SELECT MAX(seq) FROM revisions GROUP BY scope,id)").fetchall()
-            return sum(json.loads(row[0]).get("source", {}).get("run_id") in ids for row in rows)
+            sources = [json.loads(row[0]).get("source", {}) for row in rows]
+            return sum(source.get("run_id") in ids or any(ref["run_id"] in ids for ref in source.get("refs", [])) for source in sources)
         except (SessionError, StorageError):
             return 0
 
@@ -387,6 +388,7 @@ class ConversationManager:
                     self.store.event(db, session_id, {"type": "conversation_updated", "session_id": session_id})
             purge_ids = list(record["purge_ids"])  # 重试仍使用已冻结清单，不从残留目录重新推断范围。
             try:
+                await asyncio.to_thread(self.manager.memory_jobs.purge, session_id)
                 await asyncio.to_thread(self._clean_files, record)
                 await asyncio.to_thread(self.manager.integrations.store.cleanup_files, session_id)
             except Exception:

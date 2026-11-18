@@ -45,7 +45,7 @@ Runner在终态前固定结束证据，自动登记本轮新增、修改的文�
 所有真实项目的“项目设置”可保存 Python 解释器，空白按 PATH；Git 项目另外可保存测试命令和超时（秒，必须大于 0 且不超过 3600）。例如：
 
 ```text
-D:\projects\AgentHarness\.venv\Scripts\python.exe -m pytest -q
+D:\projects\my-backend\.venv\Scripts\python.exe -m pytest -q
 ```
 
 请替换为该项目已安装依赖的解释器。含空格的程序或参数使用双引号。Windows 按系统命令行规则解析，其他平台按 POSIX 规则解析；保存后固定为参数数组，不经过 shell。Windows 的脚本应显式指定 `.exe` 解释器；程序入口不能使用 `{workspace}`，其他参数可引用该占位符。

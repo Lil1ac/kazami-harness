@@ -7,6 +7,7 @@ import os
 import signal
 import threading
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,8 +19,19 @@ from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.work.tasks import TaskError
 
 
+def _usd_cents(value: str) -> int:
+    """把 value 表示的正美元金额精确换为分；拒绝非数字及低于一分的粒度。"""
+    try:
+        cents = Decimal(value) * 100
+        if cents.is_finite() and cents > 0 and cents == cents.to_integral_value():
+            return int(cents)
+    except InvalidOperation:
+        pass
+    raise argparse.ArgumentTypeError("美元上限应为正数，且至多两位小数")
+
+
 def _parser() -> argparse.ArgumentParser:
-    """定义 run/show/serve/hooks 参数，返回解析器；帮助与非法参数交给 argparse 处理。"""
+    """定义 run/show/serve/hooks/eval 参数，返回解析器；帮助与非法参数交给 argparse 处理。"""
     parser = argparse.ArgumentParser(prog="harness", description="Agent Harness 任务运行入口")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -58,7 +70,49 @@ def _parser() -> argparse.ArgumentParser:
     hooks.add_argument("--runs-dir", type=Path, default=Path(".runs"), help="与运行相同的记录和审核目录")
     hooks.add_argument("--key", help="list 展示的 source:id")
     hooks.add_argument("--fingerprint", help="实际审核的完整定义指纹；变化后拒绝")
+    evaluation = commands.add_parser("eval", help="冻结题集并执行上下文或记忆对照；不会自动重放中断")
+    evaluation.add_argument("--suite", type=Path, required=True, help="可信本地题集JSON")
+    evaluation.add_argument("--config", type=Path, required=True, help="固定模型、工具、权限及预算TOML")
+    evaluation.add_argument("--runs-dir", type=Path, default=Path(".runs"))
+    evaluation.add_argument("--work-dir", type=Path, required=True, help="独立试次目录，须在运行记录之外")
+    evaluation.add_argument("--split", choices=["dev", "test"], default="dev")
+    evaluation.add_argument("--groups", nargs="+", choices=["off", "masking", "hybrid", "hybrid_handoff", "hybrid_budgeted", "hybrid_budgeted_verified_handoff", "A", "B", "C", "window"], help="执行器与上下文分组；记忆题集按协议固定四组")
+    evaluation.add_argument("--repeats", type=int, default=1)
+    evaluation.add_argument("--max-model-calls", type=int, default=160)
+    evaluation.add_argument("--max-known-tokens", type=int, default=2000000)
+    evaluation.add_argument("--max-cost-usd", type=_usd_cents, help="DeepSeek Flash 评测发单上限，单位美元，例如3.00")
+    evaluation.add_argument("--max-consolidation-calls", type=int, default=4, help="每项目整理及结构修复的请求上限")
+    evaluation.add_argument("--preflight", action="store_true", help="仅核验起点失败和参考解通过，不调用模型")
+    evaluation.add_argument("--swe-python", type=Path, help="安装swebench==4.1.0的独立解释器；仓库题必填")
+    evaluation.add_argument("--require-preflight", help="复核同记录目录中通过的零模型预检批次UUID")
     return parser
+
+
+def _eval(args: argparse.Namespace) -> int:
+    """按args冻结评测并运行；返回0仅表示预检或整批完成，任务失败保留在报告中。"""
+    from agent_harness.evaluation.engine import evaluate
+    from agent_harness.evaluation.models import Experiment, Suite, preset_groups
+    from agent_harness.evaluation.memory_cases import MEMORY_STRATEGIES
+    try:
+        config = load_config(args.config)
+        kind = Suite.model_validate_json(args.suite.read_bytes()).kind
+        if kind == "memory" and args.groups:
+            raise ConfigurationError("记忆题集固定四组，请省略 --groups。")
+        strategies = list(MEMORY_STRATEGIES) if kind == "memory" else args.groups or ["off", "hybrid"]
+        experiment = Experiment(kind=kind, split=args.split, groups=preset_groups(strategies), repeats=args.repeats,
+                                max_model_calls=args.max_model_calls, max_known_tokens=args.max_known_tokens,
+                                max_cost_cents=args.max_cost_usd,
+                                max_consolidation_calls=args.max_consolidation_calls)
+        key = os.environ.get(config.api_key_env or "", "")
+        if not args.preflight and config.requires_model_key and not key:
+            raise ConfigurationError("评测模型凭据未配置，请在配置指定的环境变量中设置；不要写入题集。")
+        report = asyncio.run(evaluate(args.suite, config, experiment, args.runs_dir, args.work_dir, key,
+                                      preflight_only=args.preflight, swe_python=args.swe_python,
+                                      required_preflight=args.require_preflight))
+        print(json.dumps({"id": report["id"], "state": report["state"], "stop_reason": report["stop_reason"], "summary": report["summary"]}, ensure_ascii=False, indent=2))
+        return 0 if report["state"] in {"completed", "preflight_passed"} else 1
+    except (ValueError, OSError) as error:
+        raise ConfigurationError("评测输入或资源无效：" + type(error).__name__) from None
 
 
 def _prompt(args: argparse.Namespace) -> str:
@@ -270,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             output.reconfigure(encoding="utf-8")
     args = _parser().parse_args(argv)
     try:
-        handlers = {"run": _run, "show": _show, "serve": _serve, "hooks": _hooks}
+        handlers = {"run": _run, "show": _show, "serve": _serve, "hooks": _hooks, "eval": _eval}
         return handlers[args.command](args)
     except (ConfigurationError, TaskError) as exc:
         print(f"配置错误：{exc}", file=sys.stderr)

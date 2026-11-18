@@ -6,6 +6,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { WorkspaceNavigation } from './components/WorkspaceNavigation';
 import { DesktopIntegration } from './components/DesktopIntegration';
 import { JobsPage } from './pages/JobsPage';
+import { EvaluationsPage } from './pages/EvaluationsPage';
 import { AutomationsPage } from './pages/AutomationsPage';
 import { useWorkEvents } from './hooks/useWorkEvents';
 
@@ -20,6 +21,7 @@ export function App() {
       <main className="app-main">
         <div className="page-content">
           <Routes>
+            <Route path="/evaluations/:evaluationId?" element={<EvaluationsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/jobs/:jobId" element={<JobsPage />} />

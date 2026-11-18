@@ -10,7 +10,7 @@ import stat
 import subprocess
 import zlib
 
-from agent_harness.execution.processes import _child_environment
+from agent_harness.execution.processes import _child_environment, native_io_path
 from agent_harness.projects.manager import ProjectManager
 from agent_harness.storage.sessions import payload_digest
 from agent_harness.work.tasks import TaskError
@@ -41,7 +41,8 @@ def git(root: Path, *arguments: str, data: bytes | None = None, allowed: tuple[i
     environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                        GIT_TERMINAL_PROMPT="0", GIT_ATTR_NOSYSTEM="1")
     command = ["git", "--no-pager", "--no-optional-locks", "-c", f"core.hooksPath={os.devnull}",
-               "-c", "core.fsmonitor=false", "-c", "core.autocrlf=false", "-C", str(root), *arguments]
+               "-c", "core.fsmonitor=false", "-c", "core.autocrlf=false",
+               "-c", "core.longpaths=true", "-C", str(root), *arguments]
     try:
         result = subprocess.run(command, input=data, stdin=subprocess.DEVNULL if data is None else None, capture_output=True, timeout=30, env=environment,
                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
@@ -100,7 +101,7 @@ class IntegrationFiles:
     def __init__(self, root: Path):
         """绑定受宿主管理的 root；构造不创建目录，文件对象保存于其 objects 子目录。"""
         self.root = root  # 每条集成记录独占的证据目录。
-        self.objects = root / "objects"  # SHA256命名的不可变普通文件。
+        self.objects = native_io_path(root / "objects")  # 嵌套团队证据目录加上 64 位摘要也能完整读写。
 
     def save(self, raw: bytes, mode: int = 0o644) -> dict:
         """保存 raw 并返回带 mode 的清单；同摘要对象仅核验复用，写盘失败向上传播。"""
@@ -198,7 +199,7 @@ class IntegrationFiles:
             raw = normalized(self.read(item))
             packed = b"blob " + str(len(raw)).encode() + b"\0" + raw
             digest = hashlib.sha1(packed).hexdigest()
-            path = repository / ".git" / "objects" / digest[:2] / digest[2:]
+            path = native_io_path(repository / ".git" / "objects" / digest[:2] / digest[2:])
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 ProjectManager._atomic_write(path, zlib.compress(packed))

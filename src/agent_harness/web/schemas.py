@@ -113,6 +113,7 @@ class ConversationTurn(DataModel):
     validation_status: str | None = None  # 未读取到本轮结果时不猜测通过。
     created_at: datetime | None = None  # 可信清单创建时间；准备遗留时未知。
     interrupted: bool = False  # 本轮因服务中断缺少可信终态；缺省为False。
+    recovery_source_id: UUID | None = None  # 崩溃接续段的来源，普通用户轮次为空。
     delivery: ConversationDelivery | None = None  # 正在运行或无法读取时没有固定交付索引。
     file_references: list[ProjectFileReference] = Field(default_factory=list)  # 消息只返回引用摘要，正文按轮读取。
 
@@ -230,6 +231,8 @@ class RunView(DataModel):
     session_id: UUID | None = None  # 旧前端可缺省；服务对旧记录返回单轮会话编号。
     parent_run_id: UUID | None = None  # 本轮继承的直接前轮；首轮为空。
     turn_index: int = 1  # 用户要求轮次，与模型请求次数分别展示。
+    recovery_job_id: str | None = None  # 中断作业入口。活动或已结束运行无此入口。
+    recovery_source_id: UUID | None = None  # 新段接续的原中断运行，普通运行为空。
 
 
 # 分页事件返回有效前缀，客户端按 seq 合并并去重。

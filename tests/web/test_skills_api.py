@@ -406,6 +406,10 @@ def test_missing_skill_followup_can_be_cleared_without_losing_conversation(skill
             assert cleared["turn_index"] == 3 and cleared["parent_run_id"] == failed["run_id"]
             assert cleared["context"]["skills"] == [] and cleared["context"]["skill_error"] is None
             users = [message["content"] for message in model.requests[calls] if message["role"] == "user"]
+            # 默认启用项目记忆时，宿主可在历史之前加一个参考资料块，三个用户轮次仍须逐字保留。
+            if users and users[0].startswith("<project_memory>\n"):
+                assert users[0].endswith("</project_memory>")
+                users = users[1:]
             assert users == ["first", "failed-selected", "after-clear"]
             assert (Path(cleared["workspace"]) / "result.txt").read_text(encoding="utf-8") == "NO_SKILL: after-clear\n"
             assert cleared['workspace'] == first['workspace'] == failed['workspace']

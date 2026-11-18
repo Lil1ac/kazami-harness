@@ -115,6 +115,21 @@ def evidence(root: Path, identifier: str) -> dict[str, str]:
     return {name: hashlib.sha256((root / identifier / name).read_bytes()).hexdigest() for name in ('run.json', 'events.jsonl', 'summary.json')}
 
 
+def assert_followup_input(root: Path, run_id: str, requests: list[list[dict]], user_inputs: list[str]) -> None:
+    """按 run_id 的落盘分界检查本轮 requests，要求宿主记忆只在前缀且 user_inputs 顺序和次数精确匹配。"""
+    history = RunStore.read(root, run_id)
+    started, = (event for event in history.events if event.type == 'run_started')
+    offset = started.payload['conversation_start']
+    assert offset == 2
+    for messages in requests:
+        assert [message['role'] for message in messages[:offset]] == ['system', 'user']
+        prefix = messages[1]['content']
+        assert prefix.count('<project_memory>') == prefix.count('</project_memory>') == 1
+        assert 'memory_search 的 history 集合' in prefix
+        assert all('<project_memory>' not in (message.get('content') or '') for message in messages[offset:])
+        assert [message['content'] for message in messages[offset:] if message['role'] == 'user'] == user_inputs
+
+
 def test_file_followup_inherits_history_and_code_without_rewriting_parent(config: WebConfig):
     """同一普通目录完成两轮修改，核对历史证据固定、消息无重复及请求幂等。"""
     async def scenario():
@@ -123,6 +138,7 @@ def test_file_followup_inherits_history_and_code_without_rewriting_parent(config
         async with client_for(config, model) as (client, app):
             first = await initial(client)
             before = evidence(app.state.manager.runs_root, first['run_id'])
+            requests_before = len(model.requests)
             request_id = str(uuid4())
             second = await follow(client, first, request_id=request_id)
             assert second['parent_run_id'] == first['run_id'] and second['turn_index'] == 2
@@ -136,7 +152,7 @@ def test_file_followup_inherits_history_and_code_without_rewriting_parent(config
             assert evidence(app.state.manager.runs_root, first['run_id']) == before
             messages = model.requests[-1]
             assert sum(item['role'] == 'system' for item in messages) == 1
-            assert [item['content'] for item in messages if item['role'] == 'user'] == ['first', 'second']
+            assert_followup_input(app.state.manager.runs_root, second['run_id'], model.requests[requests_before:], ['first', 'second'])
             assert any(item.get('reasoning_content') == '必须保留的历史字段' for item in messages)
             count = len(model.requests)
             again = await submit_followup(client, f'/api/runs/{first["run_id"]}/followups', json={'request_id': request_id, 'prompt': 'second'})
@@ -174,7 +190,7 @@ def test_session_survives_restart_and_does_not_duplicate_inherited_history(confi
             assert third['workspace'] == first['workspace'] == second['workspace']
             assert not config.worktrees_root.exists()
             assert (Path(third['workspace']) / 'result.txt').read_text(encoding='utf-8') == 'first\nsecond\nthird\n'
-            assert [item['content'] for item in model.requests[-1] if item['role'] == 'user'] == ['first', 'second', 'third']
+            assert_followup_input(app.state.manager.runs_root, third['run_id'], model.requests, ['first', 'second', 'third'])
             view = (await client.get(f'/api/runs/{third["run_id"]}/conversation')).json()
             assert len(view['turns']) == 3
     asyncio.run(scenario())

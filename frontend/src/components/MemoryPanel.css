@@ -78,3 +78,36 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.memory-library,
+.memory-consolidation-detail,
+.memory-draft-change {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.memory-library {
+  padding: 0 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+.memory-library .ant-select {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.memory-idle-setting {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.memory-draft-change {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.memory-library pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow: auto;
+}
+.memory-library details > details {
+  margin-inline-start: 14px;
+}

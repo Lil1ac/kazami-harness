@@ -20,6 +20,7 @@ from agent_harness.providers.base import ModelClient, ModelError
 from agent_harness.model_selection import valid_model_key
 from agent_harness.runtime.runner import CancellationState, RunContext, run_task, validate_auto_repair, validate_execution
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, python_command
+from agent_harness.execution.processes import native_io_path
 from agent_harness.schemas import ContextAction, ContextCheck, ContextView, PlanningState, RunConfig, RunEvent, RunManifest, RunOrigin, RunResult, VerificationAttempt, VerifierSpec
 from agent_harness.projects import ProjectError, ProjectManager, ProjectPreset, ProjectReview, ProjectWorkspace
 from agent_harness.storage.runs import RunHistory, RunStore, StorageError
@@ -289,6 +290,8 @@ class WebRunManager:
         self.coordinator = Coordinator(self.management.store, web_config.max_concurrent_runs, web_config.max_model_requests, web_config.max_processes)  # 全入口共用资源与宿主锁。
         from agent_harness.web.integrations import IntegrationService
         self.integrations = IntegrationService(self)  # 人工成果集成复用队列，不创建模型运行或执行后端。
+        from agent_harness.web.memory_jobs import MemoryJobs
+        self.memory_jobs = MemoryJobs(self)  # 项目历史整理复用队列，仅产生待审草案。
         from agent_harness.web.jobs import JobQueue
         self.jobs = JobQueue(self)  # 同一宿主的持久资源队列，启动恢复由明确偏好控制。
         from agent_harness.automations.service import AutomationService
@@ -543,6 +546,10 @@ class WebRunManager:
         api_key 只传 Runner；本方法由首次提交和追加共同使用。启动记录失败时返回受控错误，
         会话中已提交的请求不会因重试再次执行。
         """
+        eligible = (manifest.origin is not None and manifest.origin.execution_mode == "isolated"
+                    and manifest.automation is None and manifest.permission_resume is None
+                    and manifest.human_decision is None and manifest.planning.phase == "execution")
+        manifest = manifest.model_copy(update={"crash_recovery": eligible})
         item = ActiveRun(manifest, CancellationState(), asyncio.get_running_loop().create_future())
         item.owner = owner
         self._active[manifest.run_id] = item
@@ -682,6 +689,7 @@ class WebRunManager:
             result = item.context.result.model_copy(deep=True)
         else:
             result = _unfinished_result(history)
+        recovery_job = self.jobs.interrupted_job(str(identifier)) if history.interrupted and not active else None
         warnings = [*history.warnings, *self._warnings.get(identifier, [])]
         warnings.extend(event.payload["message"] for event in history.events if event.type == "memory_failed" and isinstance(event.payload.get("message"), str))
         try:
@@ -726,6 +734,8 @@ class WebRunManager:
             session_id=history.manifest.session_id or identifier,
             parent_run_id=history.manifest.parent_run_id,
             turn_index=history.manifest.turn_index,
+            recovery_job_id=recovery_job["id"] if recovery_job is not None else None,
+            recovery_source_id=history.manifest.crash_resume.source_run_id if history.manifest.crash_resume else None,
         )
 
     def list_subagents(self, run_id: UUID) -> dict:
@@ -808,6 +818,7 @@ class WebRunManager:
         view = self.get_run(run_id)
         item = self._active.get(view.run_id)
         if view.active and item is not None and item.task is not None and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
+            self.jobs.mark_stop(item.owner)
             item.cancellation.api_requested = True
             item.cancelling = True
             item.task.cancel()
@@ -825,10 +836,14 @@ class WebRunManager:
         self.jobs.closed = True
         if self.integrations.active_job:
             self.integrations.cancel(self.integrations.active_job)
+        for job in self.jobs.list():
+            if job.get("kind") == "memory_consolidation" and job["status"] in {"preparing", "running"}:
+                self.memory_jobs.stop(job)
         await asyncio.gather(*(asyncio.shield(task) for task in list(self._submissions.values())), return_exceptions=True)
         async with self._lock:
             for item in list(self._active.values()):
                 if item.task is not None and not item.task.done() and not item.cancelling and not item.finalizing and (item.context is None or item.context.phase != 'artifact_collection'):
+                    self.jobs.mark_stop(item.owner)
                     item.cancellation.shutdown_requested = True
                     item.cancelling = True
                     item.task.cancel()
@@ -882,6 +897,8 @@ class WebRunManager:
                 raise WebServiceError(409, 'project_artifact_unavailable', '本轮固定产物不可用，不会用共享工作树当前文件冒充历史内容。') from None
         base = child_base or self.runs_root / str(view.run_id)
         try:
+            if os.name == "nt" and len(str(base.absolute() / path)) >= 248:
+                base = native_io_path(base)  # 深层命令产物下载复用写入时的原生文件 API 路径。
             candidate = base / path
             # ArtifactRef已校验词法边界，这里检查登记后新增的每一级链接。
             prefix = base

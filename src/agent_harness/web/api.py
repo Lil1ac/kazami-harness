@@ -25,6 +25,7 @@ from agent_harness.web.schemas import QueueSettings, ConversationPage, CreatePro
 from agent_harness.web.service import WebRunManager, WebServiceError
 from agent_harness.web.project_catalog import CatalogError
 from agent_harness.web.jobs import JobRequest
+from agent_harness.web.recovery import RecoveryRequest
 from agent_harness.web.file_references import install_file_reference_routes
 from agent_harness.web.conversation_management import ConversationError, ConversationChange, ConversationBatch, ConversationPurge
 from agent_harness.work.tasks import TaskError, TaskService, TaskCreate, TaskUpdate
@@ -85,6 +86,8 @@ def create_app(
     app = FastAPI(title="Agent Harness 本地控制台", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.manager = manager  # 公开服务实例供生命周期与离线测试协调。
     install_memory_routes(app, manager)
+    from agent_harness.web.evaluations import install_evaluation_routes
+    install_evaluation_routes(app, manager)
     install_file_reference_routes(app, manager)
     from agent_harness.web.automations import install_automation_routes
     install_automation_routes(app, manager)
@@ -166,6 +169,11 @@ def create_app(
     async def resolve_job(job_id: UUID) -> dict:
         """记录用户确认 job_id 进程已停止且工作区已核对；不重放原请求。"""
         return manager.jobs.resolve(str(job_id))
+
+    @app.post("/api/jobs/{job_id}/recover", status_code=202)
+    async def recover_job(job_id: UUID, body: RecoveryRequest) -> dict:
+        """明确接续 job_id 的可核对中断段，返回已持久接纳的后继作业。"""
+        return manager.jobs.recovery.accept(str(job_id), body)
 
     @app.post("/api/queue/resume")
     async def resume_queue() -> dict:
@@ -670,6 +678,8 @@ def create_app(
     @app.get("/jobs/{job_id}")
     @app.get("/settings")
     @app.get("/automations")
+    @app.get("/evaluations")
+    @app.get("/evaluations/{evaluation_id}")
     @app.get("/projects/{project_id}")
     async def frontend_page() -> Response:
         """返回前端路由统一 index；尚未构建时给出本地构建步骤，不影响 API 使用。"""

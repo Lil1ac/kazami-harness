@@ -13,6 +13,7 @@ from pydantic import Field
 from agent_harness.schemas import ArtifactRef, DataModel, RunManifest
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.execution.workspace import WorkspaceError
+from agent_harness.execution.processes import native_io_path
 
 
 _REFERENCE = re.compile(r"^ctx:([a-f0-9-]{36}):([a-f0-9]{64})$")
@@ -44,7 +45,7 @@ class ContextArchive:
 
     def _path(self, owner: str, digest: str) -> Path:
         """生成固定对象路径；owner/digest 必须来自合法引用，链接和越界抛 WorkspaceError。"""
-        run = self._directories.get(owner, self.runs_root / owner)
+        run = native_io_path(self._directories.get(owner, self.runs_root / owner))
         folder = run / "context"
         path = folder / (digest + ".txt")
         for candidate in (run, folder, path):
@@ -90,6 +91,7 @@ class ContextArchive:
             self._authorize(owner)
             ArtifactRef(location="run", path=relative)
             directory = self._directories.get(owner, self.runs_root / owner)
+            directory = native_io_path(directory)  # 子运行内的命令 UUID 和内容摘要可能跨越传统路径长度上限。
             root = directory / "artifacts"
             path = directory / relative
             if root.resolve() != root or path.resolve() != path or not path.is_relative_to(root):

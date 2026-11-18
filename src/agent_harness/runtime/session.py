@@ -1,7 +1,7 @@
 """冻结运行输入和可信历史，为阶段组件提供当前段状态。"""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from agent_harness.context.builder import ContextBuilder, ModelInput, SERIALIZATION
 from agent_harness.context.compression import ContextCompressor
@@ -31,9 +31,13 @@ class Turn:
 
     delegated: bool = False  # 当前段需要为父子交接预留模型次数。
     handoff: bool = False  # 当前投影只允许交接总结，无工具。
+    root_handoff_facts: dict | None = None  # 根 Run 的核验事实；非空时保留一轮用于收尾。
+    root_handoff_trigger: Literal["last_model_turn", "input_rejected"] | None = None  # 进入紧凑收尾所依据的真实触发条件。
+    root_handoff_limit_reason: str = "max_model_turns"  # 收尾仍未完成时应保留的原始限额原因。
     team_sequence: int = 0  # 当前输入的最新团队消息序号，收到答复后确认。
     input: ModelInput | None = None  # 经过记忆、压缩及交接修订的实际发送副本。
     response: ModelResponse | None = None  # 当前模型响应，未请求时为空。
+    response_seq: int | None = None  # 完整 assistant_message 落盘后的序号，用于区分供应商重复使用的工具编号。
 
 
 @dataclass
@@ -46,6 +50,7 @@ class Session:
     builder: ContextBuilder  # 绑定本段固定约定、记忆修订及规划投影。
     compressor: ContextCompressor  # 本段压缩器；辅助请求走统一网关。
     messages: list[dict]  # 供存储与工具配对使用的完整会话。
+    initial_message_count: int  # 启动历史的结尾；收尾只认本段随后提交的工具回执。
     turn: Turn = field(default_factory=Turn)  # 当前模型轮的临时状态。
     tool: "ToolStep | None" = None  # 只在当前批执行时有意义。
     completion_action: dict | None = None  # 已批准验收的接续动作，完成检查后提交结果。
@@ -54,6 +59,7 @@ class Session:
     skill_error: SkillFailure | None = None  # 初始化失败但仍需保留完整历史供接续。
     compression_parent: "RunHistory | None" = None  # 可复用摘要且未被记忆投影改变的已核验历史。
     report_retry: bool = False  # 本开发子段是否已用完唯一一次交接纠正机会。
+    verified_handoff_attempted: bool = False  # 受控自测的根段只接纳一次收尾，重决策不会重发或再补跑自测。
 
     def append(self, message: dict, event: str | None = None, **facts) -> None:
         """追加 message；event 非空时先保存来源事实和消息，facts 是额外的事件字段。"""
@@ -89,7 +95,8 @@ def prepare_session(context: "RunContext", client: ModelClient, executor: ToolEx
             if context.manifest.parent_run_id is None:
                 raise SessionError("history_unverified", "缺少前轮运行来源。")
             parent = RunStore.read(context.store.run_dir.parent, str(context.manifest.parent_run_id))
-            inherited = history_messages(parent, allow_interrupted=source.interrupted)
+            crash = context.manifest.crash_resume
+            inherited = history_messages(parent, allow_interrupted=source.interrupted, recovered=crash.tool_results if crash else None)
             if parent.events[-1].seq != source.last_seq or payload_digest(inherited) != source.messages_sha256:
                 raise SessionError("history_source_changed", "前轮历史记录发生变化。")
         except (SessionError, StorageError):
@@ -102,7 +109,7 @@ def prepare_session(context: "RunContext", client: ModelClient, executor: ToolEx
             context.emit("memory_history_projected", {"reason": "旧轮记忆工具结果由新轮项目记忆替代，旧摘要不直接继承。"})
     library = SkillLibrary(context.runs_root, config.skill_roots)
     interactive = inherited_context is None and context.manifest.automation is None and config.permission_policy.read == "allow"
-    resume = (context.manifest.permission_resume is not None or context.manifest.execution_resume is not None
+    resume = (context.manifest.permission_resume is not None or context.manifest.resumed_budget is not None
               or context.manifest.human_decision is not None and context.manifest.human_decision.action == "approve")
     skills, skill_resources, skill_error = [], [], None
     try:
@@ -175,5 +182,11 @@ def prepare_session(context: "RunContext", client: ModelClient, executor: ToolEx
         executor.subagents.bind_inputs(builder)
     # 保存初始消息和工具声明，后续事件只追加增量，避免每轮重复记录全部历史。
     context.emit("run_started", {"messages": messages, "tools": executor.definitions, "conversation_start": len(messages) - len(inherited) - 1})
-    return Session(context, client, executor, builder, compressor, messages, verifier=verifier,
+    if context.manifest.crash_resume is not None:
+        recovery = context.manifest.crash_resume
+        context.emit("crash_resumed", {"source_run_id": str(recovery.source_run_id),
+            "recovered_calls": [{"call_id": key, "applied": value["ok"]} for key, value in recovery.tool_results.items()],
+            "spent_model_turns": recovery.spent_model_turns, "spent_tool_calls": recovery.spent_tool_calls,
+            "spent_seconds": recovery.spent_seconds, "usage_complete": recovery.spent_usage_complete})
+    return Session(context, client, executor, builder, compressor, messages, len(messages), verifier=verifier,
                    skill_error=skill_error, compression_parent=None if memory_history_changed else parent)

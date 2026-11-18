@@ -173,6 +173,13 @@ class DesktopHost:
     async def artifact(self, relative_url: str) -> Path:
         """将产物、补丁或记忆导出 relative_url 核对为固定路径；拒绝任意文件和网络地址。"""
         url = urlsplit(relative_url)
+        evaluation = re.fullmatch(r"/api/evaluations/([0-9a-fA-F-]{36})/(patches|grades|trajectories)/([0-9a-fA-F-]{36})(?:/(score|log))?", url.path)
+        if evaluation is not None and self.manager is not None and not (url.scheme or url.netloc or url.query or url.fragment):
+            from agent_harness.web.evaluations import trial_artifact_path
+
+            batch, collection, run, grade = evaluation.groups()
+            if (collection == "grades") == (grade is not None):
+                return trial_artifact_path(self.manager.runs_root, UUID(batch), UUID(run), "trajectory" if collection == "trajectories" else grade or "patch")
         integration = re.fullmatch(r"/api/integrations/([0-9a-fA-F-]{36})/checks/([0-9a-fA-F-]{36})/artifacts", url.path)
         if integration is not None and self.manager is not None and not (url.scheme or url.netloc or url.fragment):
             try:

@@ -30,6 +30,11 @@ export function projectTranscript(
             payload.tool_index < 0)
         )
           continue;
+        if (isTool && typeof payload.call_id === 'string' && items.some(
+          /* 补读早期模型增量时让已保存的开始或结果继续覆盖占位。 */ (item) =>
+            (item.type === 'tool_started' || item.type === 'tool_result') &&
+            item.payload.call_id === payload.call_id && item.seq > event.seq,
+        )) continue;
         const key = `${turn}:${channel}${isTool ? ':' + String(payload.tool_index) : ''}`;
         const index = items.findIndex(
           /* 同一内容块跨许多事件保持稳定身份。 */ (item) => item.payload.block_key === key,
@@ -77,9 +82,9 @@ export function projectTranscript(
         'run_finished',
       ].includes(event.type)
     ) {
-      if (event.type === 'tool_started')
+      if ((event.type === 'tool_started' || event.type === 'tool_result') && typeof payload.call_id === 'string')
         items = items.filter(
-          /* 真正开始执行后以工具事实取代参数生成占位。 */ (item) =>
+          /* 截止或取消可直接收到跳过回执，也应替换该调用的参数生成占位。 */ (item) =>
             item.type !== 'tool_preparing' || item.payload.call_id !== payload.call_id,
         );
       if (

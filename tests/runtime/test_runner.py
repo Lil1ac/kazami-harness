@@ -137,6 +137,71 @@ def test_missing_usage_is_explicitly_incomplete(tmp_path: Path):
     assert outcome.result.usage.total_tokens == 0
 
 
+@pytest.mark.parametrize("usage,complete,total", [
+    ({"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}, True, 8),
+    (None, False, 0), ({"prompt_tokens": 5}, False, 0), ({"total_tokens": -1}, False, 0),
+])
+def test_truncated_response_counts_usage_without_executing_tools(tmp_path, usage, complete, total):
+    """验证截断响应usage完整/缺失/非法各边界；返回失败但保留可信计数，不执行其中看似完整的写工具。"""
+    payload = response(call("write", "write_file", '{"path":"must-not-exist","content":"bad"}'))
+    payload["choices"][0]["finish_reason"] = "length"
+    payload["usage"] = usage
+    outcome, requests, history = run_script(manifest(tmp_path), tmp_path / "records", [payload])
+    assert outcome.result.execution_status == "failed"
+    assert outcome.result.stop_reason == ("model_protocol_error" if usage == {"total_tokens": -1} else "model_output_truncated")
+    assert outcome.result.usage_complete is complete and outcome.result.usage.total_tokens == total
+    assert outcome.result.tool_calls == 0 and len(requests) == 1
+    assert not (tmp_path / "must-not-exist").exists()
+    assert not any(event.type == "tool_started" for event in history.events)
+    assert history.result.usage == outcome.result.usage
+    responses = [event for event in history.events if event.type == "model_response"]
+    assert sum((event.payload.get("usage") or {}).get("total_tokens", 0) for event in responses) == total
+
+
+def test_truncated_usage_does_not_hide_earlier_unknown_usage(tmp_path):
+    """前一轮用量缺失不能被后一轮截断但完整的计数覆盖，已知消耗仍累计一次。"""
+    (tmp_path / "app.log").write_text("hello", encoding="utf-8")
+    truncated = response(content="unfinished")
+    truncated["choices"][0]["finish_reason"] = "length"
+    outcome, _, _ = run_script(manifest(tmp_path), tmp_path / "records", [response(call("read"), usage=False), truncated])
+    assert outcome.result.usage.total_tokens == 8 and not outcome.result.usage_complete
+
+
+def test_rejected_summary_usage_reaches_child_and_parent_ledger(tmp_path):
+    """摘要失败的有效用量须计入子/父总预算各一次，事件保留summary用途而不生成执行工具。"""
+    from types import SimpleNamespace
+    from agent_harness.providers.base import ModelError
+    from agent_harness.runtime.model_gateway import request_model
+    from agent_harness.schemas import RunResult
+    child = RunResult(run_id=uuid4(), execution_status="running", usage_complete=True)
+    parent = RunResult(run_id=uuid4(), execution_status="running", usage_complete=True)
+    events = []
+
+    def consume(kind):
+        """按kind扣除一次逻辑模型额度；本测试只接受model并更新子运行计数。"""
+        assert kind == "model"
+        child.model_turns += 1
+
+    def emit(kind, payload):
+        """保存kind/payload审计事件到本地列表，返回None，不写外部数据。"""
+        events.append((kind, payload))
+
+    class TruncatedSummary:
+        """提供已校验用量但拒绝摘要正文的离线客户端。"""
+        async def complete(self, messages, tools):
+            """模拟messages/tools对应摘要截断，抛携带8个token的异常，不返回可执行响应。"""
+            raise ModelError("model_output_truncated", "截断", usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}, response_model="fixture")
+
+    context = SimpleNamespace(result=child, budget_parent=SimpleNamespace(result=parent),
+                              manifest=manifest(tmp_path), consume=consume, emit=emit, model_request_guard=None, deadline=float("inf"))
+    with pytest.raises(ModelError) as error:
+        asyncio.run(request_model(context, TruncatedSummary(), [], [], "summary"))
+    assert error.value.usage_accounted
+    assert child.usage.total_tokens == parent.usage.total_tokens == 8
+    assert child.usage_complete and parent.usage_complete
+    assert events[-1][0] == "model_response" and events[-1][1]["purpose"] == "summary"
+
+
 @pytest.mark.parametrize("kind", ["run", "model"])
 def test_request_timeout_persists_exactly_one_terminal_event(tmp_path: Path, kind: str):
     """验证总运行和单轮模型超时都保存唯一终态，并返回超时退出码。"""

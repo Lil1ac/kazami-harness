@@ -51,8 +51,8 @@ async def replay_tool(session: Session, action: dict, hook_action: dict | None) 
     try:
         result = await invoke_tool(session, step, action_id=action["id"])
         record_tool(context, call, result, session.messages)
-    except asyncio.CancelledError:
-        result = interrupted_result(session, step)
+    except (asyncio.CancelledError, TimeoutError) as error:
+        result = interrupted_result(session, step, deadline_reached=isinstance(error, TimeoutError))
         record_tool(context, call, result, session.messages)
         if step.started and getattr(executor, "cancelled_result", None) is not None:
             executor.permissions.finish(action, False)

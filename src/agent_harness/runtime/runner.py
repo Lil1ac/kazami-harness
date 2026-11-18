@@ -18,6 +18,7 @@ from agent_harness.schemas import ArtifactRef, RunConfig, RunManifest, RunResult
 from agent_harness.providers.base import ModelClient, ModelDelta, ModelError
 from agent_harness.providers.chat import ChatCompletionsClient
 from agent_harness.providers.factory import create_model_client
+from agent_harness.runtime.model_gateway import ModelRequestGuard
 from agent_harness.storage.runs import RunStore, StorageError
 from agent_harness.tools.registry import ToolExecutor
 from agent_harness.execution.local import LocalChangeStore
@@ -62,6 +63,7 @@ class RunContext:
     event_count: int = 1
     phase: str = "starting"
     request_purpose: str = "execution"  # 当前请求用途；内部摘要不进入用户对话流。
+    model_request_guard: ModelRequestGuard | None = None  # 评测宿主可绑定批次账本；普通运行不启用。
     started_at: float = 0.0  # 本次运行的单调起点，用于计量实际执行时长。
     record_root: Path | None = None  # 子日志嵌套保存时仍使用真实运行根保护文件和记忆边界；None取日志父目录。
     budget_parent: "RunContext | None" = None  # 子执行的共享预算归属，根运行为None。
@@ -71,6 +73,7 @@ class RunContext:
     timeout_scope: asyncio.Timeout | None = None  # 根运行实际超时管理器；None为尚未进入，避免Windows时钟粒度误判取消来源。
     delegation_used: bool = False  # 曾尝试委派后启用父级末轮交接；失败接纳也须为父保留总结机会。
     request_turn: int = 0  # 当前自身请求启动时的轮号；父总计数可能被并行子项推进，不能拿响应时总数配对。
+    request_attempted: bool = False  # 仅本段当前请求是否进入 HTTP 尝试，子项的并行计数不会改变它。
     runtime_control: object | None = None  # 当前执行段安全边界及用户输入；子段读取根收件箱。
     command_controller: object | None = None  # 当前段命令句柄，未绑定工具执行器时为 None。
     command_workspaces: dict[str, str] = field(default_factory=dict)  # 根段共享的实际目录占用，活动命令期间禁止其他写入。
@@ -165,6 +168,10 @@ class RunContext:
         if owner is not None and owner is not self:
             owner.http_attempt(attempt)
             return
+        if asyncio.get_running_loop().time() >= self.deadline:
+            raise AgentStopped("timed_out", "run_timeout")  # 重试退避结束后也不能越过总截止时间发单。
+        self.emit("model_http_attempt", {"model_turn": self.request_turn or self.result.model_turns, "attempt": attempt})
+        self.request_attempted = True
         self.result.http_attempts += 1
         if self.budget_parent is not None:
             self.budget_parent.result.http_attempts += 1
@@ -172,7 +179,6 @@ class RunContext:
                 self.budget_parent.result.usage_complete = False
         if attempt > 1:
             self.result.usage_complete = False
-        self.emit("model_http_attempt", {"model_turn": self.request_turn or self.result.model_turns, "attempt": attempt})
 
 
 class AgentStopped(Exception):
@@ -282,6 +288,7 @@ async def _run_task(
     project_manager: ProjectManager | None = None,
     mcp_credential_provider=None,
     model_credential_provider: Callable[[RunConfig], str] | None = None,
+    model_request_guard: ModelRequestGuard | None = None,
 ) -> RunOutcome:
     """执行模型任务及可选独立验收，返回已保存的结果、目录和事件数。
 
@@ -294,6 +301,7 @@ async def _run_task(
     project_manager仅供Git隔离运行，非隔离时不使用；结束快照与项目审阅复用。
     mcp_credential_provider=None 时外部认证仅用环境引用；非空为异步桌面私有读取器，不进入快照。
     model_credential_provider 为独立角色的宿主密钥解析器；None 时读取供应商对应环境变量。
+    model_request_guard 为评测请求与回执的批次门禁；None 时只使用本轮预算。
     总秒级预算覆盖模型、工具与验收；之后固定交付证据再保存唯一终态，采集异常独立提示。
     函数会调用外部服务、执行工具并写文件；StorageError 立即传播，不伪造落盘成功。
     """
@@ -308,7 +316,15 @@ async def _run_task(
         raise ConfigurationError(str(error)) from None
     # 程序入口也在落盘前固定快照；读取历史不执行此准备流程。
     task = manifest.task.model_copy(update={"python_execution": execution})
-    manifest = manifest.model_copy(update={"task": task})
+    from agent_harness.memory.service import MemoryError, MemoryStore
+    memory_scope = None  # 单轮固定源目录身份，索引不能根据日后同名目录重新授权。
+    if manifest.config.memory.capture:
+        source = manifest.origin.registered_path if manifest.origin else task.workspace
+        try:
+            memory_scope = MemoryStore(runs_root).scope(None, source)
+        except MemoryError:
+            pass  # 记忆控制器按原入口处理不可用的项目，不给记录伪造身份。
+    manifest = manifest.model_copy(update={"task": task, "memory_scope_id": memory_scope})
     if manifest.config.planning_policy == "required" and not (manifest.planning.plans and manifest.planning.plans[-1].status == "approved"):
         # CLI和Web统一执行宿主强制策略；自动入口也不能先执行命令再补规划。
         state = manifest.planning.model_copy(deep=True)
@@ -345,9 +361,12 @@ async def _run_task(
     result = RunResult(run_id=manifest.run_id, execution_status="running", usage_complete=True, planning=manifest.planning.model_copy(deep=True))
     started_at = asyncio.get_running_loop().time()
     resume = manifest.permission_resume
-    budget = manifest.execution_resume or (resume if resume and resume.decision == "approve" else None)
+    budget = manifest.resumed_budget
     deadline = started_at + max(0, manifest.config.limits.run_timeout_seconds - (budget.spent_seconds if budget else 0))
-    context = RunContext(manifest, store, result, deadline, started_at=started_at)
+    context = RunContext(manifest, store, result, deadline, started_at=started_at, model_request_guard=model_request_guard)
+    bind_self_test_events = getattr(tool_executor, "bind_public_self_test_events", None)
+    if bind_self_test_events is not None:
+        bind_self_test_events(context.emit)
     context.mcp_credential_provider = mcp_credential_provider  # 只驻留内存；子执行通过根预算上下文读取。
     from agent_harness.runtime.control import RuntimeControl
     context.runtime_control = RuntimeControl(context)
@@ -394,7 +413,6 @@ async def _run_task(
         else:
             result.execution_status = "timed_out"
             result.stop_reason = "run_timeout"
-            result.usage_complete = False
     except asyncio.CancelledError as error:
         cancelled_phase = context.phase  # 接收取消时固定真实阶段，不能被后续检查结果/清理事件覆盖。
         task = asyncio.current_task()
@@ -413,7 +431,6 @@ async def _run_task(
             apply_verification(context, _interrupted_verification(verifier, reason, cancelled=status == "cancelled"))
         else:
             result.execution_status, result.stop_reason = status, reason
-            result.usage_complete = False
         # 不保存异常正文、Task repr、代码行内容或局部变量，防止输入与凭据泄漏。
         frames = traceback.extract_tb(error.__traceback__)[-16:]
         context.emit("cancellation_received", {
@@ -430,8 +447,9 @@ async def _run_task(
         result.final_answer = error.message
     except ModelError as error:
         result.execution_status = "timed_out" if error.code == "model_timeout" else "failed"
-        result.stop_reason, result.usage_complete = error.code, False
-        context.emit("model_request_failed", {"model_turn": result.model_turns, "code": error.code})
+        result.stop_reason = error.code
+        context.emit("model_request_failed", {"model_turn": result.model_turns, "code": error.code,
+            **({"transport": error.transport_diagnostic} if error.transport_diagnostic else {})})
     except StorageError:
         # 事件存储失败时仍尽力固定现场，但不能补造可信终态或追加其他写入者。
         await _file_operation(_capture_artifacts, manifest, changes, projects, finalizing=True)
@@ -440,7 +458,7 @@ async def _run_task(
         if result.execution_status == "completed" and verifier is not None:
             apply_verification(context, VerificationResult(status="error", reason="verifier_runtime_error", cleanup_status="unknown"))
         else:
-            result.execution_status, result.stop_reason, result.usage_complete = "failed", "internal_error", False
+            result.execution_status, result.stop_reason = "failed", "internal_error"
         context.emit("runtime_error", {"code": result.stop_reason, "error_type": type(error).__name__})
 
     _collect_tool_state(result, tool_executor)
@@ -467,6 +485,17 @@ async def _run_task(
     result.active_duration_seconds = context.active_duration()
     context.runtime_control.store.finish(context)  # 成果证据固定后才发布安全暂停，累计秒数与本段结果一致。
     store.finalize(result)
+    if memory_scope is not None:
+        from agent_harness.memory.evidence import EvidenceIndex
+
+        def index_terminal() -> None:
+            """从本轮唯一可信终态生成派生索引；失败时由显式刷新补录。"""
+            try:
+                EvidenceIndex(runs_root).record(RunStore.read(runs_root, str(manifest.run_id)))
+            except (MemoryError, StorageError):
+                pass  # 索引是可重建缓存，不能覆盖已确认的 Run 终态。
+
+        await _file_operation(index_terminal, finalizing=True)
     return RunOutcome(result, store.run_dir, context.event_count + 1)
 
 

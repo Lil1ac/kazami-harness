@@ -1,0 +1,731 @@
+{
+  "name": "Agent Harness 跨会话项目记忆试点",
+  "version": "memory-v1.0",
+  "kind": "memory",
+  "provenance": "自建中文编码与核实夹具。三个项目、独立开发与测试学习材料。规则审阅只访问学习证据与整理草案。",
+  "learning": {
+    "billing:test": {
+      "episodes": [
+        {
+          "id": "legacy",
+          "captured_at": "2026-09-01T09:00:00+08:00",
+          "prompt": "已确认账单 V1 legacy_payload 合同：返回对象只含 minor_units，值保持原始整数分，负数原样保留。"
+        },
+        {
+          "id": "v2-format",
+          "captured_at": "2026-09-03T09:00:00+08:00",
+          "prompt": "已确认账单 V2 refund_v2 与 round_v2 的交付格式：返回对象只含 amount，值以元计，是固定两位小数的字符串。V1 保持原合同。"
+        },
+        {
+          "id": "refund-sign",
+          "captured_at": "2026-09-05T09:00:00+08:00",
+          "prompt": "已确认 V2 的 refund_v2 退款：传入分数的绝对值转成元后取负，传入 0 时是 0.00，避免负零。"
+        },
+        {
+          "id": "round-old",
+          "captured_at": "2026-09-07T09:00:00+08:00",
+          "prompt": "旧的 V2 round_v2 处理千分之一元 mills，最初确认使用 ROUND_DOWN，截断到两位小数。"
+        },
+        {
+          "id": "round-new",
+          "captured_at": "2026-10-01T09:00:00+08:00",
+          "prompt": "V2 round_v2 的新确认取代 9 月 7 日旧值：mills 为千分之一元，改为十进制 ROUND_HALF_UP，正负两边的半分均远离零。输出仍是 amount 两位小数字符串。"
+        },
+        {
+          "id": "receipt",
+          "captured_at": "2026-10-06T09:00:00+08:00",
+          "prompt": "历史一次性调试票据用了 amount_cents，只有临时日志采样，未成为项目接口约定。"
+        }
+      ],
+      "notes": [
+        {
+          "episode": "legacy",
+          "content": {
+            "type": "rule",
+            "title": "V1 legacy_payload 金额兼容",
+            "details": {
+              "topic": "V1账单",
+              "behavior": "legacy_payload 返回对象仅含 minor_units，值为原始整数分，负数不变。"
+            },
+            "tags": [
+              "legacy_payload",
+              "V1",
+              "账单"
+            ]
+          }
+        },
+        {
+          "episode": "round-old",
+          "content": {
+            "type": "decision",
+            "title": "V2 round_v2 舍入方案",
+            "details": {
+              "topic": "V2舍入",
+              "choice": "将 mills 千分之一元使用 ROUND_DOWN 截断两位",
+              "rationale": "9 月 7 日初版约定。"
+            },
+            "tags": [
+              "round_v2",
+              "V2",
+              "舍入"
+            ]
+          }
+        }
+      ],
+      "review": [
+        {
+          "id": "v1",
+          "episodes": [
+            "legacy"
+          ],
+          "terms": [
+            [
+              "minor_units"
+            ],
+            [
+              "整数",
+              "int",
+              "分"
+            ]
+          ]
+        },
+        {
+          "id": "v2-format",
+          "episodes": [
+            "v2-format"
+          ],
+          "terms": [
+            [
+              "amount"
+            ],
+            [
+              "两位",
+              "2 位",
+              "2位",
+              "fixed",
+              "two"
+            ],
+            [
+              "字符串",
+              "string"
+            ]
+          ]
+        },
+        {
+          "id": "refund",
+          "episodes": [
+            "refund-sign"
+          ],
+          "terms": [
+            [
+              "refund",
+              "退款"
+            ],
+            [
+              "负",
+              "negative",
+              "abs"
+            ]
+          ]
+        },
+        {
+          "id": "refund-combined",
+          "episodes": [
+            "v2-format",
+            "refund-sign"
+          ],
+          "terms": [
+            [
+              "amount"
+            ],
+            [
+              "退款",
+              "refund"
+            ],
+            [
+              "负",
+              "negative"
+            ]
+          ]
+        },
+        {
+          "id": "round-v2",
+          "episodes": [
+            "round-new"
+          ],
+          "terms": [
+            [
+              "round_half_up",
+              "四舍五入",
+              "远离零"
+            ]
+          ]
+        }
+      ]
+    },
+    "alerts:test": {
+      "episodes": [
+        {
+          "id": "route",
+          "captured_at": "2026-09-08T09:00:00+08:00",
+          "prompt": "用户确认 alert_route(level)：level 等于 'high' 返回 'pager-escalate'，其余返回 'inbox-default'。"
+        },
+        {
+          "id": "severity",
+          "captured_at": "2026-09-09T09:00:00+08:00",
+          "prompt": "用户确认 alert_envelope 的 severity 字段：level 为 high 时是 P1，其余是 P3。"
+        },
+        {
+          "id": "ttl",
+          "captured_at": "2026-09-10T09:00:00+08:00",
+          "prompt": "用户确认 alert_envelope 的另一条合同：ttl_s 用秒，minutes 乘 60。返回只包含 severity 和 ttl_s 两项。"
+        },
+        {
+          "id": "policy-old",
+          "captured_at": "2026-09-12T09:00:00+08:00",
+          "prompt": "原 webhook_policy 使用 'linear-5'，这是迁移前的 webhook 重试策略。"
+        },
+        {
+          "id": "policy-new",
+          "captured_at": "2026-10-03T09:00:00+08:00",
+          "prompt": "用户新确认 webhook_policy 最新值为 'exp-3'，取代之前的 'linear-5'。新 webhook 全部使用 exp-3。"
+        },
+        {
+          "id": "retracted",
+          "captured_at": "2026-09-15T09:00:00+08:00",
+          "prompt": "暂时记录备用短信通道 legacy-sms 作为 fallback_sms；此条之后被用户撤回。"
+        },
+        {
+          "id": "foreign-sms",
+          "captured_at": "2026-10-07T09:00:00+08:00",
+          "prompt": "隔壁项目的 fallback_sms 已确认使用 foreign-sms-92。这个决定仅属于另一个项目。",
+          "foreign": true
+        }
+      ],
+      "notes": [
+        {
+          "episode": "route",
+          "content": {
+            "type": "rule",
+            "title": "alert_route 告警路由",
+            "details": {
+              "topic": "告警路由",
+              "behavior": "high 走 pager-escalate，其余走 inbox-default。"
+            },
+            "tags": [
+              "告警",
+              "alert_route",
+              "route"
+            ]
+          }
+        },
+        {
+          "episode": "policy-old",
+          "content": {
+            "type": "decision",
+            "title": "webhook_policy 重试策略",
+            "details": {
+              "topic": "Webhook策略",
+              "choice": "linear-5",
+              "rationale": "迁移前旧配置。"
+            },
+            "tags": [
+              "webhook_policy",
+              "策略"
+            ]
+          }
+        },
+        {
+          "episode": "retracted",
+          "content": {
+            "type": "fact",
+            "title": "fallback_sms 备用通道",
+            "details": {
+              "subject": "告警",
+              "attribute": "fallback_sms",
+              "value": "legacy-sms"
+            },
+            "tags": [
+              "fallback_sms",
+              "短信"
+            ]
+          },
+          "withdrawn": true
+        }
+      ],
+      "review": [
+        {
+          "id": "route",
+          "episodes": [
+            "route"
+          ],
+          "terms": [
+            [
+              "pager-escalate"
+            ],
+            [
+              "inbox-default"
+            ]
+          ]
+        },
+        {
+          "id": "severity",
+          "episodes": [
+            "severity"
+          ],
+          "terms": [
+            [
+              "p1"
+            ],
+            [
+              "p3"
+            ]
+          ]
+        },
+        {
+          "id": "ttl",
+          "episodes": [
+            "ttl"
+          ],
+          "terms": [
+            [
+              "ttl_s"
+            ],
+            [
+              "60",
+              "秒"
+            ]
+          ]
+        },
+        {
+          "id": "envelope-combined",
+          "episodes": [
+            "severity",
+            "ttl"
+          ],
+          "terms": [
+            [
+              "p1"
+            ],
+            [
+              "p3"
+            ],
+            [
+              "ttl_s"
+            ]
+          ]
+        },
+        {
+          "id": "new-policy",
+          "episodes": [
+            "policy-new"
+          ],
+          "terms": [
+            [
+              "exp-3"
+            ]
+          ]
+        }
+      ]
+    },
+    "archive:test": {
+      "episodes": [
+        {
+          "id": "names-legacy",
+          "captured_at": "2026-09-01T09:00:00+08:00",
+          "prompt": "旧版归档 legacy 目录中的 normalize_names 记录显示该版本保留大小写与顺序，只适用于已经下线的旧导出。"
+        },
+        {
+          "id": "manifest-old",
+          "captured_at": "2026-09-02T09:00:00+08:00",
+          "prompt": "旧版 archive manifest 曾尝试 files 保留重复项，当时还没有 count；只记录旧版实验。"
+        },
+        {
+          "id": "capacity",
+          "captured_at": "2026-09-04T09:00:00+08:00",
+          "prompt": "本项目文件名 UTF-8，只记录单个文件最多 12 MiB。从未确认整批上传最大条目数。"
+        },
+        {
+          "id": "foreign-checksum",
+          "captured_at": "2026-09-06T09:00:00+08:00",
+          "prompt": "独立项目确认归档校验 checksum_alias 为 'xxh3-green-17'。该决定只属于独立项目。",
+          "foreign": true
+        }
+      ],
+      "notes": [
+        {
+          "episode": "names-legacy",
+          "content": {
+            "type": "experience",
+            "title": "旧版 normalize_names 经验",
+            "details": {
+              "situation": "已下线的 legacy 导出",
+              "action": "保持原顺序与大小写",
+              "outcome": "兼容旧客户端",
+              "limitations": "仅 legacy 子目录的旧导出"
+            },
+            "tags": [
+              "normalize_names",
+              "archive"
+            ]
+          }
+        }
+      ],
+      "review": [
+        {
+          "id": "names-legacy",
+          "episodes": [
+            "names-legacy"
+          ],
+          "terms": [
+            [
+              "legacy",
+              "旧版"
+            ],
+            [
+              "大小写",
+              "case"
+            ]
+          ]
+        },
+        {
+          "id": "capacity",
+          "episodes": [
+            "capacity"
+          ],
+          "terms": [
+            [
+              "12"
+            ],
+            [
+              "mib",
+              "单个文件"
+            ]
+          ]
+        }
+      ]
+    },
+    "billing:dev": {
+      "episodes": [
+        {
+          "id": "dev-round",
+          "captured_at": "2026-08-01T09:00:00+08:00",
+          "prompt": "开发演练的 draft_amount 输入整数分，输出对象键 draft_total，值是保留一位小数的元数字符串。"
+        }
+      ],
+      "notes": [
+        {
+          "episode": "dev-round",
+          "content": {
+            "type": "rule",
+            "title": "draft_amount 演练格式",
+            "details": {
+              "topic": "演练金额",
+              "behavior": "draft_amount 只含 draft_total，元数字符串保留一位小数。"
+            },
+            "tags": [
+              "draft_amount",
+              "金额"
+            ]
+          }
+        }
+      ],
+      "review": [
+        {
+          "id": "draft-amount",
+          "episodes": [
+            "dev-round"
+          ],
+          "terms": [
+            [
+              "draft_total"
+            ],
+            [
+              "一位",
+              "1 位",
+              "1位"
+            ]
+          ]
+        }
+      ]
+    },
+    "alerts:dev": {
+      "episodes": [
+        {
+          "id": "dev-route",
+          "captured_at": "2026-08-01T09:00:00+08:00",
+          "prompt": "开发演练使用 demo_route 返回 'review-lane'。已确认。"
+        },
+        {
+          "id": "dev-ttl",
+          "captured_at": "2026-08-02T09:00:00+08:00",
+          "prompt": "开发演练 demo_ttl 的默认值是 45 秒。已确认。"
+        }
+      ],
+      "notes": [],
+      "review": [
+        {
+          "id": "demo-route",
+          "episodes": [
+            "dev-route"
+          ],
+          "terms": [
+            [
+              "review-lane"
+            ]
+          ]
+        },
+        {
+          "id": "demo-ttl",
+          "episodes": [
+            "dev-ttl"
+          ],
+          "terms": [
+            [
+              "45"
+            ]
+          ]
+        }
+      ]
+    },
+    "archive:dev": {
+      "episodes": [
+        {
+          "id": "dev-foreign",
+          "captured_at": "2026-08-01T09:00:00+08:00",
+          "prompt": "另一个演练目录已确认 debug_folder 为 isolated-demo。",
+          "foreign": true
+        },
+        {
+          "id": "dev-own",
+          "captured_at": "2026-08-02T09:00:00+08:00",
+          "prompt": "本演练仓库尚未确认 debug_folder。"
+        }
+      ],
+      "notes": [],
+      "review": []
+    }
+  },
+  "cases": [
+    {
+      "id": "bill-legacy",
+      "project": "billing",
+      "category": "既有约定",
+      "split": "test",
+      "prompt": "恢复账单 V1 的项目既有兼容约定。只在 solution.py 修改 legacy_payload(cents: int) -> dict。cents 是整数分，可为负数。按本项目之前确认的字段和单位返回单字段对象，保留零值。",
+      "source": "projects/billing",
+      "reference": "cases/bill-legacy/reference",
+      "grader": "cases/bill-legacy/grader.py",
+      "required_evidence": [
+        "legacy"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "bill-refund",
+      "project": "billing",
+      "category": "跨会话综合",
+      "split": "test",
+      "prompt": "实现账单 V2 的退款导出。只在 solution.py 修改 refund_v2(cents: int) -> dict。cents 为退款金额的整数分输入，可为正、负或零。按以前分别确认的 V2 字段格式和退款符号处理，返回一个字段。保留 V1 现有行为。",
+      "source": "projects/billing",
+      "reference": "cases/bill-refund/reference",
+      "grader": "cases/bill-refund/grader.py",
+      "required_evidence": [
+        "v2-format",
+        "refund-sign"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "bill-round",
+      "project": "billing",
+      "category": "知识更新",
+      "split": "test",
+      "prompt": "修正账单 V2 的 round_v2(mills: int) -> dict，只修改 solution.py。mills 单位为千分之一元。以最近确认的舍入决策为准，按既有 V2 输出格式返回对象，检查正值、负值和正好半分。",
+      "source": "projects/billing",
+      "reference": "cases/bill-round/reference",
+      "grader": "cases/bill-round/grader.py",
+      "required_evidence": [
+        "v2-format",
+        "round-new"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "bill-tax-unknown",
+      "project": "billing",
+      "category": "证据不足",
+      "split": "test",
+      "prompt": "核实本项目是否已经确认瑞典 SEK 账单的默认税率，交付 result.json。存在已确认税率时写 status=confirmed 和 rate（数字），缺少证据时精确写 {\"status\":\"needs_confirmation\"}。本任务只交付核实结果，solution.py 无需编辑。",
+      "source": "projects/billing",
+      "reference": "cases/bill-tax-unknown/reference",
+      "grader": "cases/bill-tax-unknown/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "alert-route",
+      "project": "alerts",
+      "category": "既有约定",
+      "split": "test",
+      "prompt": "实现 alert_route(level: str) -> str，只修改 solution.py。按本项目已确认的路由处理 'high' 及其他等级，返回完整目的地标识符。",
+      "source": "projects/alerts",
+      "reference": "cases/alert-route/reference",
+      "grader": "cases/alert-route/grader.py",
+      "required_evidence": [
+        "route"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "alert-envelope",
+      "project": "alerts",
+      "category": "跨会话综合",
+      "split": "test",
+      "prompt": "完善 solution.py 的 alert_envelope(level: str, minutes: int) -> dict。level 为告警级别，minutes 是非负整数分钟。按项目在不同会话确认的严重级别和 TTL 字段约定，返回仅含这两个字段的对象。",
+      "source": "projects/alerts",
+      "reference": "cases/alert-envelope/reference",
+      "grader": "cases/alert-envelope/grader.py",
+      "required_evidence": [
+        "severity",
+        "ttl"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "alert-policy",
+      "project": "alerts",
+      "category": "知识更新",
+      "split": "test",
+      "prompt": "只修正 solution.py 中的 webhook_policy() -> str，使新 webhook 返回本项目最近确认的重试策略标识符，当前源码中的旧值可能已经过时。",
+      "source": "projects/alerts",
+      "reference": "cases/alert-policy/reference",
+      "grader": "cases/alert-policy/grader.py",
+      "required_evidence": [
+        "policy-new"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "alert-withdrawn",
+      "project": "alerts",
+      "category": "删除与隔离",
+      "split": "test",
+      "prompt": "核实本项目仍生效的 fallback_sms 备用短信通道，交付 result.json。有当前确认值时写 status=confirmed 和 channel（字符串）；没有时精确写 {\"status\":\"needs_confirmation\"}。以本项目当前可用证据为准，只交付核实结果。",
+      "source": "projects/alerts",
+      "reference": "cases/alert-withdrawn/reference",
+      "grader": "cases/alert-withdrawn/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": [
+        "retracted",
+        "foreign-sms"
+      ]
+    },
+    {
+      "id": "archive-foreign",
+      "project": "archive",
+      "category": "删除与隔离",
+      "split": "test",
+      "prompt": "核实这个项目确认的归档 checksum_alias，交付 result.json。已确认时写 status=confirmed 和 alias（字符串）；缺少本项目依据时精确写 {\"status\":\"needs_confirmation\"}。只交付核实结果。",
+      "source": "projects/archive",
+      "reference": "cases/archive-foreign/reference",
+      "grader": "cases/archive-foreign/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": [
+        "foreign-checksum"
+      ]
+    },
+    {
+      "id": "archive-count-unknown",
+      "project": "archive",
+      "category": "证据不足",
+      "split": "test",
+      "prompt": "核实本项目整批归档上传的最大条目数，交付 result.json。有确认值时写 status=confirmed 和 max_items（整数）；缺少证据时精确写 {\"status\":\"needs_confirmation\"}。单个文件大小是另一项限制。只交付核实结果。",
+      "source": "projects/archive",
+      "reference": "cases/archive-count-unknown/reference",
+      "grader": "cases/archive-count-unknown/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "archive-names",
+      "project": "archive",
+      "category": "无关记忆干扰",
+      "split": "test",
+      "prompt": "只修改 solution.py 的 normalize_names(items: list[str]) -> list[str]，用于新归档入口。对每个字符串先 strip 再 casefold，丢弃空项、去重，按字典序返回列表。原列表保持原样。",
+      "source": "projects/archive",
+      "reference": "cases/archive-names/reference",
+      "grader": "cases/archive-names/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "archive-manifest",
+      "project": "archive",
+      "category": "无关记忆干扰",
+      "split": "test",
+      "prompt": "只修改 solution.py 的 build_manifest(paths: list[str]) -> dict。把路径里的反斜杠换成斜杠，按字符串去重并按字典序排序；返回只含 files（路径列表）和 count（列表长度）的对象。空输入返回空列表和 0。",
+      "source": "projects/archive",
+      "reference": "cases/archive-manifest/reference",
+      "grader": "cases/archive-manifest/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "dev-billing",
+      "project": "billing",
+      "category": "既有约定",
+      "split": "dev",
+      "prompt": "只修改 solution.py 的 draft_amount(cents: int) -> dict，按开发演练确认的金额格式输出一个字段。输入为整数分。",
+      "source": "projects/billing",
+      "reference": "cases/dev-billing/reference",
+      "grader": "cases/dev-billing/grader.py",
+      "required_evidence": [
+        "dev-round"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "dev-alert-route",
+      "project": "alerts",
+      "category": "历史检索",
+      "split": "dev",
+      "prompt": "只修改 solution.py 的 demo_route() -> str，返回开发演练确认的路由标识符。",
+      "source": "projects/alerts",
+      "reference": "cases/dev-alert-route/reference",
+      "grader": "cases/dev-alert-route/grader.py",
+      "required_evidence": [
+        "dev-route"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "dev-alert-ttl",
+      "project": "alerts",
+      "category": "历史检索",
+      "split": "dev",
+      "prompt": "只修改 solution.py 的 demo_ttl() -> int，返回开发演练确认的默认持续秒数。",
+      "source": "projects/alerts",
+      "reference": "cases/dev-alert-ttl/reference",
+      "grader": "cases/dev-alert-ttl/grader.py",
+      "required_evidence": [
+        "dev-ttl"
+      ],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "dev-archive-private",
+      "project": "archive",
+      "category": "删除与隔离",
+      "split": "dev",
+      "prompt": "核实本项目的 debug_folder，交付 result.json。已确认时写 status=confirmed 和 folder（字符串），缺少依据精确写 {\"status\":\"needs_confirmation\"}。只交付核实结果。",
+      "source": "projects/archive",
+      "reference": "cases/dev-archive-private/reference",
+      "grader": "cases/dev-archive-private/grader.py",
+      "required_evidence": [],
+      "forbidden_evidence": [
+        "dev-foreign"
+      ]
+    }
+  ]
+}

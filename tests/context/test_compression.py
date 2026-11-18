@@ -193,7 +193,7 @@ def test_offload_readback_uses_real_tool_and_keeps_raw_history(tmp_path: Path) -
 @pytest.mark.parametrize("invalid", [False, True])
 def test_hybrid_summary_is_budgeted_and_invalid_output_is_not_committed(tmp_path: Path, invalid: bool) -> None:
     """真实适配器摘要计入轮次/HTTP/token；无效JSON停止且不提交摘要投影。"""
-    manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1)
+    manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1, budget_projection=False)
     server = CompressionServer(summary="无效的自然语言摘要" if invalid else None)
     outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline-key", transport=httpx.MockTransport(server.handle)))
     history = RunStore.read(tmp_path / "runs", str(manifest.run_id))
@@ -220,7 +220,7 @@ def test_summary_cancel_has_no_committed_replacement(tmp_path: Path) -> None:
     """摘要等待中网页取消能收尾，记录取消来源且不采用未完成摘要。"""
     async def scenario() -> None:
         """等待确切摘要请求再取消真实Runner，断言落盘终态和替换记录。"""
-        manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1)
+        manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1, budget_projection=False)
         server = CompressionServer()
         server.block_summary = True
         state = CancellationState()
@@ -327,7 +327,8 @@ def test_summary_budget_zero_never_starts_summary(tmp_path: Path, mode: str) -> 
 
 def test_nonshrinking_summary_is_rejected(tmp_path: Path) -> None:
     """格式正确但反而增加输入的摘要不能覆盖历史；保存明确失败原因。"""
-    manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1, max_summary_bytes=14000)
+    manifest = _manifest(tmp_path, max_input_bytes=15000, inline_tool_bytes=20000, keep_recent_groups=1,
+                         max_summary_bytes=14000, budget_projection=False)
     server = CompressionServer(summary=_summary("冗余" * 2000))
     outcome = asyncio.run(run_task(manifest, tmp_path / "runs", "offline-key", transport=httpx.MockTransport(server.handle)))
     assert outcome.result.stop_reason == "context_summary_invalid"

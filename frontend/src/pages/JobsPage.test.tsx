@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getJob, getJobs, jobAction, resumeQueue, configureQueue } from '../api';
+import { getJob, getJobs, jobAction, recoverJob, resumeQueue, configureQueue } from '../api';
 import { makeJob } from '../test/fixtures';
 import { JobsPage } from './JobsPage';
 
@@ -14,6 +14,7 @@ vi.mock(
     configureQueue: vi.fn(),
     getJob: vi.fn(),
     jobAction: vi.fn(),
+    recoverJob: vi.fn(),
     resumeQueue: vi.fn(),
     errorMessage: (error: Error) => error.message,
   }),
@@ -80,6 +81,30 @@ it('暂停队列只在用户明确点击时恢复', async () => {
   expect(resumeQueue).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: '恢复队列' }));
   await waitFor(/* 不因刷新重复恢复。 */ () => expect(resumeQueue).toHaveBeenCalledOnce());
+});
+
+it('中断接续在明确点击时提交，断线重试沿用同一编号', async () => {
+  const user = userEvent.setup();
+  const queue = await getJobs();
+  vi.mocked(getJobs).mockResolvedValue({
+    ...queue,
+    items: [{ ...makeJob(), id: 'source', status: 'needs_review',
+      recovery: { state: 'ready', reason: '文件已核对', revision: 'a'.repeat(64),
+        recovered_writes: 1, remaining_model_turns: 2, remaining_tool_calls: 3, remaining_seconds: 40 } }],
+  });
+  vi.mocked(recoverJob).mockRejectedValueOnce(new Error('连接中断')).mockResolvedValue({
+    ...makeJob(), id: 'successor', status: 'queued', execution_status: null,
+  });
+  vi.mocked(getJob).mockResolvedValue({ ...makeJob(), id: 'successor', status: 'queued', execution_status: null });
+  show();
+  const action = await screen.findByRole('button', { name: '继续中断的运行' });
+  expect(recoverJob).not.toHaveBeenCalled();
+  await user.click(action);
+  await screen.findByText('连接中断');
+  await user.click(await screen.findByRole('button', { name: '继续中断的运行' }));
+  await screen.findByRole('heading', { name: '作业详情' });
+  expect(vi.mocked(recoverJob).mock.calls[0]).toEqual(vi.mocked(recoverJob).mock.calls[1]);
+  expect(resumeQueue).not.toHaveBeenCalled();
 });
 
 it('失联的集成检查提供进程核对，失联写回只能进入逐文件核对', async () => {

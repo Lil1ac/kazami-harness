@@ -4,6 +4,16 @@ import { makeRun } from '../test/fixtures';
 import { UsageDisplay } from './UsageDisplay';
 
 describe('模型 token 用量', /* 只展示已知事实，在途请求和缺失计数保持可见。 */ () => {
+  it('输出截断仍展示已封存的完整用量，执行失败不等于计数缺失', /* 复用既有API字段，无新增前端兼容分支。 */ () => {
+    const run = makeRun();
+    run.result.execution_status = 'failed';
+    run.result.stop_reason = 'model_output_truncated';
+    run.result.usage_complete = true;
+    run.result.usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 };
+    render(<UsageDisplay run={run} />);
+    expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.queryByText(/已知部分/)).not.toBeInTheDocument();
+  });
   it('已发起模型请求但尚无返回时显示待统计', /* 不能把初始零显示为最终计费数。 */ () => {
     const run = makeRun({ active: true });
     run.result.usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };

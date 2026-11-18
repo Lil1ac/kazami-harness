@@ -27,6 +27,9 @@ async def guard_tool_result(session: Session) -> Proceed | Wait | Abort:
         return Abort("failed", code, "skipped_hook_failure")
     if result.cleanup_status in {"unknown", "incomplete"}:
         return Abort("failed", "process_cleanup_failed", "skipped_cleanup")
+    public_test = (step.result.get("data") or {}).get("public_self_test")
+    if isinstance(public_test, dict) and public_test.get("reason") == "self_test_environment":
+        return Abort("failed", "self_test_environment", "skipped_stage")
     return Proceed()
 
 

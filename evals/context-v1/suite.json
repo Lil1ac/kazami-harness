@@ -1,0 +1,407 @@
+{
+  "name": "上下文策略合成校准集",
+  "version": "2",
+  "provenance": "40个自建Python功能夹具，三个示例领域，10开发/30测试；不是三个真实仓库，也不是SWE-bench成绩。用于评分链路校准，正式面试结论需另接未见真实仓库任务。v2明确返回结构，v1存在题意歧义的对照无效。",
+  "cases": [
+    {
+      "id": "textkit-words",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。按任意空白分词，忽略空串，保留原顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-words/source",
+      "reference": "cases/textkit-words/reference",
+      "grader": "cases/textkit-words/grader.py"
+    },
+    {
+      "id": "textkit-unique",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。大小写敏感地去重词列表，保留首次出现顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-unique/source",
+      "reference": "cases/textkit-unique/reference",
+      "grader": "cases/textkit-unique/grader.py"
+    },
+    {
+      "id": "textkit-counts",
+      "project": "textkit",
+      "category": "long_input",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。统计字符串列表各值次数，返回字典。 返回结构必须为dict。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-counts/source",
+      "reference": "cases/textkit-counts/reference",
+      "grader": "cases/textkit-counts/grader.py"
+    },
+    {
+      "id": "ledger-sum_cents",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。把十进制金额字符串列表求和，返回整数分；输入至多两位小数。 返回结构必须为数值（int或float）。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-sum_cents/source",
+      "reference": "cases/ledger-sum_cents/reference",
+      "grader": "cases/ledger-sum_cents/grader.py"
+    },
+    {
+      "id": "ledger-format_money",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。把整数分格式化为元字符串，严格保留两位小数。 返回结构必须为str。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-format_money/source",
+      "reference": "cases/ledger-format_money/reference",
+      "grader": "cases/ledger-format_money/grader.py"
+    },
+    {
+      "id": "ledger-balance",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。汇总每个账户整数金额；每条为account与amount字段，结果保留零余额账户。 返回结构必须为字典：账户名为键、汇总整数金额为值。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-balance/source",
+      "reference": "cases/ledger-balance/reference",
+      "grader": "cases/ledger-balance/grader.py"
+    },
+    {
+      "id": "eventflow-latest",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。返回每个id时间戳ts最大的事件；同时间后出现的覆盖前者，结果按id排序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-latest/source",
+      "reference": "cases/eventflow-latest/reference",
+      "grader": "cases/eventflow-latest/grader.py"
+    },
+    {
+      "id": "eventflow-batches",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。把items切成最多size个元素的连续批次；size为正整数，空输入返回空列表。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-batches/source",
+      "reference": "cases/eventflow-batches/reference",
+      "grader": "cases/eventflow-batches/grader.py"
+    },
+    {
+      "id": "eventflow-retry",
+      "project": "eventflow",
+      "category": "long_input",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。返回第attempt次重试延迟min(base*2**attempt, cap)，attempt从0开始，所有参数非负。 返回结构必须为数值（int或float）。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-retry/source",
+      "reference": "cases/eventflow-retry/reference",
+      "grader": "cases/eventflow-retry/grader.py"
+    },
+    {
+      "id": "textkit-slug",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "dev",
+      "prompt": "实现subject.py的solve函数。把字符串转小写，将连续非ASCII字母数字替换为一个短横线，移除两端短横线。 返回结构必须为str。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-slug/source",
+      "reference": "cases/textkit-slug/reference",
+      "grader": "cases/textkit-slug/grader.py"
+    },
+    {
+      "id": "textkit-normalize",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。采用Unicode NFKC标准化并casefold，前后去空白。 返回结构必须为str。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-normalize/source",
+      "reference": "cases/textkit-normalize/reference",
+      "grader": "cases/textkit-normalize/grader.py"
+    },
+    {
+      "id": "textkit-csv_row",
+      "project": "textkit",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。用标准CSV规则解析一行，支持逗号引号和双引号转义，返回字段列表。 返回结构必须为list。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-csv_row/source",
+      "reference": "cases/textkit-csv_row/reference",
+      "grader": "cases/textkit-csv_row/grader.py"
+    },
+    {
+      "id": "textkit-query",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。解析URL查询字符串为键到所有值的列表，保留空值并解码加号与百分号。 返回结构必须为dict。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-query/source",
+      "reference": "cases/textkit-query/reference",
+      "grader": "cases/textkit-query/grader.py"
+    },
+    {
+      "id": "textkit-suffixes",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。从路径列表取最后扩展名的小写值，省略无扩展名路径，保留重复项和顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-suffixes/source",
+      "reference": "cases/textkit-suffixes/reference",
+      "grader": "cases/textkit-suffixes/grader.py"
+    },
+    {
+      "id": "textkit-lines",
+      "project": "textkit",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。统一CRLF/CR为LF，删除空白行，保留非空行的原始空白。 返回结构必须为list。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-lines/source",
+      "reference": "cases/textkit-lines/reference",
+      "grader": "cases/textkit-lines/grader.py"
+    },
+    {
+      "id": "textkit-truncate",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按Unicode字符截断到limit总长度；超长时末尾加省略号…且计入总长度，limit为非负整数。 返回结构必须为str。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-truncate/source",
+      "reference": "cases/textkit-truncate/reference",
+      "grader": "cases/textkit-truncate/grader.py"
+    },
+    {
+      "id": "textkit-html",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。HTML转义文本，含单双引号。 返回结构必须为str。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-html/source",
+      "reference": "cases/textkit-html/reference",
+      "grader": "cases/textkit-html/grader.py"
+    },
+    {
+      "id": "textkit-flatten",
+      "project": "textkit",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。把嵌套列表递归展开；其他值包括None、字符串不拆分。 返回结构必须为list。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-flatten/source",
+      "reference": "cases/textkit-flatten/reference",
+      "grader": "cases/textkit-flatten/grader.py"
+    },
+    {
+      "id": "textkit-overlap",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。统计子串pattern重叠出现次数；空pattern返回0。 返回结构必须为数值（int或float）。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-overlap/source",
+      "reference": "cases/textkit-overlap/reference",
+      "grader": "cases/textkit-overlap/grader.py"
+    },
+    {
+      "id": "textkit-group_prefix",
+      "project": "textkit",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按首个/之前的前缀分组字符串；无/则用整个字符串，保留每组输入顺序。 返回结构必须为字典：前缀为键、该组字符串列表为值。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/textkit-group_prefix/source",
+      "reference": "cases/textkit-group_prefix/reference",
+      "grader": "cases/textkit-group_prefix/grader.py"
+    },
+    {
+      "id": "ledger-round_money",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。把金额字符串按四舍五入ROUND_HALF_UP保留两位小数，返回字符串，支持负数。 返回结构必须为str。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-round_money/source",
+      "reference": "cases/ledger-round_money/reference",
+      "grader": "cases/ledger-round_money/grader.py"
+    },
+    {
+      "id": "ledger-allocate",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。将非负整数total均分到正整数n份，余数从第一份起加1。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-allocate/source",
+      "reference": "cases/ledger-allocate/reference",
+      "grader": "cases/ledger-allocate/grader.py"
+    },
+    {
+      "id": "ledger-discount",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。整数分price按整数百分比percent折扣；返回折后整数分，半分向上取整。 返回结构必须为数值（int或float）。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-discount/source",
+      "reference": "cases/ledger-discount/reference",
+      "grader": "cases/ledger-discount/grader.py"
+    },
+    {
+      "id": "ledger-tax",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。给定整数分net与整数百分比rate，税额半分向上取整后加回net。 返回结构必须为数值（int或float）。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-tax/source",
+      "reference": "cases/ledger-tax/reference",
+      "grader": "cases/ledger-tax/grader.py"
+    },
+    {
+      "id": "ledger-totals",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按category汇总price乘qty，字段为整数，保留负qty退货。 返回结构必须为字典：category为键、汇总金额为值。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-totals/source",
+      "reference": "cases/ledger-totals/reference",
+      "grader": "cases/ledger-totals/grader.py"
+    },
+    {
+      "id": "ledger-running",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。返回整数交易列表每一步的累计余额，起始为initial。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-running/source",
+      "reference": "cases/ledger-running/reference",
+      "grader": "cases/ledger-running/grader.py"
+    },
+    {
+      "id": "ledger-reconcile",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。合并两个余额字典，输出仅非零差额left减right，键不限于交集。 返回结构必须为dict。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-reconcile/source",
+      "reference": "cases/ledger-reconcile/reference",
+      "grader": "cases/ledger-reconcile/grader.py"
+    },
+    {
+      "id": "ledger-top",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按金额降序、同金额名称升序取前n个(name,amount)记录，返回列表的列表。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-top/source",
+      "reference": "cases/ledger-top/reference",
+      "grader": "cases/ledger-top/grader.py"
+    },
+    {
+      "id": "ledger-overdue",
+      "project": "ledger",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。返回due日期早于today且paid为False的id，按输入顺序；日期都是ISO YYYY-MM-DD。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-overdue/source",
+      "reference": "cases/ledger-overdue/reference",
+      "grader": "cases/ledger-overdue/grader.py"
+    },
+    {
+      "id": "ledger-median",
+      "project": "ledger",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。返回非空整数列表的中位数；偶数长度返回中间两值平均数，不修改输入。 返回结构必须为数值（int或float）。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/ledger-median/source",
+      "reference": "cases/ledger-median/reference",
+      "grader": "cases/ledger-median/grader.py"
+    },
+    {
+      "id": "eventflow-dedup",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按事件id去重，保留第一次出现的完整事件和输入顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-dedup/source",
+      "reference": "cases/eventflow-dedup/reference",
+      "grader": "cases/eventflow-dedup/grader.py"
+    },
+    {
+      "id": "eventflow-window",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。返回时间戳ts属于[start,end)的事件，保持顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-window/source",
+      "reference": "cases/eventflow-window/reference",
+      "grader": "cases/eventflow-window/grader.py"
+    },
+    {
+      "id": "eventflow-histogram",
+      "project": "eventflow",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。以width宽度分桶整数时间戳，返回桶起点字符串到数量；负数向下取整，width为正。 返回结构必须为dict。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-histogram/source",
+      "reference": "cases/eventflow-histogram/reference",
+      "grader": "cases/eventflow-histogram/grader.py"
+    },
+    {
+      "id": "eventflow-merge",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。合并闭区间，端点相接也合并；输入无序，返回按起点排序的区间列表。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-merge/source",
+      "reference": "cases/eventflow-merge/reference",
+      "grader": "cases/eventflow-merge/grader.py"
+    },
+    {
+      "id": "eventflow-diff",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。比较两个字典，返回added/removed/changed键列表，均按名称排序；changed只含共同键且值不同。 返回结构必须为dict。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-diff/source",
+      "reference": "cases/eventflow-diff/reference",
+      "grader": "cases/eventflow-diff/grader.py"
+    },
+    {
+      "id": "eventflow-priority",
+      "project": "eventflow",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。按priority降序、created升序排列任务，完全相同保持原顺序。 返回结构必须为list。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-priority/source",
+      "reference": "cases/eventflow-priority/reference",
+      "grader": "cases/eventflow-priority/grader.py"
+    },
+    {
+      "id": "eventflow-expiry",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。给定now整数秒，筛出expires_at为None或严格大于now的记录，保留顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-expiry/source",
+      "reference": "cases/eventflow-expiry/reference",
+      "grader": "cases/eventflow-expiry/grader.py"
+    },
+    {
+      "id": "eventflow-dependencies",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。返回依赖deps都在completed中的任务id，排除自身已完成项，保持输入顺序。 返回结构必须为list。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-dependencies/source",
+      "reference": "cases/eventflow-dependencies/reference",
+      "grader": "cases/eventflow-dependencies/grader.py"
+    },
+    {
+      "id": "eventflow-paginate",
+      "project": "eventflow",
+      "category": "long_input",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。对items从offset起取limit条，返回items和next_offset；取完后next_offset=None；offset非负、limit为正。 返回结构必须为dict。 请查阅history.txt及README，识别当前要求。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-paginate/source",
+      "reference": "cases/eventflow-paginate/reference",
+      "grader": "cases/eventflow-paginate/grader.py"
+    },
+    {
+      "id": "eventflow-redact",
+      "project": "eventflow",
+      "category": "implementation",
+      "split": "test",
+      "prompt": "实现subject.py的solve函数。递归处理字典与列表，将键名大小写不敏感为password/token的值替换为***，不修改其他值。 返回结构必须为dict。 可自行测试，直接完成这一范围明确的小任务。",
+      "source": "cases/eventflow-redact/source",
+      "reference": "cases/eventflow-redact/reference",
+      "grader": "cases/eventflow-redact/grader.py"
+    }
+  ]
+}

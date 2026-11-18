@@ -224,6 +224,10 @@ function NavigationContent({ onNavigate }: { onNavigate: () => void }) {
       </div>
       <nav className="workspace-nav-links sidebar-settings" aria-label="运行与设置">
         <QueueLink onNavigate={onNavigate} />
+        <NavLink to="/evaluations" onClick={onNavigate}>
+          <BarsOutlined />
+          <span>评测</span>
+        </NavLink>
         <NavLink to="/automations" onClick={onNavigate}>
           <ThunderboltOutlined />
           <span>自动化</span>

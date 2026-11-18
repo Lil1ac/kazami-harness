@@ -227,6 +227,8 @@ def test_transient_transport_failure_is_retried_and_sanitized(exception_type):
     assert error.value.code == "model_transport"
     assert SECRET not in str(error.value)
     assert attempts == [1, 2]
+    assert error.value.transport_diagnostic == {"stage": "request", "exception_type": exception_type.__name__, "received_content": False}
+    assert SECRET not in str(error.value.transport_diagnostic)
 
 
 def test_transport_protocol_error_is_not_retried():

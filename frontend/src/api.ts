@@ -417,6 +417,15 @@ export function jobAction(id: string, action: 'cancel' | 'resolve'): Promise<Job
   return request(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
 }
 
+/** 明确接续中断作业 id。requestId 用于同请求重试，revision 绑定用户看到的核对结果。 */
+export function recoverJob(id: string, requestId: string, revision: string): Promise<JobView> {
+  return request(`/api/jobs/${encodeURIComponent(id)}/recover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, expected_revision: revision }),
+  });
+}
+
 /** 明确恢复重启后保留的队列，结果待核对的资源继续局部阻塞。 */
 export function resumeQueue(): Promise<{ paused: boolean }> {
   return request('/api/queue/resume', { method: 'POST' });
@@ -634,6 +643,45 @@ export function getMemoryRevisions(
   id: string,
 ): Promise<{ items: import('./types').MemoryEntry[] }> {
   return request('/api/' + scope + '/memories/' + encodeURIComponent(id) + '/revisions');
+}
+
+/** 读取 projectId 的主题、候选来源及整理列表；页面打开不会发起模型请求。 */
+export function getMemoryLibrary(projectId: string): Promise<import('./types').MemoryLibrary> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-library');
+}
+
+/** 回读 projectId 中 reference 的原始历史摘录和定位信息。 */
+export function getMemoryEvidence(projectId: string, reference: string): Promise<import('./types').MemoryEvidenceRef & { text: string }> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-evidence/' + encodeURIComponent(reference));
+}
+
+/** 按 projectId 和 id 获取整理详情；只读，已删除来源不返回正文。 */
+export function getMemoryConsolidation(projectId: string, id: string): Promise<import('./types').MemoryConsolidation> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-consolidations/' + encodeURIComponent(id));
+}
+
+/** 将 projectId 下所选 runIds 以稳定 requestId 接纳到后台队列。 */
+export function startMemoryConsolidation(projectId: string, requestId: string, runIds: string[]): Promise<JobView> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-consolidations', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, run_ids: runIds }),
+  });
+}
+
+/** 提交 id 的明确审阅选择 selected；空数组拒绝整份草案。 */
+export function reviewMemoryConsolidation(projectId: string, id: string, requestId: string, selected: number[]): Promise<import('./types').MemoryConsolidation> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-consolidations/' + encodeURIComponent(id) + '/review', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, selected }),
+  });
+}
+
+/** 保存 projectId 的空闲整理选择 idleEnabled，返回宿主确认值。 */
+export function configureMemoryConsolidation(projectId: string, idleEnabled: boolean): Promise<{ idle_enabled: boolean }> {
+  return request('/api/projects/' + encodeURIComponent(projectId) + '/memory-consolidation-settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idle_enabled: idleEnabled }),
+  });
 }
 
 /** 读取id会话的管理信息；回收站和清理墓碑仍可读取，不返回消息正文。 */

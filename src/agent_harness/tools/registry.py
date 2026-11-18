@@ -3,6 +3,7 @@
 import asyncio
 import traceback
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from pydantic import ValidationError
 
@@ -10,6 +11,7 @@ from agent_harness.context.archive import ContextArchive, ReadContextArguments
 from agent_harness.context.skill_runtime import SKILL_TOOLS, SkillRuntime
 from agent_harness.context.skills import SkillError
 from agent_harness.execution.processes import ProcessRunner
+from agent_harness.execution.search_worker import search_failure, supervise_search
 from agent_harness.hooks.controller import HookPending
 from agent_harness.work.planning import PLANNING_TOOLS, PlanningController, PlanningError
 from agent_harness.execution.python import PythonExecutionError, prepare_python_execution, validate_python_execution
@@ -25,7 +27,7 @@ from agent_harness.tools.command import RunCommandArguments, run_command
 from agent_harness.execution.commands import COMMAND_TOOLS
 from agent_harness.tools.listing import ListFilesArguments, list_files
 from agent_harness.tools.files import (EditFileArguments, ReadFileArguments, SearchFilesArguments, WriteFileArguments,
-                    edit_file, read_file, search_files, write_file)
+                    edit_file, read_file, write_file)
 
 
 _TOOL_SPECS = {
@@ -38,8 +40,8 @@ _TOOL_SPECS = {
     **PLANNING_TOOLS,
     "list_files": (ListFilesArguments, "只读列举工作区目录的直接子项，无需执行命令。不递归；对子目录继续传directory。offset/limit分页，next_offset为空表示无下一页；truncated或skipped表示并非完整目录。"),
     "read_context": (ReadContextArguments, "只读ctx引用的历史证据，按UTF-8字节分页。使用next_offset继续；不会执行历史命令，也不代表当前文件状态。"),
-    "read_file": (ReadFileArguments, "只读工作区UTF-8文件；offset/max_bytes按字节，next_offset用于继续分页。sha256是完整原字节指纹，newline是完整文件的lf/crlf/cr/mixed/none；超出编辑预算时两者为null，不可edit_file。"),
-    "search_files": (SearchFilesArguments, "在工作区按字面量搜索 UTF-8 文本，返回相对路径与行号；结果或扫描截断会标记，不能当作完整搜索。"),
+    "read_file": (ReadFileArguments, "只读UTF-8文件。根据搜索行号传start_line、max_lines读取附近内容；或用字节offset。两种方式均受max_bytes约束，按next_line或next_offset续读。sha256和newline来自完整文件；超出编辑预算时两者为空。"),
+    "search_files": (SearchFilesArguments, "区分大小写搜索字面量，返回相对路径和行号。优先指定子目录或精确 glob 文件名；用 read_file 的 start_line 读取命中附近。有限时及截断回执。"),
     "edit_file": (EditFileArguments, "局部修改已有UTF-8文件：先read_file取得sha256，用expected_sha256校验完整版本。old_text须唯一匹配；统一LF/CRLF等价并保持原格式，mixed/cr须提供原换行。new_text可为空。file_changed或edit_not_found时重读核对，edit_ambiguous时增加上下文；禁止原样盲重试或覆盖绕过冲突。"),
     "write_file": (WriteFileArguments, "写入工作区 UTF-8 文件，默认禁止覆盖；修改已有文件优先使用 edit_file；整文件覆盖必须显式 overwrite=true，不具备版本冲突检查。写入有大小上限。"),
     "run_command": (RunCommandArguments, "用argv数组在工作区运行程序，不自动解析Shell；python/python3使用本轮项目解释器和源码目录。background=true返回命令句柄，用read_command/wait_command/stop_command管理；目录有活动命令时不能写文件或再启动命令。接纳不代表成功，实际结束回执才可作证据。"),
@@ -85,6 +87,8 @@ class ToolExecutor:
         self.handoff = False  # 宿主末轮交接时关闭全部工具；提示和模型工具声明之外再执行一次宿主拒绝。
         self.permissions = None  # Runner绑定的统一授权控制器；独立工具调用仍由既有边界约束。
         self.before_execute = None  # 参数和权限检查通过后记录真实开始，None表示无需事件。
+        self.deadline: float | None = None  # 工具批次传入的 Run 绝对单调截止时间，独立调用时为空。
+        self.file_journal = None  # 当前调用的可恢复写入记录器，仅由宿主工具批次绑定。
         self.hooks = None  # Agent 初始化后绑定的生命周期调度器；工具单测及无配置场景不运行脚本。
         self.call_id = ""  # 当前工具编号，仅供动作追溯，不授予权限。
         self.commands = None  # Runner 绑定的统一命令生命周期，独立工具测试为空。
@@ -156,8 +160,15 @@ class ToolExecutor:
     def definitions(self) -> list[dict]:
         """只生成本次配置启用的工具声明，参数 Schema 来自同一校验类。"""
         enabled = self._enabled_names()
-        builtin = [{"type": "function", "function": {"name": name, "description": _TOOL_SPECS[name][1], "parameters": _TOOL_SPECS[name][0].model_json_schema()}}
-                   for name in enabled if name in _TOOL_SPECS]
+        builtin = []
+        for name in enabled:
+            if name not in _TOOL_SPECS:
+                continue
+            model, description = _TOOL_SPECS[name]
+            schema = model.model_json_schema()
+            if self.memory is not None and name in {"memory_search", "memory_get"}:
+                description, schema = self.memory.read_definition(name, schema)
+            builtin.append({"type": "function", "function": {"name": name, "description": description, "parameters": schema}})
         return builtin + ([item for item in self.mcp.definitions if item["function"]["name"] in enabled] if self.mcp else [])
 
     def external_title(self, name: str) -> str | None:
@@ -184,10 +195,7 @@ class ToolExecutor:
             return {"ok": False, "data": {"action_id": pending["id"]}, "error": {"code": "approval_required", "message": "外部工具尚未调用，等待本次参数批准。"}, "truncated": False}
         if self.team is not None:
             self.team.check_member()
-        if self.before_execute:
-            self.before_execute()
-        if self.hooks:
-            self.hooks.started()
+        self._started()
         return await self.mcp.execute(name, arguments)
 
     def _observe(self, result: dict) -> dict:
@@ -225,6 +233,25 @@ class ToolExecutor:
             "truncated": bool(data.get("truncated")),
             "artifact_refs": references,
         })
+
+    def _started(self) -> None:
+        """通知运行记录与 Hook 当前操作开始，返回 None；截止后拒绝接纳工具。"""
+        if self.deadline is not None and asyncio.get_running_loop().time() >= self.deadline:
+            raise TimeoutError
+        if self.before_execute is not None:
+            self.before_execute()
+        if self.hooks is not None:
+            self.hooks.started()
+
+    async def _search(self, arguments: SearchFilesArguments) -> dict:
+        """用当前运行进程回收器搜索 arguments 指定目录，返回带清理状态的失败或原检索结果。"""
+        if self.process_runner is not None:
+            return await supervise_search(self.process_runner, self.workspace, self.runs_root,
+                                          arguments, self.deadline, self._started)
+        # 无 Run 的独立工具调用仍在子进程执行；输出只存在于调用期。
+        with TemporaryDirectory(prefix="harness-search-") as directory:
+            return await supervise_search(ProcessRunner(self.config.limits, Path(directory) / "artifacts"),
+                                          self.workspace, self.runs_root, arguments, self.deadline, self._started)
 
     async def execute(self, name: str, arguments_json: str) -> dict:
         """在任务局部目录权限内执行 name/arguments_json，返回统一回执；不改变其他并发任务范围。"""
@@ -298,10 +325,9 @@ class ToolExecutor:
             if self.memory is not None and name not in PLANNING_TOOLS:
                 phase = "planning" if self.planning is not None and self.planning.state.phase == "planning" else self.memory_phase
                 self.memory.before_tool(name, arguments, phase)
-            if self.before_execute is not None:
-                self.before_execute()
-            if self.hooks is not None:
-                self.hooks.started()
+            if name == "search_files":
+                return self._observe(await self._search(arguments))
+            self._started()
             if self.planning is not None:
                 if name in PLANNING_TOOLS:
                     data = self.planning.execute(name, arguments)
@@ -356,21 +382,18 @@ class ToolExecutor:
             if name == "read_file":
                 data = read_file(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars, self.config.limits.max_file_write_bytes)
                 return {"ok": True, "data": data, "error": None, "truncated": not data["eof"]}
-            if name == "search_files":
-                data = search_files(self.workspace, self.runs_root, arguments, self.config.limits.tool_output_preview_chars)
-                return {"ok": True, "data": data, "error": None, "truncated": data["truncated"]}
             if name == "edit_file":
-                data = edit_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes)
+                data = edit_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes, journal=self.file_journal)
             else:
-                data = write_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes)
+                data = write_file(self.workspace, self.runs_root, arguments, self.config.limits.max_file_write_bytes, journal=self.file_journal)
             return self._observe({"ok": True, "data": data, "error": None, "truncated": False,
                                   "artifact_refs": [{"location": "workspace", "path": data["path"], "kind": "file"}]})
         except asyncio.CancelledError as error:
             data = getattr(error, "harness_process_result", None)
             if isinstance(data, dict):
-                self.cancelled_result = self._command_result(data)
+                self.cancelled_result = self._observe(search_failure(data)) if name == "search_files" else self._command_result(data)
             raise
-        except StorageError:
+        except (StorageError, TimeoutError):
             raise
         except HookPending:
             raise

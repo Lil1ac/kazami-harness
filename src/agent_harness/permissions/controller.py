@@ -53,7 +53,7 @@ class PermissionController:
         self.read_roots = roots(self.workspace, self.policy.read_roots)  # 已解析并确认不越界的可读目录。
         self.write_roots = roots(self.workspace, self.policy.write_roots)  # 与读取范围独立，不能由动作批准扩展。
         self.state = PermissionState(mode=self.manifest.config.permission_mode, policy_fingerprint=self.fingerprint())  # 当前运行唯一权限投影，终态固定副本。
-        resume = self.manifest.permission_resume or self.manifest.execution_resume
+        resume = self.manifest.permission_resume or self.manifest.resumed_budget
         if resume is not None:
             self.state.spent_model_turns = resume.spent_model_turns
             self.state.spent_tool_calls = resume.spent_tool_calls

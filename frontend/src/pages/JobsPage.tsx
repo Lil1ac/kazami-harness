@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Select, Skeleton, Switch } from 'antd';
 import { Link, useNavigate, useParams } from 'react-router';
-import { errorMessage, getJob, getJobs, jobAction, resumeQueue, configureQueue } from '../api';
+import { errorMessage, getJob, getJobs, jobAction, recoverJob, resumeQueue, configureQueue } from '../api';
 import { isPendingJob } from '../queue';
 import type { JobView } from '../types';
 import './JobsPage.css';
@@ -16,6 +16,7 @@ const labels: Record<JobView['status'], string> = {
   failed: '执行失败',
   cancelled: '已取消',
   needs_review: '待核对',
+  interrupted: '运行中断',
 }; // 队列状态来自宿主，验收结论在会话里查看。
 
 const groups: { title: string; statuses: JobView['status'][] }[] = [
@@ -40,6 +41,10 @@ function groupFor(job: JobView): { id: string; label: string } {
 
 /** 返回 job 已有的会话或成果入口；未建立运行或需先核对的作业返回空值。 */
 function jobDestination(job: JobView): string | null {
+  if (job.kind === 'memory_consolidation')
+    return '/projects/' + encodeURIComponent(job.project_id) + '?memory=1&consolidation=' + encodeURIComponent(job.id);
+  if (job.status === 'interrupted' && job.recovery?.next_job_id)
+    return '/jobs/' + job.recovery.next_job_id;
   if (['queued', 'preparing', 'needs_review'].includes(job.status) || job.execution_status === null)
     return null;
   const run = '/runs/' + job.run_id;
@@ -52,6 +57,10 @@ function jobDestination(job: JobView): string | null {
 
 /** 返回 job 的可读状态；动作审批与用户主动暂停单独说明。 */
 function jobStatus(job: JobView): string {
+  if (job.recovery?.state === 'ready') return '可以接续';
+  if (job.recovery?.state === 'queued') return '接续已排队';
+  if (job.kind === 'memory_consolidation' && job.status === 'completed')
+    return ({ draft: '待审阅', no_changes: '没有新变更', published: '已发布', rejected: '已拒绝' } as Record<string, string>)[job.memory_state || ''] || '整理完成';
   if (job.wait_reason === 'user_paused') return '已暂停';
   if (job.status === 'waiting_input' && job.wait_reason === 'action_approval')
     return approvals[job.approval_status || 'pending'] || '审批已处理';
@@ -60,6 +69,7 @@ function jobStatus(job: JobView): string {
 
 type QueueAction =
   | { action: 'resume' } // 恢复全局暂停的队列。
+  | { action: 'recover'; id: string; revision: string } // 明确接续可核对的中断作业。
   | { action: 'cancel' | 'resolve'; id: string }; // 对一个已接纳的作业停止或确认核对。
 
 /** 返回一行作业摘要；停止与核对操作通过 onAction 提交当前编号。 */
@@ -73,9 +83,10 @@ function JobRow({
   onAction: (value: QueueAction) => void; // 操作入口，点击后才写入。
 }) {
   const destination = jobDestination(job);
-  const canStop = job.status === 'queued' || job.status === 'running';
+  const canStop = job.status === 'queued' || job.status === 'running' || (job.status === 'preparing' && job.kind === 'memory_consolidation');
   const needsReview = job.status === 'needs_review';
   const reviewFiles = needsReview && job.kind === 'integration' && job.recovery_kind !== 'process';
+  const recovery = job.recovery;
   return (
     <li className="queue-row">
       <div className="queue-row-main">
@@ -88,10 +99,20 @@ function JobRow({
         <div className="queue-row-meta">
           <span>{groupFor(job).label}</span>
           {job.automation && <Link to="/automations">来自自动化</Link>}
+          {job.kind === 'memory_consolidation' && job.memory_usage?.total_tokens != null &&
+            <span>{job.memory_usage_complete ? '' : '至少 '}{job.memory_usage.total_tokens.toLocaleString('zh-CN')} token</span>}
         </div>
-        {job.error && (
+        {(recovery?.reason || job.error) && (
           <p className="queue-row-note" role="status">
-            {job.error}
+            {recovery?.reason || job.error}
+          </p>
+        )}
+        {recovery?.state === 'ready' && (
+          <p className="queue-row-note">
+            {recovery.recovered_writes ? `已核对 ${recovery.recovered_writes} 次文件写入 · ` : ''}
+            剩余 {recovery.remaining_model_turns} 轮模型、{recovery.remaining_tool_calls} 次工具、
+            {Math.floor(recovery.remaining_seconds ?? 0)} 秒
+            {recovery.usage_complete === false ? ' · 原用量不完整' : ''}
           </p>
         )}
         {job.status === 'queued' && job.blocked_reason && (
@@ -106,16 +127,33 @@ function JobRow({
           </p>
         )}
       </div>
-      {(destination || needsReview || canStop) && (
+      {(destination || needsReview || canStop || recovery?.next_job_id) && (
         <div className="queue-row-actions">
           {destination && (
             <Link to={destination}>
-              {job.kind === 'integration'
+              {job.kind === 'memory_consolidation' ? '查看记忆整理' : job.kind === 'integration'
                 ? '查看成果采纳'
                 : job.status === 'waiting_input' && job.wait_reason !== 'user_paused'
                   ? '前往会话处理'
                   : '查看会话与结果'}
             </Link>
+          )}
+          {needsReview && recovery && (
+            <Link to={'/runs/' + job.run_id + '?inspect=' + job.run_id}>查看中断记录</Link>
+          )}
+          {recovery?.state === 'ready' && recovery.revision && (
+            <Button
+              size="small"
+              type="primary"
+              loading={busy}
+              onClick={/* 仅明确点击才向宿主提交该版本。 */ () =>
+                onAction({ id: job.id, action: 'recover', revision: recovery.revision! })}
+            >
+              继续中断的运行
+            </Button>
+          )}
+          {needsReview && recovery?.next_job_id && (
+            <Link to={'/jobs/' + recovery.next_job_id}>查看接续作业</Link>
           )}
           {canStop && (
             <Button
@@ -132,7 +170,7 @@ function JobRow({
               核对逐文件写回结果
             </Link>
           )}
-          {needsReview && !reviewFiles && (
+          {needsReview && !reviewFiles && recovery?.state !== 'queued' && (
             <Button
               size="small"
               loading={busy}
@@ -155,6 +193,7 @@ export function JobsPage() {
   const { jobId } = useParams(); // 单个作业入口为空时浏览队列。
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const recoveryRequests = useRef(new Map<string, string>()); // 网络重试沿用同作业和恢复版本的请求编号。
   const [project, setProject] = useState<string | undefined>(); // 仅筛选列表，不改变队列顺序。
   const query = useQuery({
     queryKey: ['jobs'],
@@ -176,10 +215,27 @@ export function JobsPage() {
   );
   const mutation = useMutation({
     mutationFn: /* 每个按钮只执行其明确的动作。 */ async (value: QueueAction) => {
-      if (value.action === 'resume') await resumeQueue();
-      else await jobAction(value.id, value.action);
+      if (value.action === 'resume') {
+        await resumeQueue();
+      } else if (value.action === 'recover') {
+        const key = value.id + ':' + value.revision;
+        const id = recoveryRequests.current.get(key) || crypto.randomUUID();
+        recoveryRequests.current.set(key, id);
+        return recoverJob(value.id, id, value.revision);
+      } else {
+        await jobAction(value.id, value.action);
+      }
     },
-    onSuccess: /* 以宿主快照重新渲染。 */ () => {
+    onSuccess: /* 接纳成功先打开后继作业，Run 建立后由既有详情逻辑跳转。 */ (job) => {
+      if (job) {
+        recoveryRequests.current.clear();
+        void navigate('/jobs/' + job.id);
+      }
+      void cache.invalidateQueries({ queryKey: ['jobs'] });
+      void cache.invalidateQueries({ queryKey: ['job'] });
+      void cache.invalidateQueries({ queryKey: ['conversation'] });
+    },
+    onError: /* 状态可能已被另一个页面接纳，刷新宿主证据。 */ () => {
       void cache.invalidateQueries({ queryKey: ['jobs'] });
       void cache.invalidateQueries({ queryKey: ['job'] });
     },

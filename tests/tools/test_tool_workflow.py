@@ -165,7 +165,8 @@ def test_cancelled_command_keeps_real_output_and_cleanup(tmp_path: Path):
 
 def test_total_timeout_preserves_command_cleanup(tmp_path: Path):
     """任务总时限耗尽后终止活动命令，真实清理结果仍进入最终摘要。"""
-    value = _manifest(tmp_path, run_timeout_seconds=0.25, command_timeout_seconds=10.0)
+    # 留给 Windows 模型回执、进程启动和输出捕获足够时间，测试的是活动命令收尾。
+    value = _manifest(tmp_path, run_timeout_seconds=1.5, command_timeout_seconds=10.0)
     replies = [_reply(_call("one", "run_command", {"argv": ["python", "-c", "import time; print('started',flush=True); time.sleep(10)"]}))]
     outcome = asyncio.run(run_task(value, tmp_path / ".runs", "dummy-key", transport=_transport(replies, [])))
     assert outcome.result.execution_status == "timed_out"

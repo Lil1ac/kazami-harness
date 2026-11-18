@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
-from agent_harness.execution.processes import _child_environment, _windows_taskkill
+from agent_harness.execution.processes import _child_environment, _windows_taskkill, native_io_path
 from agent_harness.storage.snapshots import FileSnapshotStore
 from agent_harness.execution.local import LocalChangeStore
 
@@ -139,6 +139,23 @@ class ProjectManager:
                 raise ProjectError("project_snapshot_required", "前轮没有完整代码快照，不能继续。")
             self._verified_patch(review, force=True)
             self._owned_worktree(review)
+            return review
+
+    def verify_recovery_workspace(self, run_id: UUID) -> ProjectReview:
+        """核对中断段仍拥有原工作树与 Git 基线。允许缺少终态快照，返回只读审阅记录。"""
+        with self._lock:
+            review = self._required(run_id)
+            state = self.workspace(run_id)
+            if state.latest_run_id != run_id or state.status == "discarded":
+                raise ProjectError("project_stale_turn", "中断段已不是当前工作树的最新轮次。")
+            self._owned_worktree(review)
+            root = Path(review.worktree)
+            if self._git(root, ["rev-parse", "HEAD"]).decode().strip() != review.base_commit:
+                raise ProjectError("project_base_changed", "工作树基线已变化，不能继续中断运行。")
+            try:
+                self._git(root, ["diff", "--cached", "--quiet", "--no-ext-diff", "HEAD", "--"])
+            except ProjectError:
+                raise ProjectError("project_index_changed", "工作树暂存区与原基线不一致，请核对后继续。") from None
             return review
 
     def prepare_turn(self, preset: ProjectPreset, parent_id: UUID, run_id: UUID) -> ProjectReview:
@@ -473,7 +490,7 @@ class ProjectManager:
         command = [
             self._git_program, "--no-pager", "--no-optional-locks",
             "-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false",
-            "-c", "core.untrackedCache=false", *filter_options, "-C", str(cwd), *argv,
+            "-c", "core.untrackedCache=false", "-c", "core.longpaths=true", *filter_options, "-C", str(cwd), *argv,
         ]
         # 与工具进程共用凭据隔离；仅补 Git 定位用户配置所需的目录变量。
         environment = _child_environment()
@@ -621,7 +638,8 @@ class ProjectManager:
 
     @staticmethod
     def _atomic_write(path: Path, data: bytes) -> None:
-        """在同目录写临时文件并替换目标；字节完整写入成功后才发布。"""
+        """将 data 原子发布到宿主已核对的 path；两端均使用原生路径，失败保留已有内容。"""
+        path = native_io_path(path)
         # 内容对象的文件名可能已有64位摘要；临时名不重复正文名，避免Windows路径超长。
         temporary = path.with_name(f".write-{uuid4().hex}.tmp")
         try:
@@ -635,13 +653,18 @@ class ProjectManager:
 
     @staticmethod
     def _read_bytes(path: Path, limit: int) -> bytes:
-        """读取上限以内的实体文件；超过 limit 字节或链接文件以 OSError 拒绝。"""
+        """读取上限以内的实体文件；超出 limit 字节、链接或读取时大小变化以 OSError 拒绝。"""
+        path = native_io_path(path)
         if ProjectManager._is_link(path):
             raise OSError("拒绝符号链接")
         with path.open("rb") as stream:
-            data = stream.read(limit + 1)
-        if len(data) > limit:
-            raise OSError("文件超过读取上限")
+            size = os.fstat(stream.fileno()).st_size
+            if size > limit:
+                raise OSError("文件超过读取上限")
+            # 列表与会话轮询读取多份很小的元数据，按实际文件大小分配。
+            data = stream.read(size + 1)
+        if len(data) != size:
+            raise OSError("文件在读取期间发生变化")
         return data
 
     @staticmethod

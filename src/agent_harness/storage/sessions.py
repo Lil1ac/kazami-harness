@@ -162,12 +162,13 @@ def payload_digest(value: dict | list) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(',', ':'), sort_keys=True, allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def history_messages(history: RunHistory, *, allow_interrupted: bool = False) -> list[dict]:
+def history_messages(history: RunHistory, *, allow_interrupted: bool = False, recovered: dict[str, dict] | None = None) -> list[dict]:
     """从可信父 history 还原完整会话消息；保留工具配对，移除旧宿主/指令前缀。
 
     子运行的 run_started 已包含之前历史，因此只重建直接父轮，避免递归重复拼接。
     allow_interrupted默认False，仍要求可信终态；宿主明确接纳中断记录时才设True。
     此时为尾部未配对调用补充未知/未开始标记，绝不执行工具或改写原记录。
+    recovered 非空值仅由宿主提供，必须精确覆盖中断尾批缺少的回执；空字典表示尾批已配齐。
     损坏事件或中间批次失配仍抛SessionError；返回独立消息副本。
     """
     interrupted = history.result is None and history.interrupted
@@ -219,6 +220,8 @@ def history_messages(history: RunHistory, *, allow_interrupted: bool = False) ->
                     pending.update(identifiers)
                 except (TypeError, KeyError, ValueError):
                     raise SessionError('history_unverified', '历史工具标识无法核对。') from None
+    if recovered is not None and (not interrupted or not allow_interrupted or set(recovered) != pending):
+        raise SessionError('history_unverified', '恢复回执与前轮未完成的工具批次不匹配。')
     if pending and interrupted and allow_interrupted:
         started = {event.payload.get('call_id') for event in history.events if event.type == 'tool_started'}
         # 只补最后一批缺失结果；前面不完整的批次已经在角色配对检查中拒绝。
@@ -234,10 +237,13 @@ def history_messages(history: RunHistory, *, allow_interrupted: bool = False) ->
                     'message': '前轮在结果落盘前中断；操作可能已经生效，须核对当前现场。' if unknown else '前轮中断前未记录该工具开始，宿主未重放。',
                 },
             }
-            messages.append({'role': 'tool', 'tool_call_id': identifier, 'content': json.dumps(result, ensure_ascii=False)})
+            messages.append({'role': 'tool', 'tool_call_id': identifier, 'content': json.dumps(
+                recovered[identifier] if recovered is not None else result, ensure_ascii=False)})
         pending.clear()
     if interrupted and allow_interrupted:
-        messages.append({'role': 'assistant', 'content': '【宿主接续说明】前轮执行中断，以上为已保存记录。未知结果不代表操作未发生；必须先核对当前文件与命令后置状态，不得仅因缺少结果而重复旧命令。此前测试不代表本轮通过。'})
+        content = ('【宿主接续说明】已核对前轮工具回执。保留已确认的变更，按当前工作树状态继续未完成的需求。'
+                   if recovered is not None else '【宿主接续说明】前轮执行中断，以上为已保存记录。未知结果不代表操作未发生；必须先核对当前文件与命令后置状态，不得仅因缺少结果而重复旧命令。此前测试不代表本轮通过。')
+        messages.append({'role': 'assistant', 'content': content})
     if pending or not messages or messages[0].get('role') != 'user':
         raise SessionError('history_unverified', '历史消息或工具结果不完整。')
     return messages

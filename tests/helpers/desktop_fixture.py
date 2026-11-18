@@ -50,6 +50,9 @@ class FixtureModel:
 def main() -> int:
     """准备 Electron 指定数据目录中的测试项目，向生产后台注入离线模型，返回退出码。"""
     root = Path(sys.argv[sys.argv.index("--data-dir") + 1]).resolve()
+    if (root / "crash-recovery-fixture").is_file():
+        from tests.helpers.serve_crash_recovery_fixture import desktop_fixture
+        return desktop_fixture(root)
     store = PreferenceStore(root)
     if not store.value.custom_providers:
         # 正式后台从用户目录读取连接。测试使用免密回环定义和离线模型。

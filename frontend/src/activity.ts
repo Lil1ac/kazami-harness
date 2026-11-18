@@ -1,4 +1,30 @@
-import type { RunEvent } from './types';
+import type { BudgetHandoffTrigger, PublicSelfTestStatus, RunEvent } from './types';
+
+export const publicSelfTestStatusLabels: Record<PublicSelfTestStatus, string> = {
+  passed: '通过', failed: '断言失败', error: '执行异常', not_run: '未运行',
+  timed_out: '超时', skipped: '跳过', no_tests: '未收集到用例', all_skipped: '用例全部跳过', cancelled: '已取消',
+}; // 公开自测的回执状态，独立于 Run 与官方评分。
+
+export const budgetHandoffTriggerLabels: Record<BudgetHandoffTrigger, string> = {
+  last_model_turn: '仅余最后一轮', input_rejected: '普通输入达到上限',
+}; // 取实际触发条件，便于区分两种收尾路径。
+
+const publicSelfTestReasonLabels: Record<string, string> = {
+  candidate_changed: '候选已变化', candidate_archive_invalid: '候选归档无效',
+  self_test_environment: '自测环境异常', self_test_candidate_import: '未加载当前候选源码',
+  self_test_assertion_failed: '测试断言失败', self_test_no_tests: '未收集到用例',
+  self_test_all_skipped: '用例全部跳过', self_test_timeout: '自测超时', self_test_output_limit: '自测输出超出上限',
+  permission_denied: '命令未获许可', approval_pending: '等待审批', no_verified_write: '没有已核验写入',
+  cleanup_unconfirmed: '清理待确认', runtime_interrupted: '运行已中断', model_budget_exhausted: '模型轮次不足',
+  tool_budget_exhausted: '工具次数不足', time_budget_exhausted: '剩余时间不足',
+  self_test_not_passed: '公开自测未通过', self_test_not_current: '自测结果不对应当前候选',
+}; // 固定原因使用与评测页一致的用户文案。
+
+/** 返回自测或预算收尾 reason 的可读原因，未记录时返回空串。 */
+export function publicSelfTestReason(reason: unknown): string {
+  return typeof reason === 'string' ? publicSelfTestReasonLabels[reason] ?? reason : '';
+}
+
 
 /** 一项由实际事件投影的操作；缺少配对记录时保持未知，不推断成功。 */
 export interface ActivityStep {
@@ -7,7 +33,7 @@ export interface ActivityStep {
   state: 'running' | 'passed' | 'failed' | 'unknown'; // 仅由已保存结果确定。
   arguments: unknown; // 工具原始参数，展示时按纯文本转义。
   result: unknown; // 实际结果；尚未返回时为空。
-  errorMessage: string | null; // 局部编辑的真实失败说明；无失败或字段无法核对时为空。
+  errorMessage: string | null; // 编辑或搜索的真实失败说明，无失败或无法核对时为空。
 }
 const toolLabels: Record<string, string> = {
   delegate_readonly: '委派只读子 Agent',
@@ -61,6 +87,7 @@ export function toolFailureMessage(result: unknown): string | null {
 export function activitySteps(events: RunEvent[], active = false): ActivityStep[] {
   const steps: ActivityStep[] = [];
   const tools = new Map<string, ActivityStep>();
+  const selfTests = new Map<string, ActivityStep>(); // 宿主启动的真实自测用自己的编号配对。
   let verification: ActivityStep | undefined; // 当前窗口中的验收开始，不能替代实际验收结果。
   for (const event of events) {
     const payload = event.payload;
@@ -119,7 +146,22 @@ export function activitySteps(events: RunEvent[], active = false): ActivityStep[
       const result = payload.result as { ok?: unknown } | null;
       step.result = payload.result;
       step.state = result?.ok === true ? 'passed' : result?.ok === false ? 'failed' : 'unknown';
-      step.errorMessage = payload.name === 'edit_file' ? toolFailureMessage(payload.result) : null;
+      step.errorMessage = ['edit_file', 'search_files', 'read_file'].includes(String(payload.name))
+        ? toolFailureMessage(payload.result)
+        : null;
+    } else if ((event.type === 'public_self_test_started' || event.type === 'public_self_test_finished') && payload.source === 'handoff') {
+      const id = `self-test-${String(payload.self_test_id ?? event.seq)}`;
+      let step = selfTests.get(id);
+      if (!step) {
+        step = { id, label: '公开自测', state: 'running', arguments: null, result: null, errorMessage: null };
+        selfTests.set(id, step);
+        steps.push(step);
+      }
+      if (event.type === 'public_self_test_finished') {
+        step.result = payload;
+        step.state = payload.status === 'passed' ? 'passed' : payload.status === 'not_run' || payload.status === 'skipped' ? 'unknown' : 'failed';
+        step.errorMessage = publicSelfTestReason(payload.reason) || null;
+      }
     } else if (event.type === 'verification_started') {
       verification = {
         id: `verification-${event.seq}`,

@@ -1,6 +1,7 @@
 """受预算约束的命令执行：并发采集双流，并在中止时回收当前命令的进程树。"""
 
 import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 import math
 import os
@@ -54,6 +55,21 @@ def _windows_taskkill() -> str:
     return str(Path(buffer.value) / "taskkill.exe")
 
 
+def native_io_path(path: Path) -> Path:
+    """为宿主选定的 path 返回原生 I/O 路径，Windows 扩展盘符或 UNC 前缀以支持深层目录。
+
+    保留链接本身供调用者检查，不能用于授权用户输入。返回值仅供文件 API 使用，回执仍记录相对路径。
+    """
+    if os.name != "nt":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith(("\\\\?\\", "\\\\.\\")):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
 class ProcessRunner:
     """一次只执行一个命令；原始输出留在运行产物目录，模型只收到有界预览。"""
 
@@ -67,14 +83,15 @@ class ProcessRunner:
         """为 command_id 排他创建双流文件；None 分配新编号，已有目录或链接拒绝覆盖。"""
         handles: dict[str, BinaryIO] = {}
         try:
-            if self.artifacts_dir.is_symlink():
+            artifacts = native_io_path(self.artifacts_dir)
+            if artifacts.is_symlink() or artifacts.is_junction():
                 raise StorageError("命令产物目录不能是符号链接")
-            self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-            root = self.artifacts_dir.resolve(strict=True)
-            if not root.is_relative_to(self.artifacts_dir.parent.resolve(strict=True)):
+            artifacts.mkdir(parents=True, exist_ok=True)
+            root = artifacts.resolve(strict=True)
+            if not root.is_relative_to(artifacts.parent.resolve(strict=True)):
                 raise StorageError("命令产物目录越出运行范围")
-            commands = self.artifacts_dir / "commands"
-            if commands.is_symlink():
+            commands = artifacts / "commands"
+            if commands.is_symlink() or commands.is_junction():
                 raise StorageError("命令输出目录不能是符号链接")
             commands.mkdir(exist_ok=True)
             if not commands.resolve(strict=True).is_relative_to(root):
@@ -263,6 +280,7 @@ class ProcessRunner:
 
     async def run(
         self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
+        deadline: float | None = None, before_spawn: Callable[[], None] | None = None,
         extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
         python_execution: PythonExecution | None = None,
         command_id: str | None = None, on_spawn: Callable[[int], None] | None = None,
@@ -281,15 +299,25 @@ class ProcessRunner:
         返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
         command_id 为宿主生成的输出 UUID，None 自动生成；on_spawn 默认不通知，非空时
         在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
+        deadline 为宿主的绝对单调截止时间，包含等待进程槽位；None 时只用命令限时。
+        在开始前到期抛 TimeoutError，持有进程后的超时仍返回真实清理状态。
+        before_spawn 默认 None，非空时在截止时间复核后、启动进程前提交工具开始事实。
         """
         from agent_harness.execution.scheduling import capacity
-        async with capacity("processes"):
-            return await self._run(argv, cwd, timeout_seconds=timeout_seconds, extra_env=extra_env,
+        async with AsyncExitStack() as slot:
+            async with asyncio.timeout_at(deadline):
+                await slot.enter_async_context(capacity("processes"))
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError  # 等待进程槽位已用尽 Run 预算，不能启动进程。
+            if before_spawn is not None:
+                before_spawn()
+            return await self._run(argv, cwd, timeout_seconds=timeout_seconds, deadline=deadline, extra_env=extra_env,
                                    python_paths=python_paths, python_execution=python_execution,
                                    command_id=command_id, on_spawn=on_spawn, stdin_bytes=stdin_bytes)
 
     async def _run(
         self, argv: list[str], cwd: Path, *, timeout_seconds: float | None = None,
+        deadline: float | None = None,
         extra_env: dict[str, str] | None = None, python_paths: list[Path] | None = None,
         python_execution: PythonExecution | None = None,
         command_id: str | None = None, on_spawn: Callable[[int], None] | None = None,
@@ -308,6 +336,7 @@ class ProcessRunner:
         返回字典中的 timed_out/cancelled/output_limit_exceeded 优先于 exit_code 判断。
         command_id 为宿主生成的输出 UUID，None 自动生成；on_spawn 默认不通知，非空时
         在取得进程句柄后接收 PID，仅用于记录归属，不能据旧 PID 自动清理重启遗留进程。
+        deadline 为宿主限定的 Run 绝对单调截止时间，None 时只用命令自己的限时。
         """
         timeout = self.limits.command_timeout_seconds if timeout_seconds is None else timeout_seconds
         if stdin_bytes is not None and (not isinstance(stdin_bytes, bytes) or len(stdin_bytes) > 262144):
@@ -346,15 +375,23 @@ class ProcessRunner:
         storage_error: StorageError | None = None
         loop = asyncio.get_running_loop()
         command_deadline = loop.time() + timeout
+        if deadline is not None:
+            command_deadline = min(command_deadline, deadline)
         cleanup_deadline: float | None = None
         spawn_unconfirmed = False
-        try:
-            # Windows 桌面任务使用独立进程组并隐藏辅助控制台；输出仍完整保存在运行证据中。
+        async def launch() -> asyncio.subprocess.Process:
+            """在创建任务实际获得调度时复核时限，返回本次新进程的句柄。"""
+            if deadline is not None and loop.time() >= command_deadline:
+                raise TimeoutError
+            # Windows 桌面使用独立进程组并隐藏辅助控制台。
             options = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
-            spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            return await asyncio.create_subprocess_exec(
                 *argv, cwd=cwd, env=child_env, stdin=asyncio.subprocess.DEVNULL if stdin_bytes is None else asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=65536, **options,
-            ))
+            )
+
+        try:
+            spawn = asyncio.create_task(launch())
             try:
                 async with asyncio.timeout_at(command_deadline):
                     process = await asyncio.shield(spawn)
@@ -394,6 +431,8 @@ class ProcessRunner:
         except StorageError as exc:
             storage_error = exc
             reason = "storage_error"
+        except TimeoutError:
+            reason = "timeout"
         except (OSError, ValueError):
             reason = "cancelled" if cancel_error is not None else "spawn_failed"
         # 清理任务与调用方取消隔离；重复取消也只等待同一个有预算的清理操作。

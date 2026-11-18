@@ -4,15 +4,17 @@ import codecs
 import fnmatch
 import hashlib
 import os
+import re
 import stat
 import tempfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Literal
+from uuid import uuid4
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from agent_harness.schemas import DataModel
 from agent_harness.execution.workspace import Workspace, WorkspaceError
@@ -23,6 +25,17 @@ class ReadFileArguments(DataModel):
     path: str = Field(min_length=1, description="工作区内的文件路径，推荐相对路径。")
     offset: int = Field(default=0, ge=0, description="从 UTF-8 字符边界开始的字节偏移。")
     max_bytes: int = Field(default=8192, ge=1, le=65536, description="本页最多返回的 UTF-8 字节数。")
+    start_line: int | None = Field(default=None, ge=1, description="从 1 开始的文件行号；指定后使用按行读取。")
+    max_lines: int | None = Field(default=None, ge=1, le=1000, description="按行读取的最多行数，省略时为 40。")
+
+    @model_validator(mode="after")
+    def validate_page(self) -> "ReadFileArguments":
+        """核对按行或按字节的选择，返回原参数；互相冲突时抛 ValueError。"""
+        if self.start_line is None and self.max_lines is not None:
+            raise ValueError("max_lines 需要 start_line")
+        if self.start_line is not None and self.offset:
+            raise ValueError("start_line 与非零 offset 不能同时使用")
+        return self
 
     @field_validator("path")
     @classmethod
@@ -153,6 +166,27 @@ def _open_checked_file(workspace: Path, runs_root: Path, requested: str) -> Iter
         raise FileToolError("file_read_error", "文件读取失败，请检查文件状态后重试。") from None
 
 
+_LINE_BREAK = re.compile(rb"\r\n|[\n\r\v\f\x1c-\x1e]|\xc2\x85|\xe2\x80[\xa8\xa9]")  # 与搜索的 splitlines 行号一致。
+_MAX_LINE_SCAN_BYTES = 8 * 1024 * 1024  # 按行定位需要从头找边界；大型文本可按字节分页。
+
+
+def _line_range(source: bytes, start_line: int, max_lines: int) -> tuple[int, int]:
+    """返回 source 中从 1 起的 start_line、最多 max_lines 行对应的半开 UTF-8 字节区间。
+
+    空文件第一行返回空范围；其他超出文件的行抛 invalid_line。按原始行结束符计量，
+    CRLF 作为同一个行边界，返回范围不改变换行字节。
+    """
+    start = 0 if start_line == 1 else None
+    for number, delimiter in enumerate(_LINE_BREAK.finditer(source), start=1):
+        if number + 1 == start_line:
+            start = delimiter.end()
+        if start is not None and number == start_line + max_lines - 1:
+            return start, delimiter.end()
+    if start is None or (start_line > 1 and start == len(source)):
+        raise FileToolError("invalid_line", "start_line 超过文件最后一行。")
+    return start, len(source)
+
+
 def read_file(
     workspace: Path,
     runs_root: Path,
@@ -162,35 +196,58 @@ def read_file(
 ) -> dict:
     """读取工作区普通文件的一页UTF-8内容，返回分页位置、大小、完整内容指纹与换行类型。
 
-    workspace/runs_root 限定访问范围；arguments 的 offset/max_bytes 均为字节，
-    preview_chars 限制可见字符。大小不超过 max_edit_bytes 的文件额外按有界块计算
-    sha256与newline，供edit_file校验和选择原文；更大文件仍可分页，两字段均为None。
-    newline为lf/crlf/cr/mixed/none之一，始终描述完整文件而非当前页，不整文件加载。
+    workspace/runs_root 限定访问范围。offset/max_bytes 为字节，start_line 非空时
+    从指定行起读取至 max_lines 或页面预算。preview_chars 限制回执可见字符。
+    文件大小不超过 max_edit_bytes 时给出完整 SHA-256 和换行类型；大文件这两项为 None。
+    按行读取有独立扫描大小上限，超限可用字节分页。回执游标始终对应实际可见内容。
     """
+    offset = arguments.offset
+    line_limit = arguments.max_lines or 40
+    page_end: int | None = None  # 按行时为所选区间的原始结束字节；字节模式沿用文件尾。
     with _open_checked_file(workspace, runs_root, arguments.path) as (path, stream, opened):
-        if arguments.offset > opened.st_size:
-            raise FileToolError("invalid_offset", "offset 超过文件末尾，请使用上页的 next_offset。")
-        stream.seek(arguments.offset)
-        # 分页与指纹共用句柄；指纹最多扫描编辑预算内的文件，不扩大模型可见内容。
-        raw = stream.read(arguments.max_bytes + 4)
-        sha256, newline = _inspect_open_file(stream, max_edit_bytes) if opened.st_size <= max_edit_bytes else (None, None)
-    if raw and raw[0] & 0xC0 == 0x80 and arguments.offset == 0:
+        sha256, newline = None, None
+        if arguments.start_line is None:
+            if offset > opened.st_size:
+                raise FileToolError("invalid_offset", "offset 超过文件末尾，请使用上页的 next_offset。")
+            stream.seek(offset)
+            raw = stream.read(arguments.max_bytes + 4)
+            if opened.st_size <= max_edit_bytes:
+                sha256, newline = _inspect_open_file(stream, max_edit_bytes)
+        else:
+            if opened.st_size > _MAX_LINE_SCAN_BYTES:
+                raise FileToolError("line_scan_limit", "文件超过按行定位预算，请用 offset 分页。")
+            source = stream.read(opened.st_size + 1)
+            if len(source) != opened.st_size:
+                raise FileToolError("file_changed", "文件在读取期间发生变化，请重读。")
+            offset, page_end = _line_range(source, arguments.start_line, line_limit)
+            raw = source[offset : min(page_end, offset + arguments.max_bytes + 4)]
+            if opened.st_size <= max_edit_bytes:
+                sha256 = hashlib.sha256(source).hexdigest()
+                newline = _newline_style(source.count(b"\n"), source.count(b"\r"), source.count(b"\r\n"))
+    if raw and raw[0] & 0xC0 == 0x80 and offset == 0:
         raise FileToolError("invalid_encoding", "文件不是有效的 UTF-8 文本，请先转换编码。")
     if raw and raw[0] & 0xC0 == 0x80:
         raise FileToolError("invalid_offset", "offset 位于字符内部，请使用上页的 next_offset。")
     content, bytes_read = _decode_page(raw, arguments.max_bytes, preview_chars)
-    eof = bytes_read == len(raw)
-    return {
+    end = offset + bytes_read
+    eof = end == opened.st_size
+    result = {
         "path": path.relative_to(workspace).as_posix(),
         "content": content,
-        "offset": arguments.offset,
-        "next_offset": None if eof else arguments.offset + bytes_read,
+        "offset": offset,
+        "next_offset": None if eof else end,
         "bytes_read": bytes_read,
         "eof": eof,
         "size_bytes": opened.st_size,
         "sha256": sha256,
         "newline": newline,
     }
+    if arguments.start_line is not None:
+        result.update(start_line=arguments.start_line,
+                      end_line=arguments.start_line + len(content.splitlines()) - 1 if content else None,
+                      # 字节或字符限额截断时，使用准确的 next_offset 继续这一段。
+                      next_line=arguments.start_line + line_limit if not eof and end == page_end else None)
+    return result
 
 
 def read_file_snapshot(workspace: Path, runs_root: Path, requested: str, max_bytes: int) -> bytes:
@@ -250,9 +307,13 @@ MAX_SEARCH_TOTAL_BYTES = 8 * 1024 * 1024
 
 
 def _search_file_text(boundary: Workspace, path: Path, available_bytes: int) -> tuple[str | None, int, str | None]:
-    """有界读取单个普通 UTF-8 文件，返回文本、已读字节和受控跳过原因。"""
+    """有界读取已枚举的普通文件 path，返回 UTF-8 文本、读取字节数和可选跳过原因。
+
+    boundary 为已校验的工作区，available_bytes 是本次全局尚可读取的字节数。
+    文件在打开或读取期间变化时丢弃文本；从句柄读取前复核路径及文件身份。
+    """
     try:
-        before = path.stat()
+        before = path.lstat()
         if not stat.S_ISREG(before.st_mode):
             return None, 0, "not_regular_file"
         if before.st_size > MAX_SEARCH_FILE_BYTES:
@@ -266,11 +327,12 @@ def _search_file_text(boundary: Workspace, path: Path, available_bytes: int) -> 
             opened = os.fstat(stream.fileno())
             if not stat.S_ISREG(opened.st_mode):
                 return None, 0, "not_regular_file"
-            if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
-                return None, 0, "file_changed"
-            if boundary.resolve(str(path)) != path:
+            boundary.check_scanned_path(path)
+            if _file_signature(before) != _file_signature(opened) or _file_signature(path.lstat()) != _file_signature(opened):
                 return None, 0, "file_changed"
             raw = stream.read(min(MAX_SEARCH_FILE_BYTES, available_bytes) + 1)
+            if _file_signature(os.fstat(stream.fileno())) != _file_signature(opened) or _file_signature(path.lstat()) != _file_signature(opened):
+                return None, len(raw), "file_changed"
         if len(raw) > MAX_SEARCH_FILE_BYTES:
             return None, len(raw), "file_size_limit"
         if len(raw) > available_bytes:
@@ -316,6 +378,16 @@ def _glob_matches(relative: str, pattern: str) -> bool:
     return len(parts) in positions
 
 
+def _literal_search_prefix(pattern: str) -> tuple[str, ...]:
+    """提取相对 glob 的固定路径分段，供搜索跳过不可能命中的分支；无固定前缀返回空元组。"""
+    parts = []
+    for segment in pattern.split("/"):
+        if segment in {"", ".", ".."} or any(mark in segment for mark in "*?["):
+            break
+        parts.append(segment)
+    return tuple(parts)
+
+
 def search_files(
     workspace: Path,
     runs_root: Path,
@@ -341,13 +413,13 @@ def search_files(
     remaining_chars = preview_chars
     truncated = False
     directories = [start]
+    prefix = _literal_search_prefix(arguments.glob)
+    exact_file = len(prefix) == len(arguments.glob.split("/"))
     stop = False
     while directories and not stop:
         directory = directories.pop()
         try:
-            if boundary.resolve(str(directory), must_exist=True) != directory:
-                skipped["path_changed"] += 1
-                continue
+            boundary.check_scanned_path(directory, directory=True)
             entries = []
             # 只缓存受全局目录项预算约束的一小段，避免先整目录排序造成无界内存占用。
             with os.scandir(directory) as iterator:
@@ -358,8 +430,13 @@ def search_files(
                         break
                     scanned_entries += 1
                     entries.append(entry)
-        except WorkspaceError:
-            skipped["path_changed"] += 1
+        except WorkspaceError as error:
+            reason = {
+                "run_records_forbidden": "run_records",
+                "permission_path_denied": "outside_workspace",
+                "path_outside_workspace": "outside_workspace",
+            }.get(error.code, "path_changed")
+            skipped[reason] += 1
             continue
         except PermissionError:
             skipped["permission_denied"] += 1
@@ -371,19 +448,23 @@ def search_files(
         for entry in sorted(entries, key=_entry_name):
             path = Path(entry.path)
             try:
-                if entry.is_symlink() or path.is_junction():
+                relative = path.relative_to(start)
+                parts = relative.parts
+                if parts[:len(prefix)] != prefix[:len(parts)]:
+                    continue  # glob 指定的固定路径以外，无需打开目录或校验文件。
+                if entry.is_symlink() or entry.is_junction():
                     skipped["symbolic_link"] += 1
                     continue
-                resolved = boundary.resolve(str(path))
                 if entry.is_dir(follow_symlinks=False):
-                    children.append(resolved)
+                    if not exact_file or len(parts) < len(prefix):
+                        children.append(path)
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     skipped["not_regular_file"] += 1
                     continue
-                relative = path.relative_to(start).as_posix()
-                if not _glob_matches(relative, arguments.glob):
+                if not _glob_matches(relative.as_posix(), arguments.glob):
                     continue
+                boundary.check_scanned_path(path, resolve=False)
                 if scanned_files >= MAX_SEARCH_FILES:
                     skipped["file_count_limit"] += 1
                     truncated = stop = True
@@ -394,7 +475,7 @@ def search_files(
                     break
                 scanned_files += 1
                 text, count, reason = _search_file_text(
-                    boundary, resolved, MAX_SEARCH_TOTAL_BYTES - scanned_bytes
+                    boundary, path, MAX_SEARCH_TOTAL_BYTES - scanned_bytes
                 )
                 scanned_bytes += count
                 if reason is not None:
@@ -408,7 +489,7 @@ def search_files(
                     visible = line[:remaining_chars]
                     clipped = len(visible) < len(line)
                     match = {
-                        "path": resolved.relative_to(boundary.workspace).as_posix(),
+                        "path": path.relative_to(boundary.workspace).as_posix(),
                         "line_number": line_number,
                         "line": visible,
                     }
@@ -451,16 +532,101 @@ def _ensure_write_parent(boundary: Workspace, path: Path) -> None:
             raise FileToolError("file_write_error", "目标父路径不是可写目录。")
 
 
+def _recovery_stage(boundary: Workspace, requested: str, path: Path, raw: bytes,
+                    before: dict | None, journal: Callable[[str, dict], None] | None) -> tuple[Path | None, dict]:
+    """为可核对写入登记独占暂存路径和内容指纹。非普通路径或缺少既有父目录时返回空。"""
+    lexical = Path(os.path.abspath(boundary.workspace / requested))
+    if journal is None or lexical != path or not path.parent.is_dir():
+        return None, {}
+    parent = path.parent.stat()
+    if not parent.st_ino:
+        return None, {}
+    temporary = path.parent / f".harness-write-{uuid4().hex}.tmp"
+    facts = {"path": path.relative_to(boundary.workspace).as_posix(),
+             "stage": temporary.name, "parent_identity": [parent.st_dev, parent.st_ino],
+             "before": before, "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+    journal("file_write_preparing", facts)
+    return temporary, facts
+
+
+def _stage_file(path: Path, staged: Path | None, prefix: str) -> tuple[int, Path]:
+    """排他创建同目录暂存文件，返回描述符与路径。staged 为 None 时由系统生成名字。"""
+    if staged is None:
+        descriptor, name = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=path.parent)
+        return descriptor, Path(name)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    return os.open(staged, flags, 0o600), staged
+
+
+def _write_intent(staged: Path | None, facts: dict, journal: Callable[[str, dict], None] | None) -> None:
+    """暂存文件落盘后记录其身份，再允许提交目标。记录失败会阻止目标写入。"""
+    if staged is not None and journal is not None:
+        identity = staged.stat()
+        journal("file_write_intent", {**facts, "after_identity": [identity.st_dev, identity.st_ino]})
+
+
+def inspect_file_write(workspace: Path, runs_root: Path, preparing: dict, intent: dict | None,
+                       *, clean: bool = False) -> str:
+    """核对已登记的普通文件及暂存对象，返回 applied、not_applied 或 unknown。
+
+    clean 仅由已认领原工作区的恢复入口传入，只移除身份和内容均匹配的暂存文件。
+    缺少目标写入证据时，只有未提交意图或仍留在原位置的原子替换暂存对象可证明未提交。
+    """
+    boundary = Workspace(workspace, runs_root)
+    path = boundary.resolve(preparing["path"])
+    name = preparing["stage"]
+    if (path != workspace / preparing["path"] or not name.startswith(".harness-write-")
+            or not name.endswith(".tmp") or Path(name).name != name):
+        return "unknown"
+    stage = path.parent / name
+    parent = path.parent.stat()
+    if [parent.st_dev, parent.st_ino] != preparing["parent_identity"] or boundary.resolve(str(stage)) != stage:
+        return "unknown"
+    if intent is None:
+        return "unknown" if stage.exists() else "not_applied"
+    if any(intent[key] != value for key, value in preparing.items()):
+        return "unknown"
+
+    def matches(candidate: Path) -> bool:
+        """核对 candidate 的对象身份、字节长度和完整指纹，缺少路径则返回 False。"""
+        if not candidate.exists() or boundary.resolve(str(candidate)) != candidate:
+            return False
+        with _open_checked_file(workspace, runs_root, str(candidate)) as (_, stream, info):
+            return (bool(info.st_ino) and [info.st_dev, info.st_ino] == intent["after_identity"]
+                    and info.st_size == intent["size"]
+                    and _inspect_open_file(stream, info.st_size)[0] == intent["sha256"])
+
+    staged = matches(stage)
+    if stage.exists() and not staged:
+        return "unknown"
+    if matches(path):
+        status = "applied"
+    elif staged and preparing["before"] is not None and path.is_file():
+        before = preparing["before"]
+        with _open_checked_file(workspace, runs_root, str(path)) as (_, stream, info):
+            if (list(_file_signature(info)) != before["signature"]
+                    or _inspect_open_file(stream, info.st_size)[0] != before["sha256"]):
+                return "unknown"
+        status = "not_applied"  # 原子替换会消耗暂存路径，仍在原位置表示替换未发生。
+    else:
+        return "unknown"
+    if staged and clean:
+        stage.unlink()
+    return status
+
+
 def write_file(
     workspace: Path,
     runs_root: Path,
     arguments: WriteFileArguments,
     max_bytes: int,
+    *, journal: Callable[[str, dict], None] | None = None,
 ) -> dict:
     """将完整 UTF-8 内容先写入同目录临时文件，再原子提交为目标文件。
 
     默认使用原子硬链接创建而非先判断再替换，避免竞态覆盖现有文件。显式覆盖才用
     replace；任何提交前失败都保留原目标，临时文件在结束时尽力清理。
+    journal 由宿主提供时为既有父目录下的新建文件保存写入意图，None 表示普通写入。
     """
     boundary = Workspace(workspace, runs_root)
     path = boundary.resolve(arguments.path)
@@ -477,11 +643,11 @@ def write_file(
             raise FileToolError("not_regular_file", "只能写入普通文件，不能替换目录或设备。")
         if existed and not arguments.overwrite:
             raise FileToolError("file_exists", "目标文件已存在；如需替换，请显式设置 overwrite 为 true。")
+        staged, facts = _recovery_stage(boundary, arguments.path, path, raw, None, journal if not arguments.overwrite else None)
         _ensure_write_parent(boundary, path)
         if boundary.resolve(arguments.path) != path:
             raise FileToolError("file_write_error", "写入期间文件路径发生变化，请重试。")
-        descriptor, name = tempfile.mkstemp(prefix=".harness-write-", suffix=".tmp", dir=path.parent)
-        temporary = Path(name)
+        descriptor, temporary = _stage_file(path, staged, ".harness-write-")
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(raw)
             stream.flush()
@@ -491,6 +657,7 @@ def write_file(
         existed = path.exists()
         if existed and not path.is_file():
             raise FileToolError("not_regular_file", "只能写入普通文件，不能替换目录或设备。")
+        _write_intent(staged, facts, journal)
         if arguments.overwrite:
             os.replace(temporary, path)
         else:
@@ -583,7 +750,8 @@ def _edit_fragments(text: str, old: str, new: str) -> tuple[str, str, NewlineSty
     return old, new, style
 
 
-def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, max_bytes: int) -> dict:
+def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, max_bytes: int,
+              *, journal: Callable[[str, dict], None] | None = None) -> dict:
     """按版本校验替换已有文件的唯一片段，返回新指纹、替换数量和文件字节数。
 
     workspace/runs_root 固定路径边界；arguments 提供原片段、新片段及最近读取指纹。
@@ -591,6 +759,7 @@ def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, ma
     混合、仅CR和无换行文件精确匹配。原BOM及未匹配内容保持，统一换行格式保持；
     不存在、歧义、版本冲突或失败提交均保留原目标。提交前再次核对版本和路径，
     然后同目录原子替换并保留权限位；这是乐观并发检查，不是跨进程文件锁。
+    journal 非空时在替换前固定暂存身份及目标指纹，供中断后只读核对。
     """
     boundary = Workspace(workspace, runs_root)
     path = boundary.resolve(arguments.path)
@@ -622,8 +791,9 @@ def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, ma
             raise FileToolError("edit_no_change", "替换后内容没有变化，原文件未修改。")
         if len(result) > max_bytes:
             raise FileToolError("file_size_limit", "编辑结果超过文件写入字节上限。")
-        descriptor, name = tempfile.mkstemp(prefix=".harness-edit-", suffix=".tmp", dir=path.parent)
-        temporary = Path(name)
+        before = {"signature": list(_file_signature(original)), "sha256": arguments.expected_sha256}
+        staged, facts = _recovery_stage(boundary, arguments.path, path, result, before, journal)
+        descriptor, temporary = _stage_file(path, staged, ".harness-edit-")
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(result)
             stream.flush()
@@ -633,6 +803,12 @@ def edit_file(workspace: Path, runs_root: Path, arguments: EditFileArguments, ma
         _, current = _edit_source(boundary, arguments.path, path, arguments.expected_sha256, max_bytes)
         if _file_signature(current) != _file_signature(original):
             raise FileToolError("file_changed", "文件对象发生变化，请重新读取后编辑。")
+        _write_intent(staged, facts, journal)
+        if staged is not None:
+            # 日志提交后再次验证版本，保持文件编辑原有的乐观并发语义。
+            _, current = _edit_source(boundary, arguments.path, path, arguments.expected_sha256, max_bytes)
+            if _file_signature(current) != _file_signature(original):
+                raise FileToolError("file_changed", "文件对象发生变化，请重新读取后编辑。")
         os.replace(temporary, path)
         return {"path": path.relative_to(boundary.workspace).as_posix(), "replacements": 1,
                 "bytes_written": len(result), "sha256": hashlib.sha256(result).hexdigest()}

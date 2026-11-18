@@ -1,5 +1,6 @@
 import { Alert, Tag } from 'antd';
 import { useId } from 'react';
+import { Link } from 'react-router';
 import { CompressionActions } from './CompressionActions';
 import { formatContextBytes, instructionErrorLabel, instructionStatusLabels } from '../context';
 import type { ContextView } from '../types';
@@ -38,7 +39,7 @@ export function ContextPanel({
         统计消息和工具定义的整体输入大小，不等于模型 token 数。每轮发送前检查。
       </p>
       <section className="context-budget" aria-labelledby={`${headingId}-budget`}>
-        <h3 id={`${headingId}-budget`}>最近一次输入检查</h3>
+        <h3 id={`${headingId}-budget`}>最近一次输入检查{check?.phase === 'handoff' && ' · 紧凑收尾'}</h3>
         {check ? (
           <>
             <div className="context-budget-total">
@@ -71,7 +72,7 @@ export function ContextPanel({
         )}
         {check?.raw_input_bytes != null && (
           <p className="muted">
-            原始输入 {formatContextBytes(check.raw_input_bytes)}，当前发送{' '}
+            原始输入 {formatContextBytes(check.raw_input_bytes)}，投影后{' '}
             {formatContextBytes(check.input_bytes)}。
           </p>
         )}
@@ -194,6 +195,8 @@ export function ContextPanel({
                       模型请求 {use.model_turn} · {memoryPhaseLabels[use.phase]} ·{' '}
                       {use.paths.join('、') || '项目范围'}
                     </p>
+                    {!!use.topics?.length && <p>主题：{use.topics.map(/* 仅列出已进入输入的主题。 */ (topic) => topic.title).join('、')}</p>}
+                    {!!use.history_evidence_ids?.length && <p>历史证据 · {use.history_evidence_ids.length} 条</p>}
                     {use.selected.map(
                       /* 保存类型呈现及采用原因。 */ (item) => (
                         <details key={item.id}>
@@ -217,7 +220,8 @@ export function ContextPanel({
                 /* 保留真正返回的页与指纹。 */ (read, index) => (
                   <div key={index}>
                     <code>
-                      {read.id} · v{read.revision} · {read.sha256}
+                      {read.evidence ? <Link to={'/runs/' + read.evidence.run_id}>历史证据 · 事件 {read.evidence.seq}</Link> :
+                        read.id + ' · v' + read.revision} · {read.sha256}
                     </code>
                     <pre>{read.content}</pre>
                   </div>
@@ -225,6 +229,17 @@ export function ContextPanel({
               )}
             </details>
           )}
+          {!!context.memory.history_searches?.length && <details>
+            <summary>历史检索 · {context.memory.history_searches.length} 次</summary>
+            {context.memory.history_searches.map(/* 每次查询按已提交轨迹显示。 */ (search, index) => (
+              <div key={index}>
+                <p>{search.query || '浏览历史'} · {search.items.length} 条</p>
+                {search.items.map(/* 连接原始会话来源。 */ (ref) => (
+                  <p key={ref.id}><Link to={'/runs/' + ref.run_id}>来源 {ref.run_id.slice(0, 8)} · 事件 {ref.seq}</Link></p>
+                ))}
+              </div>
+            ))}
+          </details>}
           {context.memory.skipped.length > 0 && (
             <details>
               <summary>跳过的记忆</summary>

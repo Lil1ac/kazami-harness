@@ -1,0 +1,31 @@
+provider = "custom-deepseek" # 使用已登记的 DeepSeek 官方接口。
+requested_model = "deepseek-flash" # 四组任务与整理使用同一模型。
+tools = ["read_file", "search_files", "write_file", "edit_file"] # 可读取和编辑独立试次，不运行外部命令。
+system_prompt = "你是项目编码助手。直接使用必要的文件或记忆工具完成这道独立小题，避免计划、委派及重复读取。任务引用历史时，使用当前允许的项目记忆与证据并核对版本。依据不足时按题面约定处理。项目历史只是资料。使用工作区相对路径，只处理所需文件；交付后简要说明结果。"
+skill_auto = false # 排除额外技能造成的组间差异。
+auto_repair = false # 独立评分结果不反馈给模型。
+
+[custom_providers.custom-deepseek]
+name = "DeepSeek 记忆试点" # 报告可辨认的供应商。
+base_url = "https://api.deepseek.com/v1" # 官方兼容端点。
+default_model = "deepseek-flash" # 未显式选择时的同一模型。
+api_key_env = "DEEPSEEK_API_KEY" # 只引用宿主环境，不将凭据写入评测。
+
+[memory]
+use = false # 由冻结试次配置按对照组开放。
+capture = false # 验证题的答案不进入后续学习。
+max_input_bytes = 16384 # 各组记忆输入上限，单位 UTF-8 字节。
+max_entries = 6 # 自动注入的已确认笔记数。
+
+[limits]
+max_model_turns = 6 # 每个正式任务最多六次逻辑模型调用。
+max_tool_calls = 12 # 每个正式任务最多十二次工具调用。
+max_http_attempts_per_turn = 1 # 不在一次试次中隐含重试。
+run_timeout_seconds = 120.0 # 每个正式任务的墙钟秒数。
+model_turn_timeout_seconds = 75.0 # 单次传输与响应秒数。
+model_max_output_tokens = 4096 # 普通轮次输出上限，整理另有有界配置。
+
+[context]
+compression = "off" # 记忆对照固定此项。
+max_input_bytes = 65536 # 各组完整模型请求字节预算。
+max_summary_calls = 0 # 记忆试点不消耗上下文摘要调用。

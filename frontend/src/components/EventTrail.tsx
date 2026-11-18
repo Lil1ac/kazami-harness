@@ -3,9 +3,9 @@ import { CheckOutlined, ToolOutlined, MessageOutlined, LoadingOutlined } from '@
 import type { ConnectionState } from '../hooks/useRunEvents';
 import { duration, pretty } from '../format';
 import { formatContextBytes, instructionStatusLabels } from '../context';
-import { toolFailureMessage } from '../activity';
+import { budgetHandoffTriggerLabels, publicSelfTestReason, publicSelfTestStatusLabels, toolFailureMessage } from '../activity';
 import { lifecycleOutcomes, lifecycleStages, lifecycleTrace } from '../lifecycle';
-import type { RunEvent } from '../types';
+import type { BudgetHandoffTrigger, PublicSelfTestStatus, RunEvent } from '../types';
 
 const eventLabels: Record<string, string> = {
   pipeline_stage: '生命周期阶段',
@@ -31,6 +31,12 @@ const eventLabels: Record<string, string> = {
   subagent_resume_reports: '交付接续报告',
   subagent_handoff: '收到子报告，重新决定后续动作',
   budget_handoff_started: '预算收尾交接',
+  closeout_advice: '可编辑收尾提醒',
+  budget_handoff_finished: '记录收尾答复',
+  budget_handoff_skipped: '未执行预算收尾',
+  public_self_test_started: '开始公开自测',
+  public_self_test_finished: '公开自测结果',
+  public_self_test_invalidated: '公开自测证据已失效',
   run_created: '任务已登记',
   run_started: '开始执行',
   planning_updated: '更新规划与用户请求',
@@ -55,6 +61,9 @@ const eventLabels: Record<string, string> = {
   assistant_message: '模型消息',
   model_delta: '模型增量',
   tool_started: '工具调用',
+  file_write_preparing: '登记文件写入',
+  file_write_intent: '文件写入意图已保存',
+  crash_resumed: '已接续中断运行',
   tool_result: '工具返回',
   execution_completed: '执行完成',
   verification_started: '开始独立验收',
@@ -103,7 +112,31 @@ function eventSummary(event: RunEvent): string {
       typeof payload.input_bytes === 'number' ? formatContextBytes(payload.input_bytes) : '未记录';
     const decision =
       payload.allowed === true ? '允许请求' : payload.allowed === false ? '达到上限' : '未记录';
-    return `第 ${String(payload.model_turn ?? '—')} 轮 · ${size} · ${decision}`;
+    const phase = payload.phase === 'handoff' ? '紧凑收尾 · ' : payload.phase === 'execution' ? '普通输入 · ' : '';
+    return `${phase}第 ${String(payload.model_turn ?? '—')} 轮 · ${size} · ${decision}`;
+  }
+  if (event.type === 'closeout_advice') {
+    const extras = Array.isArray(payload.other_writes) ? payload.other_writes.join('、') : '';
+    return `第 ${String(payload.model_turn)} 轮 · 剩余 ${String(payload.remaining)} 轮 · ${String(payload.target)}`
+      + (payload.current_target_write ? '（已核对写入）' : '（无当前写入回执）')
+      + (extras ? ` · 其他写入 ${extras}` : '') + ' · 未执行自测';
+  }
+  if (event.type === 'public_self_test_started') return String(payload.selector ?? '');
+  if (event.type === 'public_self_test_invalidated') return publicSelfTestReason(payload.reason);
+  if (event.type === 'public_self_test_finished') {
+    const status = String(payload.status ?? '') as PublicSelfTestStatus;
+    const label = publicSelfTestStatusLabels[status] ?? status;
+    const executed = typeof payload.tests_run === 'number' ? ` · 实际执行 ${payload.tests_run} 项` : '';
+    const reason = publicSelfTestReason(payload.reason);
+    return label + executed + (reason && reason !== label ? ' · ' + reason : '');
+  }
+  if (event.type === 'budget_handoff_started' || event.type === 'budget_handoff_skipped') {
+    const trigger = String(payload.trigger ?? '') as BudgetHandoffTrigger;
+    return [budgetHandoffTriggerLabels[trigger], publicSelfTestReason(payload.reason)].filter(Boolean).join(' · ');
+  }
+  if (event.type === 'budget_handoff_finished') {
+    const labels: Record<string, string> = { ready: '已答复', partial: '部分完成', invalid: '答复无效' }; // 收尾答复状态独立于评分。
+    return labels[String(payload.status)] ?? '';
   }
   if (event.type === 'context_action')
     return (
@@ -117,7 +150,7 @@ function eventSummary(event: RunEvent): string {
     return '生成历史工作摘要';
   if (event.type === 'tool_started' || event.type === 'tool_result') {
     const failure =
-      event.type === 'tool_result' && payload.name === 'edit_file'
+      event.type === 'tool_result' && ['edit_file', 'search_files', 'read_file'].includes(String(payload.name))
         ? toolFailureMessage(payload.result)
         : null;
     return String(payload.name ?? '') + (failure ? ` · ${failure}` : '');

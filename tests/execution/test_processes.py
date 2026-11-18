@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from agent_harness.execution.processes import ProcessRunner
+from agent_harness.execution.processes import ProcessRunner, native_io_path
 from agent_harness.schemas import RunLimits
 from agent_harness.storage.runs import StorageError
 
@@ -26,6 +26,15 @@ def execute(tool: ProcessRunner, tmp_path: Path, source: str, **kwargs) -> dict:
 def raw_path(tmp_path: Path, result: dict, stream: str) -> Path:
     """把运行内相对输出引用映射为测试目录中的实际原始文件。"""
     return tmp_path / result[f"{stream}_ref"]
+
+
+def test_nested_grading_directory_preserves_raw_output(tmp_path: Path) -> None:
+    """在 tmp_path 下模拟评分器的深层目录，验证两路原件能按回执读取，并保持可移植的相对引用。"""
+    evidence = tmp_path.joinpath(*(["evaluation-evidence"] * 12))
+    result = execute(runner(evidence), tmp_path, "import sys; print('ok'); print('diagnostic', file=sys.stderr)")
+    for name, expected in (("stdout", "ok"), ("stderr", "diagnostic")):
+        assert result[f"{name}_ref"].startswith("artifacts/commands/")
+        assert native_io_path(raw_path(evidence, result, name)).read_text().strip() == expected
 
 
 def test_unicode_space_path_and_independent_raw_outputs(tmp_path: Path) -> None:

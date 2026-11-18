@@ -85,6 +85,18 @@ def _usage(payload: object) -> dict | None:
 
 
 def _parse_response(payload: object) -> ModelResponse:
+    """先提取payload中可信用量再校验内容，返回响应；内容拒绝时随ModelError保留计数，不保存正文。"""
+    usage = _usage(payload.get("usage")) if isinstance(payload, dict) else None
+    try:
+        return _parse_message(payload)
+    except ModelError as error:
+        error.usage = usage
+        model = payload.get("model") if isinstance(payload, dict) else None
+        error.response_model = model if isinstance(model, str) and model.strip() else None
+        raise
+
+
+def _parse_message(payload: object) -> ModelResponse:
     """将单候选供应商响应校验为 ModelResponse，拒绝截断或无法可靠配对的调用。
 
     工具 ID 必须非空且不重复，结束原因必须与消息内容一致。
@@ -221,6 +233,11 @@ class ChatCompletionsClient:
         self._entered = False
         await self._client.__aexit__(exc_type, exc_value, traceback)
 
+    @property
+    def tracks_http_attempts(self) -> bool:
+        """返回客户端是否在每次请求前同步通知宿主；用于证明本轮是否进入传输。"""
+        return self._on_attempt is not None
+
     async def complete(self, messages: list[dict], tools: list[dict]) -> ModelResponse:
         """流式发送 messages/tools 并返回完整响应；单轮预算覆盖读流、重试与退避。"""
         if not self._entered:
@@ -230,6 +247,7 @@ class ChatCompletionsClient:
             "messages": messages,
             "stream": True,
             "max_tokens": self._config.limits.model_max_output_tokens,
+            **self._config.generation.request_fields(),
         }
         if tools:
             body["tools"] = tools
@@ -256,16 +274,18 @@ class ChatCompletionsClient:
                     else:
                         return _parse_response(await assembler.read(response))
             except _RETRYABLE_TRANSPORT_ERRORS as error:
+                diagnostic = {"stage": "stream" if assembler.received_content else "request", "exception_type": type(error).__name__, "received_content": assembler.received_content}
                 if _certificate_error(error):
-                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。") from None
+                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。", transport_diagnostic=diagnostic) from None
                 if assembler.received_content:
-                    raise ModelError("model_stream_interrupted", "模型输出连接中断，已保留收到的内容，未重新执行请求。") from None
+                    raise ModelError("model_stream_interrupted", "模型输出连接中断，已保留收到的内容，未重新执行请求。", transport_diagnostic=diagnostic) from None
                 if attempt == attempts:
-                    raise ModelError("model_transport", "模型服务连接失败，已用完本轮重试次数。") from None
+                    raise ModelError("model_transport", "模型服务连接失败，已用完本轮重试次数。", transport_diagnostic=diagnostic) from None
             except httpx.RequestError as error:
+                diagnostic = {"stage": "stream" if assembler.received_content else "request", "exception_type": type(error).__name__, "received_content": assembler.received_content}
                 if _certificate_error(error):
-                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。") from None
-                raise ModelError("model_transport", "模型请求传输失败，已停止本轮请求。") from None
+                    raise ModelError("model_tls_verification", "模型服务证书校验失败，请检查系统受信任证书；修正后再接续。", transport_diagnostic=diagnostic) from None
+                raise ModelError("model_transport", "模型请求传输失败，已停止本轮请求。", transport_diagnostic=diagnostic) from None
             # 固定上限防止服务端 Retry-After 或连续故障消耗无界等待时间。
             await asyncio.sleep(min(0.1 * (2 ** min(attempt - 1, 4)), 1.0))
         raise ModelError("model_unavailable", "模型服务暂时不可用，已停止本轮请求。")

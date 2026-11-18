@@ -1,0 +1,17 @@
+{
+  "approved_at_recorded_utc": "2026-11-18T09:08:59.063216+00:00",
+  "base_protocol_sha256": "8c5c070cf3d93a205e9fbb1b44e6bc53d404f9322a4202ffdd71770108d40799",
+  "stage": "before_first_formal_model_request",
+  "formal_requests": 0,
+  "cases": [
+    "sphinx-doc__sphinx-10435"
+  ],
+  "original_preflight": "bc94b6aa-ed68-44b8-a877-d5e58fe3f350",
+  "policy": "评分容器仅按精确 GET URL 重放 HTTPS 实取的公开响应。两组共用冻结内容。求解和评分容器仍禁用外网，官方评分脚本与测试保持原件。",
+  "cache": {
+    "responses_sha256": "14f57d822d7bff8b6b322503edd2ea81e6f03cbc4f9c849cfd4246dc03d47124",
+    "count": 2,
+    "adapter_sha256": "b7a3e17353db4741aab29726fbe7a13a39a343d9be852c95a65e1c25b29d1d2d",
+    "integration_sha256": "a006596280701a02b8ad1dc8e5895886dcde1b1c4a775d18b613b4d6c159dcd8"
+  }
+}

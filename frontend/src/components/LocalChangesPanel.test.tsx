@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { getDiff } from '../api';
@@ -42,9 +42,9 @@ it('原目录差异读取指定轮的固定记录，显示实际目录且没有�
     warnings: [],
     files: [{ path: 'hello.py', status: 'added', binary: false }],
   });
-  expect(screen.getByText('修改已在原目录生效。')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '改动已在原目录生效' })).toBeInTheDocument();
   expect(screen.getByText('D:/自己的项目')).toBeInTheDocument();
-  expect(await screen.findByLabelText('代码差异预览')).toHaveTextContent('print("hello")');
+  await waitFor(/* 预览容器先出现，需等待异步正文而非只等待容器。 */ () => expect(screen.getByLabelText('代码差异预览')).toHaveTextContent('print("hello")'));
   expect(getDiff).toHaveBeenCalledWith('saved-round', expect.anything());
   expect(screen.getByRole('link', { name: '下载本轮差异' })).toHaveAttribute(
     'href',
@@ -96,7 +96,7 @@ it('差异刚固化但后台尚未释放时等待终态，再从同一查询身�
   const view = render(panel(true));
   expect(getDiff).not.toHaveBeenCalled();
   view.rerender(panel(false));
-  expect(await screen.findByLabelText('代码差异预览')).toHaveTextContent('saved current round');
+  await waitFor(/* 同一容器在查询完成后才显示本轮差异。 */ () => expect(screen.getByLabelText('代码差异预览')).toHaveTextContent('saved current round'));
   expect(getDiff).toHaveBeenCalledOnce();
   expect(getDiff).toHaveBeenCalledWith('finishing-round', expect.anything());
 });

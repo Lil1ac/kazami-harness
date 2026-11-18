@@ -68,6 +68,70 @@ def test_search_excludes_records_binary_and_invalid_utf8_with_counts(tmp_path: P
     assert "PRIVATE" not in json.dumps(result)
 
 
+def test_search_exact_literal_skips_unrelated_directories(tmp_path: Path, monkeypatch) -> None:
+    """用目录访问清单证明精确 glob 只访问本人路径，并保持大小写与行号。"""
+    workspace, runs = make_workspace(tmp_path)
+    (workspace / "source/lib").mkdir(parents=True)
+    (workspace / "other").mkdir()
+    (workspace / "source/lib/Marker.py").write_text("first\nNEEDLE\n", encoding="utf-8")
+    (workspace / "other/secret.py").write_text("NEEDLE", encoding="utf-8")
+    paths = []
+    actual = os.scandir
+
+    def observe(path):
+        """记录实际枚举的 pathlib 目录，然后继续执行。"""
+        paths.append(Path(path))
+        return actual(path)
+
+    monkeypatch.setattr(os, "scandir", observe)
+    result = search(workspace, runs, "NEEDLE", glob="source/lib/Marker.py")
+    assert [row["line_number"] for row in result["matches"]] == [2]
+    assert paths == [workspace, workspace / "source", workspace / "source/lib"]
+    assert search(workspace, runs, "NEEDLE", glob="source/lib/marker.py")["matches"] == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="目录联接由 Windows 提供")
+def test_search_exact_prefix_does_not_traverse_junction(tmp_path: Path) -> None:
+    """精确路径仍沿已核验目录枚举，真实联接不会泄露其目标中的文本。"""
+    import subprocess
+
+    workspace, runs = make_workspace(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "e.txt").write_text("NEEDLE OUTSIDE", encoding="utf-8")
+    # 两个路径由本测试创建；mklink 仅创建联接，测试不通过 cmd 移动或删除文件。
+    created = subprocess.run([os.environ["ComSpec"], "/d", "/c", "mklink", "/J",
+                              str(workspace / "link"), str(outside)], capture_output=True)
+    if created.returncode:
+        pytest.skip("当前文件系统不能创建目录联接")
+    assert (workspace / "link").is_junction()
+    result = search(workspace, runs, "NEEDLE", glob="link/e.txt")
+    assert result["matches"] == [] and result["scanned_files"] == 0
+    assert result["skipped"] == {"symbolic_link": 1}
+
+
+def test_read_line_page_preserves_hash_crlf_and_byte_cursor(tmp_path: Path) -> None:
+    """按搜索的一基行号读取混合换行，检查完整指纹及截断后准确续读。"""
+    from hashlib import sha256
+    from agent_harness.tools.files import ReadFileArguments, read_file
+
+    workspace, runs = make_workspace(tmp_path)
+    source = "alpha\r\n中文🙂\r\nthird\nlast".encode()
+    (workspace / "file.txt").write_bytes(source)
+    line = search(workspace, runs, "中文", glob="file.txt")["matches"][0]["line_number"]
+    page = read_file(workspace, runs, ReadFileArguments(path="file.txt", start_line=line, max_lines=1), 120, 1024)
+    assert (page["start_line"], page["end_line"], page["next_line"]) == (2, 2, 3)
+    assert page["content"] == "中文🙂\r\n" and page["next_offset"] == source.index(b"third")
+    assert page["sha256"] == sha256(source).hexdigest() and page["newline"] == "mixed"
+    short = read_file(workspace, runs, ReadFileArguments(path="file.txt", start_line=line, max_bytes=7), 120, 1024)
+    assert short["content"] == "中文" and short["next_line"] is None
+    assert source[short["next_offset"]:].decode().startswith("🙂")
+    with pytest.raises(ValidationError):
+        ReadFileArguments(path="file.txt", start_line=line, offset=3)
+    with pytest.raises(WorkspaceError, match="超过"):
+        read_file(workspace, runs, ReadFileArguments(path="file.txt", start_line=5), 120, 1024)
+
+
 def test_search_limits_rows_and_characters_without_claiming_complete(tmp_path: Path) -> None:
     """匹配数量或文本预览到达预算时明确 truncated，不能误报完整搜索。"""
     workspace, runs = make_workspace(tmp_path)

@@ -137,6 +137,7 @@ export interface RunLimits {
   max_http_attempts_per_turn: number; // 一轮包含重试的最大 HTTP 尝试数。
   model_turn_timeout_seconds: number; // 单轮模型及重试的总超时。
   command_timeout_seconds: number; // 单个工具命令超时。
+  search_timeout_seconds?: number; // 单次目录搜索限时，包含等候子进程槽位。
   verifier_timeout_seconds: number; // 验收器默认超时。
   run_timeout_seconds: number; // 覆盖执行与验收的总运行超时。
   cleanup_grace_seconds: number; // 停止子进程时的清理宽限。
@@ -150,7 +151,10 @@ export interface ContextPolicy {
   load_project_instructions: boolean; // true 时加载实际工作区根目录的 AGENTS.md。
   max_input_bytes: number; // 消息和工具定义序列化后的整体输入字节上限。
   max_project_instruction_bytes: number; // 项目指令文件原始 UTF-8 字节上限，超限不截断。
-  compression: 'off' | 'masking' | 'hybrid'; // 宿主选择的压缩策略。
+  compression: 'off' | 'window' | 'masking' | 'hybrid'; // 宿主选择的压缩策略。
+  root_handoff?: boolean; // 根 Run 末轮收尾试点，缺省沿用常规执行。
+  root_handoff_after_input_rejection?: boolean; // 试验策略允许普通输入被拒后尝试紧凑收尾。
+  budget_projection?: boolean; // hybrid 的整体字节预算投影是否启用。
   trigger_ratio: number; // 触发使用率，0至1。
   target_ratio: number; // 目标使用率，必须小于触发比例。
   inline_tool_bytes: number; // 成功工具正文外置阈值，UTF-8字节。
@@ -182,6 +186,7 @@ export interface ContextCheck {
   estimated_input_tokens?: number | null; // 本地估算，不等于精确供应商计数。
   max_input_tokens?: number | null; // 扣除输出和安全余量后的输入预算。
   purpose?: 'execution' | 'summary'; // 实际检查用途。
+  phase?: 'execution' | 'handoff' | null; // 同一轮中区分普通执行与紧凑收尾，摘要检查可缺省。
 }
 
 /** 模型整理的历史工作状态；宿主测试和审阅另行展示。 */
@@ -297,6 +302,7 @@ export interface RunConfig {
   skills?: string[]; // 本次选择的技能名称；空列表明确表示不加载。
   skill_auto?: boolean; // 交互式主运行是否可按任务启用技能。
   limits: RunLimits; // 每个任务独立的预算快照。
+  generation?: { thinking?: 'enabled' | 'disabled' | null; reasoning_effort?: 'low' | 'medium' | 'high' | null; top_p?: number | null }; // 已冻结采样参数，仅由宿主配置。
   context: ContextPolicy; // 项目指令加载与整体输入预算快照。
 }
 
@@ -305,6 +311,26 @@ export interface ArtifactRef {
   location: 'workspace' | 'run'; // 工作区文件或运行内输出。
   path: string; // 安全的相对路径。
   kind: 'file' | 'stdout' | 'stderr'; // 产物用途。
+}
+
+/** 两种收尾入口的真实触发条件，用于显示预算决策。 */
+export type BudgetHandoffTrigger = 'last_model_turn' | 'input_rejected';
+
+/** 公开自测的实际结论，候选变化后由宿主标为未运行。 */
+export type PublicSelfTestStatus = 'passed' | 'failed' | 'error' | 'not_run' | 'timed_out' | 'skipped' | 'no_tests' | 'all_skipped' | 'cancelled';
+
+/** 一次真实公开自测的回执，与之后的官方独立评分分开保存。 */
+export interface PublicSelfTestResult {
+  status: PublicSelfTestStatus; // 实际结果，初始化失败和未运行分别记录。
+  self_test_id?: string; // 关联开始、结束与失效事件的编号。
+  source?: 'model' | 'handoff' | 'preflight'; // 模型命令、宿主收尾或零模型预检。
+  selector?: string; // 本次采用的已冻结公开测试节点。
+  tests_run?: number | null; // 实际执行数，未知不展示为零。
+  exit_code?: number | null; // 子进程退出码，未取得时为 null。
+  elapsed_ms?: number | null; // 本次自测实际耗时，单位毫秒。
+  candidate_sha256?: string | null; // 受测候选指纹，候选变化后旧证据不可作为通过依据。
+  reason?: string | null; // 宿主保存的具体失败或未执行原因。
+  artifact_refs?: ArtifactRef[]; // 由 Run 已登记、可下载的实际日志。
 }
 
 /** 独立验收详情；退出码不存在时为 null，预览可能截断。 */
@@ -481,13 +507,32 @@ export interface TaskSnapshot {
   items: AgentTask[]; // 当前或历史固定工作项。
 }
 
+/** 中断作业的宿主核对结果，ready 才能接纳用户发起的接续。 */
+export interface JobRecovery {
+  state: 'ready' | 'blocked' | 'queued' | 'accepted'; // 资源仍由原作业保留，直至后继认领。
+  revision?: string; // 接续请求绑定的证据版本，待核对时为空。
+  reason: string; // 页面显示的恢复点或待核对原因。
+  recovered_writes?: number; // 已核对生效且原回执缺失的文件写入数。
+  remaining_model_turns?: number; // 继承原预算后的剩余逻辑模型轮次。
+  remaining_tool_calls?: number; // 继承原预算后的剩余工具调用次数。
+  remaining_seconds?: number; // 剩余活动时限，单位为秒。
+  usage_complete?: boolean; // false 表示中断前有未知的供应商用量。
+  next_job_id?: string; // 用户接纳后用于定位后继作业。
+  next_run_id?: string; // 后继作业预分配的运行编号，准备期间可能尚未创建。
+}
+
 /** 已接纳的后台运行请求；run_id 建立前也能定位作业。 */
 export interface JobView {
   automation?: AutomationOrigin; // 宿主自动化来源，普通作业省略。
-  kind?: 'integration'; // 成果作业复用队列；普通模型运行不设置此字段。
+  kind?: 'integration' | 'memory_consolidation'; // 成果或记忆作业复用队列；普通模型运行省略。
+  memory_state?: string; // 整理作业的当前草案阶段。
+  memory_usage?: MemoryUsage; // 整理模型返回的已知 token 计数。
+  memory_usage_complete?: boolean; // 失败或断流时可能只有部分用量。
   integration_id?: string; // 原集成记录，关联来源会话而不伪造新Run。
   result_integration_id?: string; // 撤销准备产生的反向候选编号。
   recovery_kind?: 'files' | 'process'; // 失联写回须逐文件核对；检查/准备只解除进程阻塞，不重放。
+  recovery?: JobRecovery; // 手动隔离运行中断后的核对结果。
+  recovery_from?: string; // 该作业是中断作业的后继时，指向其作业编号。
   approval_status?: string; // 等待作业所关联动作的当前状态，不改写旧Run的等待快照。
   wait_reason?: string | null; // 等待时区分动作审批、计划审批与问题回答。
   conversation_title?: string; // 已建立会话的人工有效标题；首轮排队尚无会话时省略。
@@ -506,6 +551,7 @@ export interface JobView {
     | 'completed'
     | 'failed'
     | 'cancelled'
+    | 'interrupted'
     | 'needs_review'; // 真实队列状态。
   error: string | null; // 可处理的阻塞或异常原因。
   blocked_reason?: string | null; // 排队等待的资源或容量原因。
@@ -639,6 +685,8 @@ export interface RunView {
   session_id?: string | null; // 线性会话根编号；旧接口可缺省。
   parent_run_id?: string | null; // 首轮为空，后续指向前轮。
   turn_index?: number; // 用户要求序号，不等于模型轮数。
+  recovery_job_id?: string | null; // 中断时在队列查看核对与接续。
+  recovery_source_id?: string | null; // 后继执行段引用的原中断运行。
 }
 
 /** 一条可按运行 ID 和连续序号去重的持久化事件。 */
@@ -887,6 +935,7 @@ export interface ConversationTurn {
   validation_status: ValidationStatus | null; // 各轮独立验收结果。
   created_at: string | null; // 可信创建时间。
   interrupted?: boolean; // 本轮因服务中断缺少终态；旧接口可缺省。
+  recovery_source_id?: string | null; // 宿主接续事件，不作为用户再次输入的消息。
 }
 
 /** 会话读取结果；可继续为初步条件，提交时后端会重新核验实际代码。 */
@@ -1044,11 +1093,14 @@ export interface MemoryEntry extends MemoryContent {
   status: 'active' | 'proposed' | 'rejected' | 'deleted'; // 确认生命周期。
   evidence_refs: { path: string; sha256: string }[]; // 保存时证据指纹；仅事实据此阻止旧断言使用。
   source: {
-    kind: string;
-    run_id?: string;
-    seq?: number | null;
-    sha256?: string;
-    unavailable?: boolean;
+    kind: string; // 保存方式，consolidation 表示后台草案经人工发布。
+    run_id?: string; // 单一来源的运行编号。
+    seq?: number | null; // 关联原事件序号。
+    sha256?: string; // 单一来源的正文指纹。
+    unavailable?: boolean; // 当前至少一个来源不可回读。
+    refs?: MemoryEvidenceRef[]; // 整理采用的多个原始证据。
+    topic?: string; // 整理发布时确认的主题。
+    consolidation_id?: string; // 生成此版本的整理作业。
   }; // 宿主核验来源。
   replacements: MemoryReplacement[]; // 明确选择的替代目标。
   conflicts?: MemoryConflict[]; // 当前同主题冲突，候选审阅使用。
@@ -1084,11 +1136,14 @@ export interface MemorySnapshot {
     selected: MemoryEntry[];
     input_text: string;
     exposed_rule_ids: string[];
+    topics?: MemoryTopic[]; // 实际送入本次请求的短索引。
+    history_evidence_ids?: string[]; // 实际送入本次请求的历史工具结果。
   }[]; // 各次实际输入及完整可见约定，包含显式回读。
   skipped: { id: string; title: string; reason: string }[]; // 跳过原因。
   reads: {
     id: string;
-    revision: number;
+    revision: number | null; // 原始历史证据没有知识修订。
+    evidence?: MemoryEvidenceRef; // 读取历史时提供原始事件定位。
     content: string;
     sha256: string;
     size_bytes: number;
@@ -1096,6 +1151,69 @@ export interface MemorySnapshot {
     eof: boolean;
   }[]; // 实际读取的 UTF-8 分页。
   proposals?: MemoryEntry[]; // 本轮提出的候选事实，当前决定通过管理接口读取。
+  history_cutoff?: number; // 本轮冻结的历史索引上界。
+  history_searches?: { query: string; items: MemoryEvidenceRef[] }[]; // 实际历史检索及命中。
+}
+
+/** 可定位至真实运行及事件的历史证据引用。 */
+export interface MemoryEvidenceRef {
+  id: string; // 用于只读回读的稳定证据编号。
+  run_id: string; // 来源运行。
+  session_id: string; // 来源会话，删除时按此校验。
+  seq: number; // 该运行的事件序号。
+  sha256: string; // 摘录稳定指纹。
+  kind: 'user' | 'assistant' | 'observation' | 'verification'; // 原始事件类别。
+  captured_at: string; // UTC 运行创建时间。
+  unavailable?: boolean; // 当前来源已隐藏或删除。
+}
+
+/** 由已确认条目派生的项目主题。 */
+export interface MemoryTopic {
+  title: string; // 主题标签。
+  items: Pick<MemoryEntry, 'id' | 'revision' | 'title' | 'type'>[]; // 可按编号回读的固定修订。
+  count: number; // 主题下完整条目数，可能大于展示上限。
+}
+
+/** 一次整理使用的供应商实际计数；字段缺省表示未知。 */
+export interface MemoryUsage {
+  prompt_tokens?: number; // 已知输入 token。
+  completion_tokens?: number; // 已知输出 token。
+  total_tokens?: number; // 供应商返回的总 token。
+}
+
+/** 项目整理的状态与计量，详情端点附带草案和原始证据。 */
+export interface MemoryConsolidation {
+  id: string; // 同一编号对应队列作业。
+  status: JobView['status']; // 宿主排队或执行状态。
+  state: string; // 草案待审、已发布、已拒绝等业务状态。
+  trigger: 'manual' | 'idle'; // 用户发起或已开启的空闲整理。
+  created_at: string; // 接纳时间。
+  error: string | null; // 宿主受控错误。
+  change_count: number; // 当前可审阅变更数。
+  usage: MemoryUsage; // 模型响应实际用量。
+  usage_complete: boolean; // 统计是否覆盖整个批次。
+  model_calls: number; // 发出的逻辑调用数。
+  http_attempts: number; // 真实传输尝试数，脚本模型为零。
+  duration_seconds: number; // 准备、等待模型、核对合计秒数。
+  inputs?: MemoryEvidenceRef[]; // 详情中实际使用的证据。
+  changes?: {
+    action: 'add' | 'replace' | 'retire'; // 替代多条时表示合并。
+    topic: string; // 草案归属主题。
+    reason: string; // 为何提出此变更。
+    evidence_ids: string[]; // 在 inputs 中定位支撑证据。
+    before: MemoryEntry[]; // 待替代或停用的旧修订。
+    content: MemoryContent | null; // retire 时为空。
+  }[];
+  receipt?: { selected: number[]; sequence: number; state: string } | null; // 事务发布回执。
+}
+
+/** 项目记忆抽屉中可读取的主题、来源与后台整理状态。 */
+export interface MemoryLibrary {
+  sequence: number; // 当前项目记忆版本。
+  topics: MemoryTopic[]; // 从当前已确认条目派生。
+  sources: { run_id: string; session_id: string; created_at: string; evidence_count: number; title: string }[]; // 可选择整理的历史。
+  idle_enabled: boolean; // 当前项目是否允许空闲整理。
+  consolidations: MemoryConsolidation[]; // 最近整理状态，正文按需读取。
 }
 
 /** 发送后保持编号和载荷不变的人工变更请求。 */

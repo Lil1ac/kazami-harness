@@ -16,6 +16,7 @@ import {
   memoryTypes,
 } from '../memory';
 import type { MemoryContent, MemoryEntry, MemoryReplacement } from '../types';
+import { MemoryLibraryPanel } from './MemoryLibraryPanel';
 import './MemoryPanel.css';
 
 /** 把 entry 可编辑字段复制成草稿；不修改宿主来源、版本或已捕获证据。 */
@@ -415,7 +416,13 @@ export function MemorySource({ item }: { item: MemoryEntry }) {
       <span>
         v{item.revision} · {memoryTypes[item.type]} · {memoryStatuses[item.status]}
       </span>
-      {item.source.unavailable ? (
+      {item.source.refs?.length ? item.source.refs.map(
+        /* 多来源分别显示是否仍可回读。 */ (ref) => ref.unavailable ? (
+          <span key={ref.id}>来源已不可用 · 事件 {ref.seq}</span>
+        ) : (
+          <Link key={ref.id} to={'/runs/' + ref.run_id}>来源 {ref.run_id.slice(0, 8)} · 事件 {ref.seq}</Link>
+        ),
+      ) : item.source.unavailable ? (
         <span>来源对话已删除</span>
       ) : item.source.run_id ? (
         <Link to={'/runs/' + item.source.run_id}>
@@ -495,10 +502,12 @@ function MemoryHistory({ scope, id }: { scope: string; id: string }) {
 export function MemoryPanel({
   projectId,
   runId,
+  consolidationId,
   readOnly = false,
 }: {
   projectId?: string;
   runId?: string;
+  consolidationId?: string; // 来自整理作业深链接；省略时仅打开普通记忆列表。
   readOnly?: boolean; /* 归档会话仅查看候选，不接受或修改项目记忆。 */
 }) {
   const scope = projectId
@@ -509,6 +518,7 @@ export function MemoryPanel({
   const [status, setStatus] = useState<string | undefined>('active'); // 项目默认有效条目，候选模式由后端固定。
   const [offset, setOffset] = useState(0); // 项目列表分页位置。
   const [editing, setEditing] = useState<MemoryEntry | 'new' | null>(null); // null 不显示编辑弹窗。
+  const [showLibrary, setShowLibrary] = useState(Boolean(consolidationId)); // 显式展开整理及主题。
   const cache = useQueryClient();
   const params =
     '?' +
@@ -593,11 +603,14 @@ export function MemoryPanel({
             )}
           />
           <Button onClick={/* 打开空草稿。 */ () => setEditing('new')}>新增记忆</Button>
+          <Button aria-expanded={showLibrary} onClick={/* 展开整理操作，不提交模型请求。 */ () => setShowLibrary(!showLibrary)}>整理记忆</Button>
           <a href={'/api/' + scope + '/memories/export'} download>
             导出 Markdown
           </a>
         </div>
       )}
+      {projectId && showLibrary && <MemoryLibraryPanel projectId={projectId} initialId={consolidationId}
+        renderBody={/* 统一呈现条目与整理差异。 */ (item) => <MemoryBody item={item} />} />}
       {(page.error || mutation.error) && (
         <Alert
           type="error"

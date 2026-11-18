@@ -11,7 +11,7 @@ import shutil
 import subprocess
 
 from agent_harness.storage.runs import RunStore, StorageError
-from agent_harness.work.tasks import ExecutionLease, TaskError, WorkStore, encode
+from agent_harness.work.tasks import ExecutionLease, TaskError, WorkStore, encode, now
 
 
 @dataclass
@@ -135,7 +135,8 @@ class Coordinator:
         session=None 表示首轮尚未建立会话，run_id=None 表示集成作业没有自身 Run；
         job=None 用于 CLI 或人工文件操作，不联动作业状态。成功返回 None。
         recover_run=False 用于人工文件操作，关联旧 Run 只作定位，旧终态不能证明该操作完成。
-        冲突或容量满抛 TaskError，不启动工具；首次认领先取得宿主锁，失联租约不直接释放。
+        job 带 recovery_from 时仅能接管该作业已绑定的未知租约，检查与转移在同一事务。
+        冲突或容量满抛 TaskError，不启动工具；首次认领先取得宿主锁。
         """
         if owner in self.owned:
             return
@@ -148,10 +149,14 @@ class Coordinator:
                 self.reconcile(db)
                 if any(record["id"] == owner for record in self.records(db)):
                     raise TaskError("resource_uncertain", "原执行归属尚未核对，不能用相同编号覆盖或重放。")
-                blocked = next((record for record in self.records(db) if record["id"] != owner and ((session is not None and session == record["session_id"]) or conflicts(scope, record["resources"]))), None)
+                predecessor = job.get("recovery_from") if job is not None else None
+                blocked = next((record for record in self.records(db) if record["id"] not in {owner, predecessor}
+                                and ((session is not None and session == record["session_id"]) or conflicts(scope, record["resources"]))), None)
                 if blocked is not None:
                     raise TaskError("resource_uncertain" if blocked["status"] == "unknown" else "resource_busy", "相关工作结果待核对。" if blocked["status"] == "unknown" else "相关项目或共享资源正在使用。")
                 record = {"id": owner, "resources": scope, "session_id": session, "run_id": run_id, "status": "active", "recover_run": recover_run}
+                if predecessor is not None:
+                    self._transfer_recovery(db, job, record)
                 db.execute("INSERT OR REPLACE INTO execution_claims VALUES (?,?)", (owner, encode(record)))
                 if job is not None:
                     job.update(status="preparing", blocked_reason=None, blocked_by=None)
@@ -162,6 +167,26 @@ class Coordinator:
             if not self.owned:
                 self.lease.release()
             raise
+
+    def _transfer_recovery(self, db, job: dict, claim: dict) -> None:
+        """在 db 事务内转移唯一已授权的未知租约。新作业仍未进入准备，重启可按同编号退回。"""
+        predecessor = job["recovery_from"]
+        old = db.execute("SELECT body FROM jobs WHERE id=?", (predecessor,)).fetchone()
+        source = json.loads(old[0]) if old else {}
+        current = db.execute("SELECT body FROM jobs WHERE id=?", (job["id"],)).fetchone()
+        lease = next((item for item in self.records(db) if item["id"] == predecessor), None)
+        recovery = source.get("recovery") or {}
+        if (lease is None or lease["status"] != "unknown" or lease["resources"] != claim["resources"]
+                or lease["session_id"] != claim["session_id"] or lease["run_id"] != source.get("run_id")
+                or source.get("status") != "needs_review" or recovery.get("state") != "queued"
+                or recovery.get("next_job_id") != job["id"] or recovery.get("next_run_id") != job["run_id"]
+                or recovery.get("revision") != job["recovery_revision"]
+                or current is None or json.loads(current[0])["status"] != "queued"):
+            raise TaskError("recovery_stale", "原恢复归属已变化，无法接管工作区。")
+        db.execute("DELETE FROM execution_claims WHERE id=?", (predecessor,))
+        source.update(status="interrupted", finished_at=now(), recovery={**recovery, "state": "accepted"})
+        db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(source), predecessor))
+        job["recovery_phase"] = "claimed"
 
     def release(self, owner: str, uncertain: bool = False) -> None:
         """释放本进程 owner；uncertain=True 保留未知资源记录，操作系统锁仅在全部执行收尾后释放。"""
@@ -180,9 +205,12 @@ class Coordinator:
             if not self.owned:
                 self.lease.release()
 
-    def resolve(self, owner: str) -> None:
-        """人工确认 owner 现场后解除未知租约；活动租约拒绝解除，不自动重放原作业。"""
-        with self.store.transaction() as db:
-            if any(record["id"] == owner and record["status"] != "unknown" for record in self.records(db)):
-                raise TaskError("resource_busy", "资源仍由活动执行持有。")
-            db.execute("DELETE FROM execution_claims WHERE id=?", (owner,))
+    def resolve(self, owner: str, db=None) -> None:
+        """人工核对后解除 owner 的未知租约。db 非空时与调用者状态共用同一事务。"""
+        if db is None:
+            with self.store.transaction() as connection:
+                self.resolve(owner, connection)
+            return
+        if any(record["id"] == owner and record["status"] != "unknown" for record in self.records(db)):
+            raise TaskError("resource_busy", "资源仍由活动执行持有。")
+        db.execute("DELETE FROM execution_claims WHERE id=?", (owner,))

@@ -1,0 +1,548 @@
+{
+  "selected": [
+    [
+      "astropy__astropy-14995",
+      "astropy/astropy",
+      "<15 min fix"
+    ],
+    [
+      "astropy__astropy-14539",
+      "astropy/astropy",
+      "15 min - 1 hour"
+    ],
+    [
+      "astropy__astropy-14182",
+      "astropy/astropy",
+      "15 min - 1 hour"
+    ],
+    [
+      "astropy__astropy-14369",
+      "astropy/astropy",
+      "1-4 hours"
+    ],
+    [
+      "django__django-13112",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-11239",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-14580",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-13512",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-12754",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-13012",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-15916",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-14053",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-13658",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-11087",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-14007",
+      "django/django",
+      "1-4 hours"
+    ],
+    [
+      "django__django-15128",
+      "django/django",
+      "1-4 hours"
+    ],
+    [
+      "matplotlib__matplotlib-26113",
+      "matplotlib/matplotlib",
+      "<15 min fix"
+    ],
+    [
+      "matplotlib__matplotlib-25311",
+      "matplotlib/matplotlib",
+      "<15 min fix"
+    ],
+    [
+      "matplotlib__matplotlib-24627",
+      "matplotlib/matplotlib",
+      "15 min - 1 hour"
+    ],
+    [
+      "matplotlib__matplotlib-25960",
+      "matplotlib/matplotlib",
+      "15 min - 1 hour"
+    ],
+    [
+      "mwaskom__seaborn-3069",
+      "mwaskom/seaborn",
+      "15 min - 1 hour"
+    ],
+    [
+      "pallets__flask-5014",
+      "pallets/flask",
+      "<15 min fix"
+    ],
+    [
+      "psf__requests-2317",
+      "psf/requests",
+      "<15 min fix"
+    ],
+    [
+      "pydata__xarray-6461",
+      "pydata/xarray",
+      "<15 min fix"
+    ],
+    [
+      "pydata__xarray-3095",
+      "pydata/xarray",
+      "15 min - 1 hour"
+    ],
+    [
+      "pydata__xarray-6721",
+      "pydata/xarray",
+      "15 min - 1 hour"
+    ],
+    [
+      "pydata__xarray-6992",
+      "pydata/xarray",
+      ">4 hours"
+    ],
+    [
+      "pylint-dev__pylint-6386",
+      "pylint-dev/pylint",
+      "15 min - 1 hour"
+    ],
+    [
+      "pylint-dev__pylint-4551",
+      "pylint-dev/pylint",
+      "1-4 hours"
+    ],
+    [
+      "pytest-dev__pytest-6202",
+      "pytest-dev/pytest",
+      "<15 min fix"
+    ],
+    [
+      "pytest-dev__pytest-8399",
+      "pytest-dev/pytest",
+      "15 min - 1 hour"
+    ],
+    [
+      "pytest-dev__pytest-6197",
+      "pytest-dev/pytest",
+      "1-4 hours"
+    ],
+    [
+      "scikit-learn__scikit-learn-14141",
+      "scikit-learn/scikit-learn",
+      "<15 min fix"
+    ],
+    [
+      "scikit-learn__scikit-learn-13135",
+      "scikit-learn/scikit-learn",
+      "<15 min fix"
+    ],
+    [
+      "scikit-learn__scikit-learn-12682",
+      "scikit-learn/scikit-learn",
+      "15 min - 1 hour"
+    ],
+    [
+      "scikit-learn__scikit-learn-12973",
+      "scikit-learn/scikit-learn",
+      "15 min - 1 hour"
+    ],
+    [
+      "scikit-learn__scikit-learn-25102",
+      "scikit-learn/scikit-learn",
+      "1-4 hours"
+    ],
+    [
+      "sphinx-doc__sphinx-10449",
+      "sphinx-doc/sphinx",
+      "<15 min fix"
+    ],
+    [
+      "sphinx-doc__sphinx-9230",
+      "sphinx-doc/sphinx",
+      "<15 min fix"
+    ],
+    [
+      "sphinx-doc__sphinx-8638",
+      "sphinx-doc/sphinx",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-7748",
+      "sphinx-doc/sphinx",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-10614",
+      "sphinx-doc/sphinx",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-9461",
+      "sphinx-doc/sphinx",
+      "1-4 hours"
+    ],
+    [
+      "sympy__sympy-16450",
+      "sympy/sympy",
+      "<15 min fix"
+    ],
+    [
+      "sympy__sympy-24562",
+      "sympy/sympy",
+      "<15 min fix"
+    ],
+    [
+      "sympy__sympy-17318",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-20590",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-24443",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-12489",
+      "sympy/sympy",
+      "1-4 hours"
+    ],
+    [
+      "sympy__sympy-13852",
+      "sympy/sympy",
+      "1-4 hours"
+    ]
+  ],
+  "reserves": [
+    [
+      "astropy__astropy-7166",
+      "astropy/astropy",
+      "<15 min fix"
+    ],
+    [
+      "astropy__astropy-14309",
+      "astropy/astropy",
+      "<15 min fix"
+    ],
+    [
+      "astropy__astropy-13977",
+      "astropy/astropy",
+      "15 min - 1 hour"
+    ],
+    [
+      "astropy__astropy-14598",
+      "astropy/astropy",
+      "15 min - 1 hour"
+    ],
+    [
+      "astropy__astropy-13579",
+      "astropy/astropy",
+      "1-4 hours"
+    ],
+    [
+      "astropy__astropy-13398",
+      "astropy/astropy",
+      "1-4 hours"
+    ],
+    [
+      "django__django-14089",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-11451",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "django__django-16136",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-13568",
+      "django/django",
+      "15 min - 1 hour"
+    ],
+    [
+      "django__django-11885",
+      "django/django",
+      "1-4 hours"
+    ],
+    [
+      "django__django-15629",
+      "django/django",
+      "1-4 hours"
+    ],
+    [
+      "matplotlib__matplotlib-24570",
+      "matplotlib/matplotlib",
+      "<15 min fix"
+    ],
+    [
+      "matplotlib__matplotlib-25287",
+      "matplotlib/matplotlib",
+      "<15 min fix"
+    ],
+    [
+      "matplotlib__matplotlib-23314",
+      "matplotlib/matplotlib",
+      "15 min - 1 hour"
+    ],
+    [
+      "matplotlib__matplotlib-22871",
+      "matplotlib/matplotlib",
+      "15 min - 1 hour"
+    ],
+    [
+      "mwaskom__seaborn-3187",
+      "mwaskom/seaborn",
+      "15 min - 1 hour"
+    ],
+    [
+      "psf__requests-1766",
+      "psf/requests",
+      "<15 min fix"
+    ],
+    [
+      "psf__requests-1142",
+      "psf/requests",
+      "<15 min fix"
+    ],
+    [
+      "psf__requests-2931",
+      "psf/requests",
+      "15 min - 1 hour"
+    ],
+    [
+      "pydata__xarray-4075",
+      "pydata/xarray",
+      "<15 min fix"
+    ],
+    [
+      "pydata__xarray-4094",
+      "pydata/xarray",
+      "<15 min fix"
+    ],
+    [
+      "pydata__xarray-7229",
+      "pydata/xarray",
+      "15 min - 1 hour"
+    ],
+    [
+      "pydata__xarray-6599",
+      "pydata/xarray",
+      "15 min - 1 hour"
+    ],
+    [
+      "pylint-dev__pylint-6528",
+      "pylint-dev/pylint",
+      "15 min - 1 hour"
+    ],
+    [
+      "pylint-dev__pylint-4604",
+      "pylint-dev/pylint",
+      "15 min - 1 hour"
+    ],
+    [
+      "pylint-dev__pylint-8898",
+      "pylint-dev/pylint",
+      "1-4 hours"
+    ],
+    [
+      "pytest-dev__pytest-5809",
+      "pytest-dev/pytest",
+      "<15 min fix"
+    ],
+    [
+      "pytest-dev__pytest-7432",
+      "pytest-dev/pytest",
+      "<15 min fix"
+    ],
+    [
+      "pytest-dev__pytest-7571",
+      "pytest-dev/pytest",
+      "15 min - 1 hour"
+    ],
+    [
+      "pytest-dev__pytest-7324",
+      "pytest-dev/pytest",
+      "15 min - 1 hour"
+    ],
+    [
+      "pytest-dev__pytest-10356",
+      "pytest-dev/pytest",
+      "1-4 hours"
+    ],
+    [
+      "pytest-dev__pytest-5787",
+      "pytest-dev/pytest",
+      "1-4 hours"
+    ],
+    [
+      "scikit-learn__scikit-learn-13496",
+      "scikit-learn/scikit-learn",
+      "<15 min fix"
+    ],
+    [
+      "scikit-learn__scikit-learn-12585",
+      "scikit-learn/scikit-learn",
+      "<15 min fix"
+    ],
+    [
+      "scikit-learn__scikit-learn-25747",
+      "scikit-learn/scikit-learn",
+      "15 min - 1 hour"
+    ],
+    [
+      "scikit-learn__scikit-learn-14629",
+      "scikit-learn/scikit-learn",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-9591",
+      "sphinx-doc/sphinx",
+      "<15 min fix"
+    ],
+    [
+      "sphinx-doc__sphinx-7462",
+      "sphinx-doc/sphinx",
+      "<15 min fix"
+    ],
+    [
+      "sphinx-doc__sphinx-8593",
+      "sphinx-doc/sphinx",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-9229",
+      "sphinx-doc/sphinx",
+      "1-4 hours"
+    ],
+    [
+      "sphinx-doc__sphinx-8548",
+      "sphinx-doc/sphinx",
+      "1-4 hours"
+    ],
+    [
+      "sympy__sympy-20916",
+      "sympy/sympy",
+      "<15 min fix"
+    ],
+    [
+      "sympy__sympy-12481",
+      "sympy/sympy",
+      "<15 min fix"
+    ],
+    [
+      "sympy__sympy-14976",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-13877",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-14248",
+      "sympy/sympy",
+      "1-4 hours"
+    ],
+    [
+      "sympy__sympy-18199",
+      "sympy/sympy",
+      "1-4 hours"
+    ]
+  ],
+  "sentinels": [
+    [
+      "django__django-13112",
+      "django/django",
+      "<15 min fix"
+    ],
+    [
+      "psf__requests-2317",
+      "psf/requests",
+      "<15 min fix"
+    ],
+    [
+      "pytest-dev__pytest-8399",
+      "pytest-dev/pytest",
+      "15 min - 1 hour"
+    ],
+    [
+      "sympy__sympy-17318",
+      "sympy/sympy",
+      "15 min - 1 hour"
+    ],
+    [
+      "sphinx-doc__sphinx-9461",
+      "sphinx-doc/sphinx",
+      "1-4 hours"
+    ],
+    [
+      "astropy__astropy-14369",
+      "astropy/astropy",
+      "1-4 hours"
+    ]
+  ],
+  "difficulty_counts": {
+    "<15 min fix": 17,
+    "15 min - 1 hour": 23,
+    "1-4 hours": 9,
+    ">4 hours": 1
+  },
+  "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "seed": 20261115,
+  "excluded": [
+    "django__django-16082",
+    "django__django-17029",
+    "django__django-16429",
+    "pytest-dev__pytest-5262",
+    "pytest-dev__pytest-7521",
+    "sympy__sympy-22914",
+    "sympy__sympy-23950",
+    "psf__requests-1921",
+    "psf__requests-5414",
+    "psf__requests-6028"
+  ]
+}

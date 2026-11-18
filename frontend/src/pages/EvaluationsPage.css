@@ -1,0 +1,13 @@
+.evaluations { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.evaluation-table { overflow-x: auto; }
+.evaluation-table table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+.evaluation-table th, .evaluation-table td { padding: 12px; border-bottom: 1px solid var(--border-color, #ddd); }
+.evaluation-table th[scope="row"] { font-weight: 500; }
+.evaluation-budget { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 16px 0; }
+.evaluation-budget dt { font-size: 0.875rem; }
+.evaluation-budget dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.evaluations article, .evaluations details { padding: 16px 0; border-bottom: 1px solid var(--border-color, #ddd); }
+.evaluations summary { cursor: pointer; }
+.evaluations pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.evaluations code { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .evaluations { padding: 12px; } }

@@ -12,7 +12,13 @@ if TYPE_CHECKING:
 
 def skipped(code: str, message: str | None = None) -> dict:
     """用 code 标识未完成或未执行的工具；message 为可选的具体补救提示。"""
-    return {"ok": False, "data": None, "error": {"code": code, "message": message or "该工具未能完成，运行已停止。"}, "truncated": False}
+    defaults = {
+        "tool_timed_out": "工具超过运行截止时间。",
+        "tool_cancelled": "工具执行已取消。",
+        "skipped_timeout": "运行已到截止时间，未启动此工具。",
+        "skipped_cancelled": "运行已取消，未启动此工具。",
+    }
+    return {"ok": False, "data": None, "error": {"code": code, "message": message or defaults.get(code, "该工具未能完成，运行已停止。")}, "truncated": False}
 
 
 def record_tool(context: "RunContext", call: ToolCall, result: dict, messages: list[dict]) -> None:

@@ -41,8 +41,9 @@ def initial_size(value: RunManifest, root: Path) -> int:
     return builder.build(messages, tools, 1).check.input_bytes
 
 
-def scripted_run(value: RunManifest, root: Path, replies: list[dict], *, rewrite_rule: str | None = None):
-    """离线执行 value 并返回 outcome、实际请求及历史；rewrite_rule 非空时首次请求后修改磁盘规则。"""
+def scripted_run(value: RunManifest, root: Path, replies: list[dict], *, rewrite_rule: str | None = None,
+                 executor=None, guard=None):
+    """离线执行 value 并返回结果、请求及历史；rewrite_rule 模拟源变更，executor 和 guard 可注入执行器及批次账本。"""
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -53,7 +54,8 @@ def scripted_run(value: RunManifest, root: Path, replies: list[dict], *, rewrite
         assert len(requests) <= len(replies), "发生了预算之外的请求"
         return model_stream_response(200, json=replies[len(requests) - 1])
 
-    outcome = asyncio.run(run_task(value, root, "dummy-key", transport=httpx.MockTransport(handler)))
+    outcome = asyncio.run(run_task(value, root, "dummy-key", transport=httpx.MockTransport(handler), executor=executor,
+                                   model_request_guard=guard))
     return outcome, requests, RunStore.read(root, str(value.run_id))
 
 
@@ -106,6 +108,88 @@ def test_later_over_budget_keeps_full_tool_batch_and_artifacts(tmp_path: Path) -
     assert checks[-1].seq > results[-1].seq
     assert [event.type for event in history.events].count("context_prepared") == 1
     assert [event.type for event in history.events].count("run_started") == 1
+
+
+def test_root_reserves_thirtieth_request_for_delivery_after_write(tmp_path: Path) -> None:
+    """在 tmp_path 中写入候选文件后用第 30 轮收尾；校验请求、证据与终态，无返回值。"""
+    root = tmp_path / ".runs"
+    value = make_manifest(tmp_path, budget=65536)
+    value.config.context = ContextPolicy(compression="hybrid", max_input_bytes=65536, root_handoff=True)
+    value.config.limits.max_model_turns = 30
+    (tmp_path / "source.txt").write_text("source", encoding="utf-8")
+    reads = [model_reply(tool_call(f"read-{index}", "read_file", {"path": "source.txt"})) for index in range(28)]
+    write = model_reply(tool_call("last-write", "write_file", {"path": "result.txt", "content": "fixed"}))
+    final = model_reply(content='{"status":"ready","answer":"已写入 result.txt。"}')
+    outcome, requests, history = scripted_run(value, root, [*reads, write, final])
+    assert len(requests) == outcome.result.model_turns == 30
+    assert all(request["tools"] for request in requests[:-1])
+    assert "tools" not in requests[-1]
+    assert "result.txt" in json.dumps(requests[-1]["messages"], ensure_ascii=False)
+    assert outcome.result.execution_status == "completed" and outcome.result.stop_reason == "final_answer"
+    assert outcome.result.final_answer == "已写入 result.txt。"
+    assert outcome.result.tool_calls == 29
+    assert (tmp_path / "result.txt").read_bytes() == b"fixed"
+    done, = [event for event in history.events if event.type == "budget_handoff_finished"]
+    assert done.payload == {"mode": "root", "status": "ready", "model_turn": 30, "trigger": "last_model_turn"}
+
+
+@pytest.mark.parametrize("kind,reason", [("partial", "max_model_turns"),
+                                        ("invalid", "handoff_invalid_response"),
+                                        ("tool", "handoff_tools_disabled")])
+def test_root_handoff_preserves_incomplete_terminal_state(tmp_path: Path, kind: str, reason: str) -> None:
+    """在 tmp_path 验证 kind 的末轮回执；reason 为终止原因，工具请求不会写入额外文件。"""
+    value = make_manifest(tmp_path)
+    value.config.context.root_handoff = True
+    value.config.limits.max_model_turns = 2
+    first = model_reply(tool_call("write", "write_file", {"path": "result.txt", "content": "candidate"}))
+    if kind == "tool":
+        last = model_reply(tool_call("forbidden", "write_file", {"path": "extra.txt", "content": "not allowed"}))
+    else:
+        last = model_reply(content='{"status":"partial","answer":"还缺项目测试。"}' if kind == "partial" else "格式错误")
+    outcome, requests, history = scripted_run(value, tmp_path / ".runs", [first, last])
+    assert outcome.result.execution_status == "limit_exceeded" and outcome.result.stop_reason == reason
+    assert len(requests) == 2 and "tools" not in requests[1]
+    assert not (tmp_path / "extra.txt").exists() and outcome.result.tool_calls == 1
+    assert (tmp_path / "result.txt").read_text(encoding="utf-8") == "candidate"
+    assert not any(event.type == "execution_completed" for event in history.events)
+    if kind == "partial":
+        assert outcome.result.final_answer == "还缺项目测试。"
+
+
+def test_root_handoff_does_not_replace_pending_approval(tmp_path: Path) -> None:
+    """写入后同批命令需审批时，tmp_path 的试次等待用户；末轮不会抢先发出。"""
+    value = make_manifest(tmp_path)
+    value.config.context.root_handoff = True
+    value.config.limits.max_model_turns = 2
+    value.config.tools.append("run_command")
+    value.config.permission_policy.command = "ask"
+    first = model_reply(tool_call("write", "write_file", {"path": "result.txt", "content": "candidate"}),
+                        tool_call("check", "run_command", {"argv": ["python", "-V"]}))
+    outcome, requests, history = scripted_run(value, tmp_path / ".runs", [first])
+    assert outcome.result.execution_status == "waiting_input" and outcome.result.stop_reason == "action_approval"
+    assert len(requests) == 1 and outcome.result.permissions.pending is not None
+    assert not any(event.type == "budget_handoff_started" for event in history.events)
+
+
+def test_root_handoff_input_still_obeys_byte_gate(tmp_path: Path) -> None:
+    """首轮放行后累积多个长路径写回执，使末轮收尾超限；核对未发出第二次请求。"""
+    root = tmp_path / ".runs"
+    value = make_manifest(tmp_path)
+    value.config.context.root_handoff = True
+    value.config.limits.max_model_turns = 2
+    from agent_harness.evaluation.repository import RepositoryExecutor
+
+    # 真实仓库入口只声明文件工具，首轮留有余量，但密集写入回执仍可压满末轮。
+    value.config.context.max_input_bytes = 5000
+    executor = RepositoryExecutor(None, tmp_path, root, value.config)
+    writes = [tool_call(f"write-{index}", "write_file", {"path": f"{'a' * 88}-{index}.txt", "content": "real change"})
+              for index in range(18)]
+    outcome, requests, history = scripted_run(value, root, [model_reply(*writes)], executor=executor)
+    assert outcome.result.execution_status == "limit_exceeded" and outcome.result.stop_reason == "max_model_input_bytes"
+    assert len(requests) == 1
+    assert any(event.type == "budget_handoff_started" for event in history.events)
+    checks = [event.payload for event in history.events if event.type == "context_checked"]
+    assert [check["allowed"] for check in checks] == [True, False]
 
 
 def test_rules_frozen_across_rounds_and_reasoning_pairs_preserved(tmp_path: Path) -> None:

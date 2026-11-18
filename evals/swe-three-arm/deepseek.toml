@@ -1,0 +1,43 @@
+# 真实issue与基线源码发给模型，参考和测试补丁仅由宿主评分器持有。
+provider = "custom-deepseek" # 直接连接官方服务。
+requested_model = "deepseek-flash" # B/C两组请求同一模型，响应模型另行记录。
+tools = ["read_file", "search_files", "write_file", "edit_file", "run_command"] # read_context由hybrid运行时按需绑定。
+system_prompt = "你是仓库缺陷修复助手。根据原始issue检查并修复工作区，运行针对性测试并如实交付。文件工具路径相对工作区；run_command在无网络Linux容器/testbed运行，已激活项目conda环境，使用python/pytest，不要使用宿主Windows解释器路径。不使用后台命令，不安装外部依赖。仅修改完成需求所需的文件。" # B/C两组相同指令。
+skill_auto = false # 不引入额外技能。
+auto_repair = false # 不将独立评分反馈给Agent二次修补。
+
+[custom_providers.custom-deepseek]
+name = "DeepSeek评测" # 展示名。
+base_url = "https://api.deepseek.com/v1" # 官方OpenAI兼容入口。
+default_model = "deepseek-flash" # 缺省模型与本次显式模型一致。
+api_key_env = "DEEPSEEK_API_KEY" # 凭据仅从环境读取。
+
+[generation]
+thinking = "enabled" # 三组显式启用相同思考模式。
+reasoning_effort = "high" # 固定推理强度。
+top_p = 0.95 # 固定核采样阈值。
+
+[memory]
+use = false # 防止跨题信息泄漏。
+capture = false # 不保留学习结果干扰后续试次。
+
+[permission_policy]
+command = "allow" # 仅评测适配器的隔离容器命令。
+verification = "allow" # 评分由宿主预先固定。
+
+[limits]
+max_model_turns = 60 # 单题请求上限，执行、摘要及收尾共用。
+max_tool_calls = 160 # 每试次工具上限。
+run_timeout_seconds = 1200.0 # 模型与工具合计墙钟秒数。
+command_timeout_seconds = 120.0 # 每条Agent容器命令超时秒数。
+search_timeout_seconds = 15.0 # B/C两组共用独立搜索限时，包含等待进程槽位。
+model_turn_timeout_seconds = 120.0 # 单次模型等待上限秒数。
+max_http_attempts_per_turn = 1 # 不做隐藏网络重试。
+model_max_output_tokens = 8192 # 执行和摘要共用，减少较长回复在4096时截断的情况。
+max_process_capture_bytes = 33554432 # 单进程双流合计32MiB，超出则中止。
+
+[context]
+compression = "off" # 唯一在试次间变化的配置字段。
+max_input_bytes = 262144 # B/C两组相同请求字节预算。
+inline_tool_bytes = 8192 # B/C大工具输出外置阈值，单位字节。
+max_summary_calls = 4 # C组最多四次；B组禁用摘要，均包含在60次请求内。

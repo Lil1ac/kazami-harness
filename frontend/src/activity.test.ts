@@ -24,6 +24,18 @@ it('多次检查各自保留，修复后通过不会覆盖首次失败', () => {
   expect(steps[1].label).toBe('第 1 次修复后检查');
 });
 
+it('收尾宿主自测按自身编号配对，模型自测仍沿用命令活动', () => {
+  // 只把宿主发起的自测新增为活动，避免重复显示模型 run_command。
+  const steps = activitySteps([
+    { ...makeEvent(1), type: 'public_self_test_finished', payload: { self_test_id: 'tool-test', status: 'passed', source: 'model' } },
+    { ...makeEvent(2), type: 'public_self_test_started', payload: { self_test_id: 'host-test', source: 'handoff' } },
+    { ...makeEvent(3), type: 'public_self_test_finished',
+      payload: { self_test_id: 'host-test', status: 'all_skipped', source: 'handoff', reason: 'self_test_all_skipped' } },
+  ]);
+  expect(steps).toHaveLength(1);
+  expect(steps[0]).toMatchObject({ label: '公开自测', state: 'failed', errorMessage: '用例全部跳过' });
+});
+
 it('按调用编号配对工具，保留真实参数与失败结果', () => {
   // 工具结果会覆盖同一操作状态，不能把一个调用展示成两次执行。
   const steps = activitySteps([

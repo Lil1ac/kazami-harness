@@ -1,0 +1,25 @@
+"""告警演练的起点，各入口可独立修改。"""
+
+def alert_route(level: str) -> str:
+    """返回 level 对应的告警目的地；当前统一返回占位。"""
+    return "unconfigured"
+
+
+def alert_envelope(level: str, minutes: int) -> dict:
+    """按 level 和持续 minutes 生成告警对象；起点字段待修复。"""
+    return {"level": level, "minutes": minutes}
+
+
+def webhook_policy() -> str:
+    """返回当前 webhook 重试策略；起点是待纠正旧值。"""
+    return "linear-5"
+
+
+def demo_route() -> str:
+    """返回开发演练的路由；起点尚未实现。"""
+    return "unknown"
+
+
+def demo_ttl() -> int:
+    """返回开发演练确认的持续时间，单位秒。"""
+    return 45

@@ -51,6 +51,7 @@ export function DesktopIntegration() {
           /^\/api\/integrations\/[0-9a-f-]{36}\/checks\/[0-9a-f-]{36}\/artifacts$/i.test(
             target.pathname,
           ) ||
+          /^\/api\/evaluations\/[0-9a-f-]{36}\/((patches|trajectories)\/[0-9a-f-]{36}|grades\/[0-9a-f-]{36}\/(score|log))$/i.test(target.pathname) ||
           /^\/api\/projects\/[a-zA-Z0-9_-]{1,64}\/memories\/export$/.test(target.pathname)) &&
         !target.searchParams.has('preview');
       const external =

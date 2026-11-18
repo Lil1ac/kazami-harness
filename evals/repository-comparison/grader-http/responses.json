@@ -1,0 +1,39 @@
+{
+  "case_ids": [
+    "sphinx-doc__sphinx-10435"
+  ],
+  "source": "tests/roots/test-images/index.rst",
+  "original_preflight": "bc94b6aa-ed68-44b8-a877-d5e58fe3f350",
+  "responses": [
+    {
+      "method": "GET",
+      "url": "https://www.python.org/static/img/python-logo.png",
+      "status": 200,
+      "reason": "OK",
+      "bytes": 15770,
+      "body_sha256": "9c121e619bfe02eaba582d7080eea46fd53ec0b50717e6794a948fada4ae8f3c",
+      "fetched_at": "2026-11-18T09:04:23.189206+00:00",
+      "headers": {
+        "content-type": "image/png",
+        "content-length": "15770",
+        "last-modified": "Sat, 24 Oct 2026 05:31:04 GMT",
+        "etag": "\"6adc4298-3d9a\"",
+        "date": "Wed, 18 Nov 2026 09:04:11 GMT"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://www.google.com/NOT_EXIST.PNG",
+      "status": 404,
+      "reason": "Not Found",
+      "bytes": 1574,
+      "body_sha256": "77988842b8134b1f958cc5e3fa145d2556ec5f9c9093bd47d891308f11c23d73",
+      "fetched_at": "2026-11-18T09:04:24.530293+00:00",
+      "headers": {
+        "content-type": "text/html; charset=UTF-8",
+        "content-length": "1574",
+        "date": "Wed, 18 Nov 2026 09:04:12 GMT"
+      }
+    }
+  ]
+}
